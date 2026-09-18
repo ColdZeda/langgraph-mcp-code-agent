@@ -1,0 +1,76 @@
+import logging
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+load_dotenv(PROJECT_ROOT / ".env")
+
+APP_DIR = PROJECT_ROOT / "app"
+CODE_AGENT_DIR = APP_DIR / "code_agent"
+DATA_DIR = PROJECT_ROOT / "data"
+RUNTIME_DIR = PROJECT_ROOT / "runtime"
+
+KNOWLEDGE_DIR = Path(os.getenv("CODE_AGENT_KNOWLEDGE_DIR", DATA_DIR / "knowledge"))
+WORKSPACE_DIR = Path(os.getenv("CODE_AGENT_WORKSPACE_DIR", RUNTIME_DIR / "workspace"))
+CHECKPOINT_DIR = Path(os.getenv("CODE_AGENT_CHECKPOINT_DIR", RUNTIME_DIR / "checkpoint"))
+CHROMA_DIR = Path(os.getenv("CODE_AGENT_CHROMA_DIR", RUNTIME_DIR / "chroma_db"))
+RUNS_DIR = Path(os.getenv("CODE_AGENT_RUNS_DIR", RUNTIME_DIR / "runs"))
+
+PYTHON_EXECUTABLE = os.getenv("CODE_AGENT_PYTHON", sys.executable)
+
+RAG_SERVER_PATH = CODE_AGENT_DIR / "rag" / "rag.py"
+BROWSER_SERVER_PATH = CODE_AGENT_DIR / "mcp_servers" / "browser_tools.py"
+POWERSHELL_SERVER_PATH = CODE_AGENT_DIR / "mcp_servers" / "powershell_tools.py"
+MYSQL_SERVER_PATH = CODE_AGENT_DIR / "mcp_servers" / "mysql_tools.py"
+VM_SERVER_PATH = CODE_AGENT_DIR / "mcp_servers" / "vm.py"
+CODE_TOOLS_SERVER_PATH = CODE_AGENT_DIR / "mcp_servers" / "code_tools.py"
+
+EMBEDDING_MODEL_PATH = Path(
+    os.getenv(
+        "CODE_AGENT_EMBEDDING_MODEL_PATH",
+        PROJECT_ROOT.parent / "embedding-model" / "sentence-transformers" / "all-MiniLM-L6-v2",
+    )
+)
+EMBEDDING_MODEL_CACHE_DIR = Path(
+    os.getenv("CODE_AGENT_EMBEDDING_MODEL_CACHE_DIR", PROJECT_ROOT.parent / "embedding-model")
+)
+
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
+
+MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-v4-flash")
+MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "https://api.deepseek.com")
+MODEL_API_KEY = os.getenv("MODEL_API_KEY")
+
+# 流式请求时请求 API 返回 usage 统计（DeepSeek 支持 stream_options.include_usage）。
+# 若换成不支持的 API 可设 LLM_STREAM_USAGE=0 关闭，此时 token 统计会退化为 0。
+LLM_STREAM_USAGE = os.getenv("LLM_STREAM_USAGE", "1").lower() in ("1", "true", "yes", "on")
+
+MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
+MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3307"))
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "root")
+MYSQL_CHARSET = os.getenv("MYSQL_CHARSET", "utf8mb4")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "agent_test")
+
+WSL_DISTRO = os.getenv("CODE_AGENT_WSL_DISTRO", "Ubuntu")
+VM_UPLOADS_DIR = os.getenv("CODE_AGENT_VM_UPLOADS_DIR", "/home/leprite/nginx/uploads")
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+THREAD_ID = os.getenv("CODE_AGENT_THREAD_ID", "default")
+
+
+def setup_logging(name: str = "code_agent") -> logging.Logger:
+    """配置并返回 logger 实例。"""
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
+        )
+        logger.addHandler(handler)
+    logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    return logger

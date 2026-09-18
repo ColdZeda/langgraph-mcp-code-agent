@@ -1,0 +1,28 @@
+# Gitee CI 流水线 — push 自动跑 lint + test
+# 文档: https://gitee.com/help/articles/4325
+
+name: CI
+on:
+  push:
+    branches: [master, phase*]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    name: Unit + Evals Tests
+    runs-on: linux-latest
+    container:
+      image: python:3.13-slim
+    steps:
+      - name: Checkout
+        uses: checkout@v4
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run tests
+        run: uv run python -m pytest tests/ evals/ -v --tb=short

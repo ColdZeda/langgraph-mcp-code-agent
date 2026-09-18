@@ -1,0 +1,9 @@
+Python 字符串格式化推荐使用 f-string（f'...{var}'），比 % 格式化和 .format() 更简洁、可读性更高、性能更好。
+
+列表推导式 [expr for x in iterable if cond] 优先于 for 循环 + append，写法更简洁且通常更快。
+
+Python 文件操作使用 with open(path) as f 自动管理资源，避免忘记 close 导致文件句柄泄漏。
+
+Python 函数建议加类型注解 def foo(x: int) -> str:，提高可读性并支持静态检查。
+
+异常处理用 try/except 包裹最小必要代码块，避免捕获过宽掩盖真实错误。

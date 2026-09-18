@@ -1,0 +1,9 @@
+MySQL 表名/字段名属于标识符，拼接进 SQL 时必须用反引号包裹（如 CREATE TABLE `users`），防止 SQL 注入。
+
+MySQL 值参数必须使用参数化查询（占位符），禁止用 f-string 直接拼接用户输入进 SQL 语句。
+
+MySQL 事务性操作（多步写）应使用 BEGIN/COMMIT 包裹，失败时 ROLLBACK 回滚。
+
+MySQL 连接参数（host/port/user/password）从配置文件读取，禁止硬编码在代码里。
+
+MySQL 查询结果按行返回，可用 DESCRIBE 查看表结构确认字段类型后再写插入语句。

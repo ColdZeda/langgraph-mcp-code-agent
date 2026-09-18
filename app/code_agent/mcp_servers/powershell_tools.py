@@ -1,0 +1,154 @@
+"""PowerShell MCP Server — 执行命令 + 进程管理。"""
+
+import io
+import subprocess
+import sys
+import threading
+
+import psutil
+from typing import Annotated
+
+from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+
+mcp = FastMCP()
+
+# ── 危险命令检测 ──
+
+_DANGEROUS_POWERSHELL_PATTERNS = [
+    r"\bRemove-Item\s+-Path\s+/\*",   # Remove-Item 根目录通配
+    r"\bRemove-Item\s+.*-Recurse\s+-Force\b",  # 强制递归删除
+    r"\bFormat-\w+",                    # Format-Volume / Format-HardDisk
+    r"\bdel\s+/[fsq]",                  # del /f /s /q
+    r"\brd\s+/[sq]\b",                  # rd /s /q
+    r"\brmdir\s+/[sq]\b",               # rmdir /s /q
+    r"\bStop-Computer\b",               # 关机
+    r"\bRestart-Computer\b",            # 重启
+    r"\bshutdown\b",                     # shutdown 命令
+    r"\bformat\s+[a-zA-Z]:",            # format C: 等
+    r"\bdel /[fsq].*system32",           # 删除系统目录
+    r"\bRemove-Item.*system32",          # 删除系统目录
+    r"\bdiskpart\b",                     # 磁盘分区
+    r"\bClear-Content\s+.*\.(dll|exe|sys)\b",  # 清空系统文件
+]
+
+
+def _is_dangerous(command: str) -> str | None:
+    """检查 PowerShell 命令是否包含危险操作。返回 None 表示安全，返回字符串表示拦截原因。"""
+    import re as _re
+    for pattern in _DANGEROUS_POWERSHELL_PATTERNS:
+        if _re.search(pattern, command, _re.IGNORECASE):
+            return f"🚫 安全拦截：PowerShell 命令匹配危险模式 '{pattern}'，已阻止执行。"
+    return None
+
+
+def run_powershell_command(command: str, capture_output: bool = True):
+    """执行 PowerShell 命令。"""
+    # 安全检查
+    danger = _is_dangerous(command)
+    if danger:
+        sys.stderr.write(danger + "\n")
+        return danger, danger, 1
+    try:
+        cmd = ["powershell", "-Command", command]
+        if capture_output:
+            proc = subprocess.Popen(
+                cmd,
+                shell=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="gbk",
+                errors="replace",
+            )
+            output_buffer = io.StringIO()
+
+            def _read_output():
+                for line in proc.stdout:
+                    sys.stderr.write(line)
+                    sys.stderr.flush()
+                    output_buffer.write(line)
+
+            reader = threading.Thread(target=_read_output, daemon=True)
+            reader.start()
+            proc.wait()
+            reader.join(timeout=5)
+
+            full_output = output_buffer.getvalue().strip()
+            if proc.returncode != 0:
+                return full_output, f"命令返回码: {proc.returncode}", proc.returncode
+            return full_output, "", 0
+        else:
+            result = subprocess.run(cmd, shell=True, encoding="gbk")
+            return "", "", result.returncode
+    except Exception as e:
+        return "", str(e), 1
+
+
+def _get_powershell_processes():
+    """获取所有 PowerShell 进程（内部辅助函数）。"""
+    processes = []
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if proc.info["name"] and "powershell" in proc.info["name"].lower():
+                processes.append(
+                    {"pid": proc.info["pid"], "name": proc.info["name"], "cmdline": proc.info["cmdline"]}
+                )
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return processes
+
+
+# ── MCP 工具 ──
+
+@mcp.tool(name="close_powershell", description="关闭所有 PowerShell 进程")
+def close_all_powershell() -> str:
+    """关闭所有 PowerShell 进程。"""
+    try:
+        processes = _get_powershell_processes()
+        if not processes:
+            return "没有找到需要关闭的 PowerShell 进程"
+
+        closed_count = 0
+        for proc_info in processes:
+            try:
+                proc = psutil.Process(proc_info["pid"])
+                proc.terminate()
+                closed_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        return f"已成功关闭 {closed_count} 个 PowerShell 进程"
+    except Exception as e:
+        return f"关闭 PowerShell 进程失败: {str(e)}"
+
+
+@mcp.tool(name="execute_powershell_command", description="直接执行 PowerShell 命令并返回结果")
+def execute_powershell_command(
+    command: Annotated[str, Field(description="要执行的 PowerShell 命令", examples=["Get-Process"])]
+) -> str:
+    """直接执行 PowerShell 命令并返回结果。"""
+    try:
+        sys.stderr.write("-" * 50 + "\n")
+        sys.stderr.write("execute_powershell_command:\n")
+        sys.stderr.write(command + "\n")
+        sys.stderr.write("-" * 50 + "\n")
+
+        stdout, stderr, returncode = run_powershell_command(command)
+
+        if returncode != 0:
+            if stderr:
+                return f"命令执行失败: {stderr}"
+            return "命令执行失败，但没有错误信息"
+
+        if stdout:
+            return f"命令执行成功:\n{stdout}"
+        return "命令执行成功，但没有输出"
+
+    except Exception as e:
+        return f"执行 PowerShell 命令失败: {str(e)}"
+
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

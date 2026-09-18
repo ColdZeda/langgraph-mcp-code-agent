@@ -1,0 +1,30 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# Reasonix
+.reasonix/
+
+# Generated/runtime files
+.temp/
+.code/
+runtime/*
+!runtime/.gitkeep
+
+# Logs/cache
+*.log
+node_modules/
+.pytest_cache
+.zcode/

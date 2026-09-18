@@ -1,0 +1,9 @@
+MCP server 进程的 stdout 是 JSON-RPC 通信通道，禁止 print() 输出；调试日志必须写 stderr。
+
+MCP server 通过 load_mcp_tools() 以 stdio 子进程方式启动，每个 server 是一个 FastMCP 应用。
+
+MCP 工具函数用 @mcp.tool() 装饰器注册，参数用 pydantic Field 描述，examples 必须是列表类型。
+
+MCP client 通过 langchain_mcp_adapters 的 MultiServerMCPClient 连接，返回的 tools 可直接注入 ReAct agent。
+
+MCP server 与 client 之间通过 JSON-RPC 2.0 协议通信，请求走 stdin，响应走 stdout。
