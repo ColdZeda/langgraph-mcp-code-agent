@@ -1,9 +1,11 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
-build/
-dist/
-wheels/
+/build/
+# 只忽略仓库根的 dist/：前端构建产物 pp/web/frontend/dist/ 是**约定要入库**的
+# （见 app/web/frontend/.gitignore 的说明），写成裸 dist/ 会把新构建的哈希资源一起吞掉
+/dist/
+/wheels/
 *.egg-info
 
 # Virtual environments

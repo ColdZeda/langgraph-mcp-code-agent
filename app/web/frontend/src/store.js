@@ -77,6 +77,24 @@ export async function refreshSessions() {
   } catch { /* 服务未就绪时静默 */ }
 }
 
+/** 切换到一个历史会话：告诉后端改用它，并把历史消息拉回来回放。 */
+export async function loadSession(threadId) {
+  if (store.wsStatus !== 'open' || store.sending) return
+  ws.send(JSON.stringify({ type: 'load_session', threadId }))
+  store.messages = []
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(threadId)}/messages`)
+    const data = await res.json()
+    store.messages = (data.messages || []).map((m, i) => ({
+      id: `h_${threadId}_${i}`,
+      role: m.role,
+      phase: 'done',
+      text: m.content,
+      fromHistory: true,
+    }))
+  } catch { /* 服务未就绪时静默 */ }
+}
+
 export async function loadSettings() {
   const res = await fetch('/api/settings')
   return res.json()

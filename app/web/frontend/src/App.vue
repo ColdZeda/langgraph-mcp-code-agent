@@ -2,12 +2,18 @@
 import ChatView from './components/ChatView.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import { onMounted } from 'vue'
-import { connectWs, refreshSessions, store } from './store'
+import { connectWs, loadSession, refreshSessions, store } from './store'
 
 onMounted(() => {
   connectWs()
   refreshSessions()
 })
+
+// 点历史会话：切换到它并回放历史（记忆由后端 checkpointer 按 thread_id 提供）
+function switchSession(threadId) {
+  if (threadId === store.threadId) return
+  loadSession(threadId)
+}
 </script>
 
 <template>
@@ -20,9 +26,17 @@ onMounted(() => {
       <button class="btn-new" @click="$refs.chat?.newSession()">＋ 新会话</button>
       <div class="session-title">历史会话（checkpoint）</div>
       <div class="session-list">
-        <div v-for="s in store.sessions" :key="s.threadId" class="session-item">
+        <div
+          v-for="s in store.sessions"
+          :key="s.threadId"
+          class="session-item"
+          :class="{ active: s.threadId === store.threadId }"
+          @click="switchSession(s.threadId)"
+        >
           <span class="session-id">{{ s.threadId }}</span>
-          <span class="session-meta">{{ s.fileCount }} 文件 · {{ new Date(s.updatedAt * 1000).toLocaleString() }}</span>
+          <span class="session-meta">
+            {{ s.updatedAt ? new Date(s.updatedAt * 1000).toLocaleString() : '时间未知' }}
+          </span>
         </div>
         <div v-if="!store.sessions.length" class="session-empty">暂无历史会话</div>
       </div>
@@ -50,7 +64,9 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f17
 .btn-new:hover { background: #1d4ed8; }
 .session-title { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
 .session-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
-.session-item { padding: 8px 10px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; display: flex; flex-direction: column; gap: 2px; }
+.session-item { padding: 8px 10px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
+.session-item:hover { border-color: #3b82f6; }
+.session-item.active { border-color: #3b82f6; background: #172554; }
 .session-id { font-family: Consolas, monospace; font-size: 12px; color: #93c5fd; }
 .session-meta { font-size: 11px; color: #64748b; }
 .session-empty { font-size: 12px; color: #64748b; padding: 8px; }
