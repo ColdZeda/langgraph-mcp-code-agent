@@ -19,7 +19,7 @@ from app.code_agent.config import (
     setup_logging,
 )
 from app.code_agent.tools.file_tools import file_tools
-from app.code_agent.utils.mcp import load_mcp_tools, load_mcp_tools_managed
+from app.code_agent.utils.mcp import load_mcp_tools
 
 # 统一 stdio 为 UTF-8（Windows 控制台默认是 GBK）。
 # 做能力判断而不是直接调用：pytest 会把 sys.stdin 换成没有 reconfigure 的替身，
@@ -137,7 +137,7 @@ async def run_single_task(
             ("code_tools", CODE_TOOLS_SERVER_PATH),
         ]
         _results = await asyncio.gather(
-            *(load_mcp_tools_managed(client_id=cid, server_path=sp) for cid, sp in _MCP_SERVERS),
+            *(load_mcp_tools(client_id=cid, server_path=sp) for cid, sp in _MCP_SERVERS),
             return_exceptions=True,
         )
         tool_sets = []
@@ -146,9 +146,7 @@ async def run_single_task(
                 raise RuntimeError(
                     f"MCP server '{cid}' 加载失败: {type(res).__name__}: {res}"
                 ) from res
-            _client, tools = res
-            _clients.append(_client)
-            tool_sets.append(tools)
+            tool_sets.append(res)
         tools = [t for tool_set in tool_sets for t in tool_set]
         tools.extend(file_tools)
 
@@ -168,27 +166,14 @@ async def run_single_task(
         # 异常时不抛：保留已收集的对话，返回错误信息（供 evals 定位）
         err = f"[ERROR] {type(e).__name__}: {e}"
         return err, [], conversation, 0, 0
-    finally:
-        # 关闭 MCP client（释放 stdio 子进程，避免全量跑时进程累积）。
-        #
-        # ⚠️ 必须能处理「取消」：`asyncio.wait_for` 超时取消任务时抛的是
-        # `CancelledError`（属 BaseException），只用 `except Exception` 会漏掉它
-        # → 剩下的 MCP stdio 子进程全部泄漏（全量跑 30 题里出现几次超时就会累积几十个僵尸进程）。
-        # ⚠️ 为什么不是简单的 `for _client in _clients: await _client.__aexit__(...)`：
-        #   - 原来的写法只 `except Exception`，而 `__aexit__` 抛的是 `CancelledError`（BaseException）
-        #     → 异常直接冲出循环，剩余 client 一个都不关；
-        #   - 改成 `except BaseException` 也不够：任务一旦吞掉过一次取消，**后续每个 await 都会
-        #     立刻再抛**（实测：6 个 client 关了 0 个）。
-        #   正确做法是把清理放进**独立任务**并 shield —— 外层被取消也不影响它跑完。
-        #   触发场景：单题 240s 超时后清理较慢，此时用户又按了一次 Ctrl-C（或外层再次取消）。
-        cleanup = asyncio.gather(
-            *(_client.__aexit__(None, None, None) for _client in _clients),
-            return_exceptions=True,
-        )
-        try:
-            await asyncio.shield(cleanup)
-        except BaseException:  # noqa: BLE001 —— 取消只影响"等待"，不影响已经启动的清理任务
-            pass
+    # ⚠️ 这里**故意没有**"关闭 MCP client"的清理块 —— 实测（langchain-mcp-adapters 0.1.1）：
+    #   1) `MultiServerMCPClient.get_tools()` 是"每次工具调用自建一个会话"（其 docstring 明写
+    #      "a new session will be created for each tool call"），用完即关（stdio 子进程同理）
+    #      → **没有长期存活的 client/子进程需要清理**；
+    #   2) `MultiServerMCPClient.__aexit__` 是普通函数，调用即抛 NotImplementedError
+    #      （该适配器不支持当上下文管理器）→ 原先的 `await _client.__aexit__(...)`
+    #      只是被 `except Exception` 吞掉的空操作，写着反而误导。
+    #   若将来升级适配器、改为长连接会话，再按新 API 补清理。
 
     # ── 组装 conversation（明文，人可读）──
     plan_obj = json.loads(result["plan"]) if result["plan"].startswith("{") else {}

@@ -35,7 +35,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 指定会话 | `uv run python main.py --thread-id x` |
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（59 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（60 个） |
 | 全量评估（30 题） | `uv run python evals/run_e2e.py --all --run-id <name>` |
 | 单题评估 | `uv run python evals/run_e2e.py --task E011 --run-id <name>` |
 | RAG 基准 | `uv run python evals/rag_bench.py` |
@@ -58,10 +58,11 @@ app/code_agent/
 ├── mcp_servers/                 powershell(2) / browser(1) / mysql(10) / vm(4) / code_tools(4)
 ├── rag/rag.py                   RAG MCP Server（4 个工具；import 时建库 + 灌知识）
 ├── tools/file_tools.py          FileManagementToolkit(root_dir=WORKSPACE_DIR) → 7 个工具
-└── utils/mcp.py                 load_mcp_tools / load_mcp_tools_managed（工厂）
+└── utils/mcp.py                 load_mcp_tools（工厂；client 无需关闭，见「已知坑」）
 app/web/server.py                FastAPI：WS /ws/chat + REST（sessions/settings）+ 静态托管 dist
 evals/                           tasks.py(30 题) / verifiers.py(评分器) / run_e2e.py(脚本) / rag_bench.py / compare.py
-tests/                           59 个测试（config / prompts / mysql_safe_ident / mysql_readonly / multi_agent / checkpoint / cleanup / tool_level）
+tests/                           60 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+                                 multi_agent / checkpoint / mcp_tool_lifecycle / tool_level）
 ```
 
 ## 已知坑（务必先看）
@@ -100,11 +101,14 @@ tests/                           59 个测试（config / prompts / mysql_safe_id
 - 单题重跑用**新 run-id**（避免覆盖），并先删对应的 checkpoint。
 - `runtime/runs/` 被 gitignore；**正式结果才复制到 `docs/evidence/`** 纳入版本控制。
 - 计分口径偏软：`pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分。
-- 超时取消时的资源清理（`code_agent.py` 的 `finally`，已修）：
-  实测校正 —— **单次取消不会漏关**（取消在进入清理块之前就投递完了，6/6 都能关掉）；
-  危险的是「**清理期间又收到一次取消**」：只 `except Exception` 会让剩余 client 全部关不掉，
-  而只改成 `except BaseException` 也不行（吞掉一次取消后，后续每个 await 都会立刻再抛，实测 0/6）。
-  现在的写法是把清理放进**独立任务 + `asyncio.shield`**，取消只能打断"等待"、打不断"清理"。
+- **MCP 工具没有"需要关闭的 client"**（实测，langchain-mcp-adapters 0.1.1）：
+  `MultiServerMCPClient.get_tools()` 的 docstring 明写
+  *"a new session will be created for each tool call"* → 每次工具调用**自建并自关**一个会话
+  （stdio 子进程同理），没有长期存活的连接；而 `MultiServerMCPClient.__aexit__` 是**普通函数**，
+  调用即抛 `NotImplementedError`（不支持当上下文管理器）。
+  → `code_agent.py` 里原先那段 `await _client.__aexit__(...)` **一直是空操作**（被 `except Exception` 吞掉），
+  现已删除；`utils/mcp.py` 的 `load_mcp_tools_managed` 也一并删除（它的前提是错的）。
+  回归测试：`tests/test_mcp_tool_lifecycle.py`。
 
 ### 仓库整理
 
@@ -137,7 +141,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 59 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 60 | `uv run python -m pytest tests/ -q` |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
 | 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |

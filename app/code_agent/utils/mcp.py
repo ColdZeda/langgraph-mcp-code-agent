@@ -24,15 +24,6 @@ async def load_mcp_tools(*, client_id: str, server_path: Path) -> list:
     return tools
 
 
-async def load_mcp_tools_managed(*, client_id: str, server_path: Path) -> tuple:
-    """与 load_mcp_tools 相同，但返回 (client, tools)——调用方负责关闭 client。
-
-    用于短生命周期场景（如 evals 单任务）：任务结束必须关闭 client，
-    否则 MCP stdio 子进程会累积，长时间全量跑会耗尽资源。
-    """
-    return await _load_mcp_with_client(client_id=client_id, server_path=server_path)
-
-
 async def _load_mcp_with_client(*, client_id: str, server_path: Path) -> tuple:
     import os as _os
     env = dict(_os.environ)
