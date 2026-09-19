@@ -42,7 +42,7 @@ def format_debug_output(step_name: str, content: str, is_tool_call: bool = False
         print("-" * 40)
 
 
-async def run_agent(thread_id: str = "default", debug: bool = False):
+async def run_agent(thread_id: str = "default", debug: bool = False, mode: str = "auto"):
     if debug:
         os.environ["LOG_LEVEL"] = "DEBUG"
     logger = setup_logging()
@@ -61,10 +61,10 @@ async def run_agent(thread_id: str = "default", debug: bool = False):
     tools.extend(file_tools)
     logger.info(f"共加载 {len(tools)} 个工具")
 
-    executor_agent = build_executor_agent(tools)
+    executor_agent = build_executor_agent(tools, mode=mode)
     verifier_agent = build_verifier_agent(tools)
 
-    logger.info("多 Agent（Planner→Executor→Verifier）创建完成，进入对话循环")
+    logger.info(f"Agent 创建完成（执行模式 {mode}），进入对话循环")
 
     # 跨轮记忆不再手写：由 checkpointer 按 thread_id 持久化（见 run_multi_agent）
     while True:
@@ -83,6 +83,7 @@ async def run_agent(thread_id: str = "default", debug: bool = False):
             executor_agent=executor_agent,
             verifier_agent=verifier_agent,
             thread_id=thread_id,
+            mode=mode,
         )
 
         elapsed = time.time() - start_time
@@ -116,9 +117,9 @@ def main(thread_id: str = "default", debug: bool = False):
 
 
 async def run_single_task(
-    task_prompt: str, thread_id: str = "eval"
+    task_prompt: str, thread_id: str = "eval", mode: str = "auto"
 ) -> tuple[str, list[dict], list[dict], int, int]:
-    """向多 Agent 架构发送单次任务，返回 (最终回复, 工具调用trace, 对话存档, 步数, token用量)。
+    """向多 Agent 架构发送单次任务，返回 (最终回复, 工具调用trace, 对话存档, 步数, token用量, 路由结论)。
 
     流程：Planner（纯 LLM 规划）→ Executor（ReAct 全量工具执行）→ Verifier（只读验收，
     失败带原因打回，最多 2 轮）。
@@ -152,7 +153,7 @@ async def run_single_task(
         tools = [t for tool_set in tool_sets for t in tool_set]
         tools.extend(file_tools)
 
-        executor_agent = build_executor_agent(tools)
+        executor_agent = build_executor_agent(tools, mode=mode)
         verifier_agent = build_verifier_agent(tools)
 
         result = await run_multi_agent(
@@ -161,6 +162,7 @@ async def run_single_task(
             executor_agent=executor_agent,
             verifier_agent=verifier_agent,
             thread_id=thread_id,
+            mode=mode,
         )
     except asyncio.CancelledError:
         raise
@@ -221,6 +223,7 @@ async def run_single_task(
         conversation,
         result["step_count"],
         result["token_usage"],
+        result.get("route", ""),  # auto 模式的路由结论（single/multi 模式为空）
     )
 
 

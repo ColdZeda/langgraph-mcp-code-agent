@@ -28,6 +28,9 @@ from evals.verifiers import EvalContext, VerifierResult
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = PROJECT_ROOT / "runtime" / "runs"
 
+# 本次运行用的执行模式（由 --mode 设置；build_meta 会把它写进结果 JSON）
+RUN_MODE = "auto"
+
 
 def get_git_commit() -> str:
     try:
@@ -72,25 +75,37 @@ def collect_trace_from_messages(messages: list) -> list[dict]:
 
 
 async def run_task(
-    task, thread_id: str, timeout: int
-) -> tuple[str, list[dict], list[dict], int, int, float]:
-    """运行单个任务，返回 (response, tool_calls_trace, conversation, step_count, token_usage, elapsed_sec)。"""
+    task, thread_id: str, timeout: int, mode: str = "auto"
+) -> tuple[str, list[dict], list[dict], int, int, float, str]:
+    """运行单个任务。
+
+    返回 (response, tool_calls_trace, conversation, step_count, token_usage,
+         elapsed_sec, route)；`route` 是 auto 模式下的路由结论（simple/complex）。
+    """
     start = time.time()
 
     try:
-        response, tool_trace, conversation, step_count, token_usage = await asyncio.wait_for(
-            run_single_task(task.prompt, thread_id=thread_id),
+        response, tool_trace, conversation, step_count, token_usage, route = await asyncio.wait_for(
+            run_single_task(task.prompt, thread_id=thread_id, mode=mode),
             timeout=timeout,
         )
         elapsed = time.time() - start
-        return response or "", tool_trace, conversation, step_count, token_usage, round(elapsed, 1)
+        return (
+            response or "",
+            tool_trace,
+            conversation,
+            step_count,
+            token_usage,
+            round(elapsed, 1),
+            route,
+        )
 
     except TimeoutError:
         elapsed = time.time() - start
-        return "", [], [], 0, 0, round(elapsed, 1)
+        return "", [], [], 0, 0, round(elapsed, 1), ""
     except Exception as e:
         elapsed = time.time() - start
-        return str(e)[:500], [], [], 0, 0, round(elapsed, 1)
+        return str(e)[:500], [], [], 0, 0, round(elapsed, 1), ""
 
 
 def run_verifiers(task, context: EvalContext) -> list[dict]:
@@ -171,7 +186,7 @@ def save_results_incremental(run_id: str, results: list[dict], meta: dict):
         json.dump(output, f, indent=2, ensure_ascii=False)
 
 
-async def main_async(tasks: list, run_id: str, force: bool = False):
+async def main_async(tasks: list, run_id: str, force: bool = False, mode: str = "auto"):
     # 检查断点续跑
     existing_results = None if force else load_existing_results(run_id)
     completed_ids = {r["id"] for r in existing_results} if existing_results else set()
@@ -206,6 +221,8 @@ async def main_async(tasks: list, run_id: str, force: bool = False):
                     "status": "skipped",
                     "response": "",
                     "conversation": [],
+                    "mode": mode,
+                    "route": "",
                 }
             )
             save_results_incremental(run_id, results, build_meta(run_id, results))
@@ -217,12 +234,21 @@ async def main_async(tasks: list, run_id: str, force: bool = False):
             clean_workspace()
         write_setup_files(task)
 
-        thread_id = f"eval-{task.id}"
+        # thread_id 带 run-id 与 mode 前缀：
+        # ⚠️ 阶段 1 接上 checkpointer 后，只有 task.id 会让 single / multi 两轮
+        #    **共用同一批线程** → 第二轮读到第一轮的记忆，两套数字不可比。
+        thread_id = f"{run_id}-{mode}-{task.id}"
         print(f"[{i}/{len(tasks)}] {task.id} [{task.dimension}] {task.prompt[:60]}...")
 
-        response, tool_trace, conversation, step_count, token_usage, elapsed = await run_task(
-            task, thread_id, task.timeout_sec
-        )
+        (
+            response,
+            tool_trace,
+            conversation,
+            step_count,
+            token_usage,
+            elapsed,
+            route,
+        ) = await run_task(task, thread_id, task.timeout_sec, mode)
 
         # 判断状态
         if elapsed >= task.timeout_sec and not response:
@@ -257,6 +283,8 @@ async def main_async(tasks: list, run_id: str, force: bool = False):
             "status": status,
             "response": response,
             "conversation": conversation,
+            "mode": mode,
+            "route": route,
         }
         results.append(result)
 
@@ -296,6 +324,7 @@ def build_meta(run_id: str, results: list[dict]) -> dict:
         "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "git_commit": get_git_commit(),
         "model": MODEL_NAME,  # 不再硬编码：换模型后存档里的 model 字段会跟着变
+        "mode": RUN_MODE,  # 本次运行用的执行模式（single / multi / auto）
         "evals_version": "v2.0",
         "total_tasks": len(results),
         "overall": {
@@ -337,11 +366,22 @@ def print_summary(results: list[dict], run_id: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--all", action="store_true", help="运行全部 27 题")
+    parser.add_argument("--all", action="store_true", help=f"运行全部 {len(TASKS)} 题")
     parser.add_argument("--task", help="只运行指定任务 ID")
     parser.add_argument("--dimension", help="按维度运行")
     parser.add_argument("--force", action="store_true", help="忽略断点续跑，全部重跑")
     parser.add_argument("--run-id", default=None, help="自定义 run_id")
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "single", "multi"],
+        default="auto",
+        help="执行模式：auto=按复杂度自动路由（默认）；single=单 Agent；multi=完整三阶段",
+    )
+    parser.add_argument(
+        "--role-models",
+        default=None,
+        help='临时覆盖各角色模型，如 "planner=ds-v4-flash,executor=ds-v41-flash"（不改配置文件）',
+    )
     args = parser.parse_args()
 
     if args.task:
@@ -357,5 +397,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     run_id = args.run_id or f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    print(f"Run ID: {run_id}  |  {len(selected)} tasks  |  force={args.force}")
-    asyncio.run(main_async(selected, run_id, args.force))
+
+    RUN_MODE = args.mode
+
+    print(f"Run ID: {run_id}  |  {len(selected)} tasks  |  force={args.force}  |  mode={args.mode}")
+    asyncio.run(main_async(selected, run_id, args.force, args.mode))

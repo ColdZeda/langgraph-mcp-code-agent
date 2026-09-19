@@ -26,6 +26,15 @@ if __name__ == "__main__":
         action="store_true",
         help="开启 DEBUG 日志级别（等价于 LOG_LEVEL=DEBUG）",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "single", "multi"],
+        default="auto",
+        help=(
+            "执行模式：auto=按任务复杂度自动选（默认）；"
+            "single=只用 Executor（快，适合查询类）；multi=完整 Planner→Executor→Verifier"
+        ),
+    )
     args = parser.parse_args()
 
     thread_id = str(uuid.uuid4())[:8] if args.new_session else args.thread_id
@@ -33,4 +42,5 @@ if __name__ == "__main__":
         print(f"已开启新会话，thread_id = {thread_id}")
         print(f"下次回到该会话：uv run python main.py --thread-id {thread_id}")
 
-    run_agent_main(thread_id=thread_id, debug=args.debug)
+    print(f"执行模式：{args.mode}")
+    run_agent_main(thread_id=thread_id, debug=args.debug, mode=args.mode)

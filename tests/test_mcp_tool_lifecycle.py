@@ -61,10 +61,10 @@ async def test_run_single_task_does_not_need_client_cleanup(monkeypatch):
 
     monkeypatch.setattr(ca, "load_mcp_tools", fake_loader)
     monkeypatch.setattr(ca, "run_multi_agent", fake_run_multi_agent)
-    monkeypatch.setattr(ca, "build_executor_agent", lambda tools: None)
+    monkeypatch.setattr(ca, "build_executor_agent", lambda tools, **kw: None)
     monkeypatch.setattr(ca, "build_verifier_agent", lambda tools: None)
 
-    response, trace, conversation, steps, tokens = await ca.run_single_task(
+    response, trace, conversation, steps, tokens, _route = await ca.run_single_task(
         "任务", thread_id="probe"
     )
 

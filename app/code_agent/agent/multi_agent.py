@@ -18,7 +18,11 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
-from app.code_agent.agent.prompts import PROMPT_CONTEXT, SYSTEM_PROMPT_TEMPLATE
+from app.code_agent.agent.prompts import (
+    EXECUTOR_PLAN_PROMPT,
+    PROMPT_CONTEXT,
+    SYSTEM_PROMPT_TEMPLATE,
+)
 from app.code_agent.config import CHECKPOINT_DB
 from app.code_agent.model.llm import get_llm
 
@@ -67,6 +71,7 @@ class AgentState(TypedDict):
     executor_messages: list  # Executor 消息流（组装对话存档用）
     verifier_messages: list  # Verifier 消息流
     step_count: int  # Executor 执行步数（近似原单 Agent 步数）
+    route: str  # auto 模式的路由结论："simple" / "complex"（由 route_node 写入）
     # ── 跨轮记忆（唯一的会话通道）──
     # ⚠️ 必须带 `add_messages` reducer：没 reducer 的通道是"新值覆盖旧值"，
     #    那样即使接了 checkpointer，按 thread_id 也恢复不出对话。
@@ -308,18 +313,83 @@ def decide_after_verify(state: AgentState) -> Literal["executor", "end"]:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 执行模式路由（single / multi / auto）
+# ═══════════════════════════════════════════════════════════════════
+
+# 规则兜底：明显复杂的任务直接判 complex（漏判的代价只是多花 token，可恢复）
+COMPLEX_KEYWORDS = ("删除", "重构", "部署", "批量", "所有文件", "整个项目", "批量修改")
+
+ROUTER_PROMPT = (
+    "判断下面这个任务需要「单步执行」还是「多步规划+验证」。\n"
+    "单步 = 查看/读取/查询/搜索类，调 1-2 次工具就能答完。\n"
+    "多步 = 需要改多个文件、需要规划步骤、有明确产物要验收。\n\n"
+    "任务：{task}\n\n"
+    "只输出一个词：simple 或 complex"
+)
+
+
+def route_task(task: str | dict) -> Literal["simple", "complex"]:
+    """判断任务复杂度（规则兜底 + LLM 分类）。
+
+    入参既接受任务文本，也接受 state 字典（取其中的 user_input）。
+    """
+    text = task.get("user_input", "") if isinstance(task, dict) else str(task)
+    if any(k in text for k in COMPLEX_KEYWORDS):
+        return "complex"
+    return _llm_classify_complexity(text)
+
+
+def _llm_classify_complexity(task_text: str) -> Literal["simple", "complex"]:
+    """用一次轻量 LLM 调用判断复杂度；**失败时保守走 complex**（宁可多花 token 也别漏验证）。"""
+    try:
+        resp = get_llm().invoke(ROUTER_PROMPT.format(task=task_text))
+        verdict = str(resp.content).strip().lower()
+        return "complex" if "complex" in verdict else "simple"
+    except Exception:
+        return "complex"
+
+
+async def route_node(state: AgentState) -> dict:
+    """真正做判断的**节点**：把结论写进 state。
+
+    ⚠️ 为什么必须是节点而不是直接挂在条件边上：LangGraph 的条件边函数
+    只负责"选边"，**返回值不会写进 state** —— 那样 `executor_node` 就无从知道
+    自己来自 simple 还是 complex 分支。
+    """
+    return {"route": route_task(state)}
+
+
+def _route_decide(state: AgentState) -> Literal["simple", "complex"]:
+    """纯函数：只读 route_node 写下的结论来选边（缺省保守走 complex）。"""
+    return state.get("route", "complex")  # type: ignore[return-value]
+
+
+def after_executor(state: AgentState) -> Literal["verifier", "end"]:
+    """auto 模式下 Executor 的收尾：simple 路径直接结束，complex 路径去验收。"""
+    return "end" if state.get("route") == "simple" else "verifier"
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Agent 构造
 # ═══════════════════════════════════════════════════════════════════
 
 
-def build_executor_agent(tools: list) -> Any:
-    """构造 Executor：现有 create_react_agent，全量工具 + 现有系统 Prompt。"""
+def build_executor_agent(tools: list, *, mode: str = "multi", llm: Any | None = None) -> Any:
+    """构造 Executor：create_react_agent + 全量工具。
+
+    **按模式选 Prompt**（这是 T3.1 的关键之一）：
+      - `single`：用 SYSTEM_PROMPT_TEMPLATE（自带 Plan→Execute→Verify 三步法，
+        Executor 需要自己规划 —— 这正是改造前单 Agent 的路子）；
+      - `multi` / `auto`：用 EXECUTOR_PLAN_PROMPT（"按给定计划执行"），
+        避免和 Planner 的指令打架；auto 模式下如果计划为空，它也会直接完成简单任务。
+    """
     from langchain_core.prompts import PromptTemplate
     from langgraph.prebuilt import create_react_agent
 
-    prompt = PromptTemplate.from_template(template=SYSTEM_PROMPT_TEMPLATE)
+    template = SYSTEM_PROMPT_TEMPLATE if mode == "single" else EXECUTOR_PLAN_PROMPT
+    prompt = PromptTemplate.from_template(template=template)
     return create_react_agent(
-        model=get_llm(),
+        model=llm or get_llm(),
         tools=tools,
         debug=False,
         prompt=prompt.format(**PROMPT_CONTEXT),
@@ -345,8 +415,18 @@ def build_verifier_agent(all_tools: list, verify_tool_names: set[str] | None = N
     )
 
 
-def build_graph(executor_agent: Any, verifier_agent: Any, checkpointer: Any = None):
+def build_graph(
+    executor_agent: Any,
+    verifier_agent: Any,
+    checkpointer: Any = None,
+    mode: str = "auto",
+):
     """组装 StateGraph。executor_agent / verifier_agent 为已构造的 agent 实例。
+
+    `mode`：
+      - `single`：START → executor → END（单 Agent，跳过规划与验收）
+      - `multi` ：START → planner → executor → verifier（→ FAIL 打回 executor）
+      - `auto`  ：START → route →（simple: executor / complex: planner→executor→verifier）
 
     ⚠️ `checkpointer` 是刻意保留的接线，**不要删**（跨轮记忆靠它，曾在上一次重构中被误删）。
     """
@@ -358,18 +438,39 @@ def build_graph(executor_agent: Any, verifier_agent: Any, checkpointer: Any = No
     async def _verifier_wrapper(state):
         return await verifier_node(state, verifier_agent)
 
+    graph.add_node("route", route_node)
     graph.add_node("planner", planner_node)
     graph.add_node("executor", _executor_wrapper)
     graph.add_node("verifier", _verifier_wrapper)
 
-    graph.add_edge(START, "planner")
-    graph.add_edge("planner", "executor")
-    graph.add_edge("executor", "verifier")
-    graph.add_conditional_edges(
-        "verifier",
-        decide_after_verify,
-        {"executor": "executor", "end": END},
-    )
+    if mode == "single":
+        graph.add_edge(START, "executor")
+        graph.add_edge("executor", END)
+    elif mode == "multi":
+        graph.add_edge(START, "planner")
+        graph.add_edge("planner", "executor")
+        graph.add_edge("executor", "verifier")
+        graph.add_conditional_edges(
+            "verifier",
+            decide_after_verify,
+            {"executor": "executor", "end": END},
+        )
+    else:  # auto
+        graph.add_edge(START, "route")
+        graph.add_conditional_edges(
+            "route", _route_decide, {"simple": "executor", "complex": "planner"}
+        )
+        graph.add_edge("planner", "executor")
+        # Executor 的出边要看来源：simple 直接结束，complex 才去验收
+        graph.add_conditional_edges(
+            "executor", after_executor, {"verifier": "verifier", "end": END}
+        )
+        graph.add_conditional_edges(
+            "verifier",
+            decide_after_verify,
+            {"executor": "executor", "end": END},
+        )
+
     return graph.compile(checkpointer=checkpointer)
 
 
@@ -385,23 +486,27 @@ async def run_multi_agent(
     executor_agent: Any | None = None,
     verifier_agent: Any | None = None,
     thread_id: str = "default",
+    mode: str = "auto",
 ) -> dict:
     """执行单次多 Agent 任务。
 
     跨轮记忆由 checkpointer 按 `thread_id` 持久化（SQLite），进程重启后仍在。
     调用方**只需传增量输入**（当前任务），历史由 state["messages"] 自动恢复。
 
+    `mode`: single / multi / auto（见 build_graph）。执行模式与路由结论都会出现在返回值里，
+    供 evals 统计"多少题走了哪条路径"。
+
     返回: {plan, executor_result, executor_trace, verdict, retry_count,
-           token_usage, final_response}
+           token_usage, final_response, mode, route}
     """
     if executor_agent is None:
-        executor_agent = build_executor_agent(all_tools)
+        executor_agent = build_executor_agent(all_tools, mode=mode)
     if verifier_agent is None:
         verifier_agent = build_verifier_agent(all_tools)
 
     CHECKPOINT_DB.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_DB)) as saver:
-        app = build_graph(executor_agent, verifier_agent, checkpointer=saver)
+        app = build_graph(executor_agent, verifier_agent, checkpointer=saver, mode=mode)
         config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
         state = await app.ainvoke(
             # 只传增量：历史在 checkpoint 里，靠 messages 的 add_messages reducer 累积
@@ -432,11 +537,14 @@ async def run_multi_agent(
         )
 
     return {
-        "plan": state["plan"],
+        # single 模式没有 planner / verifier → 用 .get 兜底，不要 KeyError
+        "plan": state.get("plan", ""),
         "executor_result": state["executor_result"],
-        "executor_trace": state["executor_trace"],
-        "verdict": state["verdict"],
-        "retry_count": state["retry_count"],
+        "executor_trace": state.get("executor_trace", ""),
+        "verdict": state.get("verdict", ""),
+        "retry_count": state.get("retry_count", 0),
+        "mode": mode,
+        "route": state.get("route", ""),
         "token_usage": state.get("token_usage", 0),
         "executor_trace_list": state.get("executor_trace_list", []),
         "verifier_trace_list": state.get("verifier_trace_list", []),
