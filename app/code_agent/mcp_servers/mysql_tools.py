@@ -4,7 +4,15 @@ from typing import Optional, Dict, Any, Annotated, List
 import pymysql
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
-from app.code_agent.config import MYSQL_CHARSET, MYSQL_HOST, MYSQL_PASSWORD, MYSQL_PORT, MYSQL_USER
+from app.code_agent.config import (
+    MYSQL_CHARSET,
+    MYSQL_HOST,
+    MYSQL_PASSWORD,
+    MYSQL_PORT,
+    MYSQL_READONLY_PASSWORD,
+    MYSQL_READONLY_USER,
+    MYSQL_USER,
+)
 
 mcp = FastMCP()
 
@@ -32,10 +40,42 @@ def _safe_ident(identifier: str) -> str:
     return "`" + identifier.replace("`", "``") + "`"
 
 
-def get_connection(db):
+# ── 只读语句白名单 ──
+# 为什么必须有：`mysql_execute_query` 被挂在 Verifier 的只读工具白名单里
+# （multi_agent.py 的 READONLY_TOOL_NAMES），但 MySQL 的 DDL（DROP/ALTER/TRUNCATE）
+# 会**隐式提交**，`commit=False` 根本挡不住 → "只读"的 Verifier 理论上能 DROP TABLE。
+READONLY_STATEMENTS = {"SELECT", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "WITH"}
+
+
+def _is_readonly_sql(sql: str) -> tuple[bool, str]:
+    """判断 SQL 是否为只读语句。返回 (是否通过, 拒绝原因)。"""
+    stripped = sql.strip().lstrip("(").strip()
+    first_word = stripped.split(None, 1)[0].upper() if stripped else ""
+    if first_word not in READONLY_STATEMENTS:
+        return False, (
+            f"🚫 只读工具不接受 `{first_word or '(空)'}` 语句，"
+            f"仅允许 {sorted(READONLY_STATEMENTS)}。"
+            "需要写数据请改用对应的写工具（mysql_insert_data / mysql_update_data / "
+            "mysql_delete_data / mysql_create_table / mysql_execute_command）。"
+        )
+    # 拒绝多语句（分号分隔）
+    if ";" in stripped.rstrip(";"):
+        return False, "🚫 只读工具不接受多语句（分号分隔），一次只能执行一条只读查询。"
+    return True, ""
+
+
+def get_connection(db, *, readonly: bool = False):
+    """建立连接。
+
+    readonly=True 时改用只读账号（MYSQL_READONLY_USER/PASSWORD）——
+    只读工具走这条路；其余工具不传该参数，行为与改造前完全一致。
+    """
     config = MYSQL_CONFIG.copy()
     if db:
         config['database'] = db
+    if readonly and MYSQL_READONLY_USER and MYSQL_READONLY_PASSWORD:
+        config['user'] = MYSQL_READONLY_USER
+        config['password'] = MYSQL_READONLY_PASSWORD
 
     try:
         connection = pymysql.connect(**config)
@@ -45,9 +85,9 @@ def get_connection(db):
         return msg
 
 
-def execute_query(command, database = None, params = None, commit = False):
+def execute_query(command, database = None, params = None, commit = False, readonly = False):
     try:
-        connection = get_connection(database)
+        connection = get_connection(database, readonly=readonly)
         if not isinstance(connection, pymysql.Connection):
             return connection
         else:
@@ -122,9 +162,18 @@ def mysql_execute_query(
     database: Annotated[Optional[str], Field(description="数据库名（可选）", examples=["agent_test"])] = None,
     params: Annotated[Optional[list], Field(description="查询参数列表（可选），对应 SQL 中的 %s 占位符")] = None,
 ):
+    # ① 应用层：语句白名单（主防线）
+    ok, reason = _is_readonly_sql(command)
+    if not ok:
+        sys.stderr.write(reason + "\n")
+        return reason
+
     try:
         params_tuple = tuple(params) if params else None
-        result, rowcount = execute_query(command, database=database, params=params_tuple)
+        # ② 数据库层：有只读账号就用它（兜底，防止应用层被绕过）
+        result, rowcount = execute_query(
+            command, database=database, params=params_tuple, readonly=True
+        )
         return Response(
             success=True,
             database=database,

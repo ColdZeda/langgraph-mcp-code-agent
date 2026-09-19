@@ -63,6 +63,13 @@ MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "root")
 MYSQL_CHARSET = os.getenv("MYSQL_CHARSET", "utf8mb4")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "agent_test")
 
+# 只读账号：给「只读工具」用的**数据库层兜底**。
+# 主防线是应用层的语句白名单（见 mysql_tools.py 的 _is_readonly_sql）；
+# 这里再叠一层，保证即使应用层被绕过也改不了数据。
+# 未配置时只读工具回落到上面的普通账号（行为与改造前一致）。
+MYSQL_READONLY_USER = os.getenv("MYSQL_READONLY_USER")
+MYSQL_READONLY_PASSWORD = os.getenv("MYSQL_READONLY_PASSWORD")
+
 WSL_DISTRO = os.getenv("CODE_AGENT_WSL_DISTRO", "Ubuntu")
 VM_UPLOADS_DIR = os.getenv("CODE_AGENT_VM_UPLOADS_DIR", "/home/leprite/nginx/uploads")
 
