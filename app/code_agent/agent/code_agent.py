@@ -21,9 +21,12 @@ from app.code_agent.config import (
 from app.code_agent.tools.file_tools import file_tools
 from app.code_agent.utils.mcp import load_mcp_tools, load_mcp_tools_managed
 
-sys.stdin.reconfigure(encoding="utf-8")
-sys.stdout.reconfigure(encoding="utf-8")
-sys.stderr.reconfigure(encoding="utf-8")
+# 统一 stdio 为 UTF-8（Windows 控制台默认是 GBK）。
+# 做能力判断而不是直接调用：pytest 会把 sys.stdin 换成没有 reconfigure 的替身，
+# 直接调用会让本模块无法被测试/被当库导入。
+for _stream in (sys.stdin, sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
 
 def format_debug_output(step_name: str, content: str, is_tool_call: bool = False) -> None:
@@ -171,12 +174,26 @@ async def run_single_task(
         err = f"[ERROR] {type(e).__name__}: {e}"
         return err, [], conversation, 0, 0
     finally:
-        # 关闭 MCP client（释放 stdio 子进程，避免全量跑时进程累积）
-        for _client in _clients:
-            try:
-                await _client.__aexit__(None, None, None)
-            except Exception:
-                pass
+        # 关闭 MCP client（释放 stdio 子进程，避免全量跑时进程累积）。
+        #
+        # ⚠️ 必须能处理「取消」：`asyncio.wait_for` 超时取消任务时抛的是
+        # `CancelledError`（属 BaseException），只用 `except Exception` 会漏掉它
+        # → 剩下的 MCP stdio 子进程全部泄漏（全量跑 30 题里出现几次超时就会累积几十个僵尸进程）。
+        # ⚠️ 为什么不是简单的 `for _client in _clients: await _client.__aexit__(...)`：
+        #   - 原来的写法只 `except Exception`，而 `__aexit__` 抛的是 `CancelledError`（BaseException）
+        #     → 异常直接冲出循环，剩余 client 一个都不关；
+        #   - 改成 `except BaseException` 也不够：任务一旦吞掉过一次取消，**后续每个 await 都会
+        #     立刻再抛**（实测：6 个 client 关了 0 个）。
+        #   正确做法是把清理放进**独立任务**并 shield —— 外层被取消也不影响它跑完。
+        #   触发场景：单题 240s 超时后清理较慢，此时用户又按了一次 Ctrl-C（或外层再次取消）。
+        cleanup = asyncio.gather(
+            *(_client.__aexit__(None, None, None) for _client in _clients),
+            return_exceptions=True,
+        )
+        try:
+            await asyncio.shield(cleanup)
+        except BaseException:  # noqa: BLE001 —— 取消只影响"等待"，不影响已经启动的清理任务
+            pass
 
     # ── 组装 conversation（明文，人可读）──
     plan_obj = json.loads(result["plan"]) if result["plan"].startswith("{") else {}

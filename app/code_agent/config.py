@@ -20,6 +20,13 @@ CHECKPOINT_DIR = Path(os.getenv("CODE_AGENT_CHECKPOINT_DIR", RUNTIME_DIR / "chec
 CHROMA_DIR = Path(os.getenv("CODE_AGENT_CHROMA_DIR", RUNTIME_DIR / "chroma_db"))
 RUNS_DIR = Path(os.getenv("CODE_AGENT_RUNS_DIR", RUNTIME_DIR / "runs"))
 
+# 运行时目录由配置层统一创建。
+# 为什么放在这里：这些目录不属于版本控制（runtime/ 被 gitignore），全新 clone 下来并不存在；
+# 而 tests/test_config.py 断言 CHECKPOINT_DIR / CHROMA_DIR 存在、运行期也需要它们。
+# （实测：不创建时，全新 clone 下 `test_runtime_dirs_exist` 会失败。）
+for _d in (RUNTIME_DIR, WORKSPACE_DIR, CHECKPOINT_DIR, CHROMA_DIR, RUNS_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
+
 PYTHON_EXECUTABLE = os.getenv("CODE_AGENT_PYTHON", sys.executable)
 
 RAG_SERVER_PATH = CODE_AGENT_DIR / "rag" / "rag.py"

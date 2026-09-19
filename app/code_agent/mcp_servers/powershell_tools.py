@@ -11,6 +11,8 @@ from typing import Annotated
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
+from app.code_agent.config import PROJECT_ROOT
+
 mcp = FastMCP()
 
 # ── 危险命令检测 ──
@@ -51,10 +53,13 @@ def run_powershell_command(command: str, capture_output: bool = True):
         return danger, danger, 1
     try:
         cmd = ["powershell", "-Command", command]
+        # cwd 固定为项目根：命令的相对路径基准不再取决于"用户从哪个目录启动 Agent"。
+        # （Agent 需要按相对路径读 app/…、跑 uv run pytest tests/、git status，基准都必须是项目根）
         if capture_output:
             proc = subprocess.Popen(
                 cmd,
                 shell=True,
+                cwd=str(PROJECT_ROOT),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -80,7 +85,16 @@ def run_powershell_command(command: str, capture_output: bool = True):
                 return full_output, f"命令返回码: {proc.returncode}", proc.returncode
             return full_output, "", 0
         else:
-            result = subprocess.run(cmd, shell=True, encoding="gbk")
+            # 不捕获输出的分支：输出仍必须走 stderr —— stdout 是 MCP 的 JSON-RPC 通道，
+            # 让子进程继承 stdout 会直接污染协议。
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=str(PROJECT_ROOT),
+                stdout=sys.stderr,
+                stderr=sys.stderr,
+                encoding="gbk",
+            )
             return "", "", result.returncode
     except Exception as e:
         return "", str(e), 1

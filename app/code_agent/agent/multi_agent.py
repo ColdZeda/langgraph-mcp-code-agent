@@ -174,13 +174,25 @@ def _trace_to_text(trace: list[dict]) -> str:
 
 
 async def executor_node(state: AgentState, executor_agent: Any) -> dict:
-    """复用 create_react_agent 按计划执行。"""
-    plan_steps = _plan_to_text(state["plan"])
-    if state["retry_count"] > 0:
+    """复用 create_react_agent 按计划执行。
+
+    ⚠️ **重试计数在这里自增**（不是在 verifier_node 里）：
+    `retry_count` 的语义是「**已经打回了多少次**」——只有真正发起一次重跑时才 +1。
+    这样 `MAX_RETRY = 2` 恰好等于"最多打回 2 轮"
+    = Executor 一共执行 `MAX_RETRY + 1` 次（首次 + 2 次重跑），
+    且 `run_multi_agent` 里"已重试 N 次"的文案也准确。
+
+    （若改成在 verifier 里自增，第 1 次 FAIL 就会被当成"已打回 1 次"，
+    实际只会有 1 次重跑，与「最多打回 2 轮」不符。）
+    """
+    plan_steps = _plan_to_text(state.get("plan", ""))
+    prev_verdict = str(state.get("verdict") or "")
+    is_retry = "FAIL" in prev_verdict.upper()      # 上一轮验收失败 → 本次是重跑
+    if is_retry:
         user_msg = (
             f"【任务】{state['user_input']}\n"
             f"【执行计划】\n{plan_steps}\n"
-            f"【注意】上一轮执行未通过验收，验收意见：{state['verdict']}\n"
+            f"【注意】上一轮执行未通过验收，验收意见：{prev_verdict}\n"
             "请针对验收意见修正后重做，完成后再总结结果。"
         )
     else:
@@ -214,6 +226,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         "executor_trace_list": trace,
         "executor_messages": messages,
         "step_count": step_count,
+        "retry_count": state.get("retry_count", 0) + (1 if is_retry else 0),
         "token_usage": state.get("token_usage", 0) + tokens,
     }
 
