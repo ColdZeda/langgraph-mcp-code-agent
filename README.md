@@ -48,8 +48,8 @@ uv run uvicorn app.web.server:app --port 8000
 ### 安装
 
 ```bash
-git clone https://gitee.com/wdnmded/code_agent_raw.git
-cd code_agent_raw
+git clone https://gitee.com/wdnmded/langgraph-mcp-code-agent.git
+cd langgraph-mcp-code-agent
 uv sync
 ```
 
