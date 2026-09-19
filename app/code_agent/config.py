@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import sys
@@ -79,17 +80,43 @@ VM_UPLOADS_DIR = os.getenv("CODE_AGENT_VM_UPLOADS_DIR", "/home/leprite/nginx/upl
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 THREAD_ID = os.getenv("CODE_AGENT_THREAD_ID", "default")
 
+# 日志格式开关：LOG_JSON=1 输出单行 JSON（便于检索/聚合）；默认仍是人类可读文本
+# （开发时看 JSON 很痛苦，所以默认关闭）。
+LOG_JSON = os.getenv("LOG_JSON", "0").lower() in ("1", "true", "yes", "on")
+
+
+class JsonFormatter(logging.Formatter):
+    """把日志输出成单行 JSON，便于检索和聚合。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
 
 def setup_logging(name: str = "code_agent") -> logging.Logger:
-    """配置并返回 logger 实例。"""
+    """配置并返回 logger 实例。
+
+    ⚠️ handler 必须写 **stderr**：MCP server 的 stdout 是 JSON-RPC 通道，
+    往 stdout 写任何日志都会污染协议。
+    """
     logger = logging.getLogger(name)
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S"
+        if LOG_JSON:
+            handler.setFormatter(JsonFormatter())
+        else:
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S"
+                )
             )
-        )
         logger.addHandler(handler)
     logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
     return logger
