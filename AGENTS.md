@@ -26,6 +26,23 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 10 | 新增依赖必须 `uv add`，并把"装什么、为什么装"写进对应文档 |
 | 11 | 改前端后必须 `npm run build` 并提交 `dist/`（含被删除的旧 hash 文件） |
 
+## 阶段收尾清单（**不做完不算阶段完成**）
+
+> 为什么要有这一节：活文档（本文件 / `docs/handover.md` / `README.md`）描述的是"现在是什么样"，
+> 每改一次代码就可能失效一处。**过期比缺失更危险** —— 缺失可以读代码补，过期会让下一个会话照着错的做。
+> （教训：阶段 2 改了容器与 CI，却只更新了 README，本节列出的 AGENTS.md 段落整段过期。）
+
+| # | 收尾动作 |
+|---|---|
+| 1 | 刷新本文件「当前进度」：已完成阶段、已知遗留 |
+| 2 | 核对并修改本阶段**影响到**的段落：环境与工具链 / 常用命令 / 代码地图 / 数字来源速查 |
+| 3 | 刷新 `docs/handover.md` 的「当前状态快照」与「当前进度」 |
+| 4 | 改掉 `README.md` 里受影响的数字与章节 |
+| 5 | 在 `program-fix第八版/讨论结论汇总.md` 追加本阶段「执行期订正记录」（编号续上）+「验证记录」（正反两向证据） |
+| 6 | **自查（机械可查，别靠自觉）**：`git grep` 本阶段改动的关键名词（旧工具名 / 旧容器名 / 旧服务名 / 端口 / 测试数 / 覆盖率 / 旧路径），命中的**活文档**必须改对；只追加类文件（提交信息 / 测试 / 订正记录 / 归档目录）不算 |
+| 7 | `uv run python -m pytest tests/ -q` + `uv run ruff check .` + `uv run ruff format --check .` 全过 |
+| 8 | `git add` → `commit`（信息里带验收数字）→ `git push origin master` |
+
 ## 常用命令
 
 | 用途 | 命令 |
@@ -42,24 +59,27 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 重建前端 | `cd app/web/frontend && npm run build` |
 
 > ⚠️ `pytest` **不能**跑评估（不认 `--task`）；评估一律用 `evals/run_e2e.py`。
-> ⚠️ CI（`.gitee.yml`）现在跑的是 `pytest tests/ evals/`（历史写法）；`evals/` 下已无测试文件，等价于只跑 `tests/`。
+> ⚠️ CI（`.gitee.yml`）从阶段 2 起跑三步：`ruff check .` → `ruff format --check .` → `pytest tests/ -v`。
 
 ## 代码地图（精简）
 
 ```
 main.py                          CLI 入口（argparse）
 app/code_agent/
-├── agent/multi_agent.py         ★ 状态图：planner_node / executor_node / verifier_node / decide_after_verify
-│                                  + READONLY_TOOL_NAMES（Verifier 只读白名单）+ build_graph
+├── agent/multi_agent.py         ★ 状态图：route_node / planner_node / executor_node / verifier_node
+│                                  + _route_decide / after_executor / decide_after_verify
+│                                  + READONLY_TOOL_NAMES（Verifier 只读白名单）+ build_graph(mode=…)
 ├── agent/code_agent.py          REPL 循环 run_agent() + evals 入口 run_single_task()
 ├── agent/prompts.py             SYSTEM_PROMPT_TEMPLATE（Plan→Execute→Verify 三步法）+ PROMPT_CONTEXT
-├── model/llm.py                 模块级单例：build_llm / get_llm / set_llm（热切换后需重建 agent）
+├── model/llm.py                 LLMRegistry：get_llm(role) / chain(role) / invoke_with_fallback
+│                                  + build_llm / set_llm（热切换后需重建 agent）
 ├── config.py                    所有配置 + setup_logging（stderr）
 ├── mcp_servers/                 powershell(2) / browser(1) / mysql(10) / vm(4) / code_tools(4)
 ├── rag/rag.py                   RAG MCP Server（4 个工具；import 时建库 + 灌知识）
 ├── tools/file_tools.py          FileManagementToolkit(root_dir=WORKSPACE_DIR) → 7 个工具
 └── utils/mcp.py                 load_mcp_tools（工厂；client 无需关闭，见「已知坑」）
-app/web/server.py                FastAPI：WS /ws/chat + REST（sessions/settings）+ 静态托管 dist
+config/models.json               模型注册表 + 角色分配 + 降级链（**进版本控制**，不要放 runtime/）
+app/web/server.py                FastAPI：WS /ws/chat + REST（sessions/settings/models）+ 静态托管 dist
 evals/                           tasks.py(30 题) / verifiers.py(评分器) / run_e2e.py(脚本) / rag_bench.py / compare.py
 tests/                           80 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry /
@@ -85,24 +105,36 @@ tests/                           80 个测试（config / prompts / mysql_safe_id
 - **MCP 工具的接口形状**：MCP 适配层生成的是 `StructuredTool(coroutine=…, response_format=…)`，
   **没有 `func`** → 想包装工具**不能用 `tool._run`**（对 32 个 MCP 工具都会 raise）；
   FileManagementToolkit 的 7 个工具则**只有同步 `_run`**。两条路径都要处理。
-- **全新 clone 下 `pytest` 会失败**：`tests/test_config.py:40-41` 断言 `CHECKPOINT_DIR` / `CHROMA_DIR` 存在，
-  但 `config.py` 不创建目录（本机通过只是因为有残留）→ 已在改造清单里修。
-- **`git log` 查不到历史**：`master` 是**单提交重建**的基线；完整历史在 `refs/remotes/raw-origin/*`
-  （旧仓库 master / phase1..phase5）→ 考古要用 **`git log --all -S '...'`**。
-- **容器启动方式不一样**（实测）：`agent-mysql` / `my-nginx` 是 **WSL 里的 compose**；
-  `searxng` / `redis-stack-server` 是 **`docker run`**（只能 `docker start`）。
-  四个的 restart 策略都是 `no` → Docker Desktop 重启后**不会自动起**。
-- **`my-nginx` 在 WSL compose 里的服务名是 `lima`**（不是 `nginx`）：不带服务名的
-  `docker compose up -d` 正常；带服务名的子命令要用 `lima`。
-- **Edge 调试端口**用 9333（9222 曾被 Windows 端口排除范围占用）。
+- **运行时目录**（阶段 1 已修）：`config.py` 现在会创建 `RUNTIME_DIR / WORKSPACE_DIR /
+  CHECKPOINT_DIR / CHROMA_DIR / RUNS_DIR`。此前全新 clone 下 `tests/test_config.py`
+  会因为目录不存在而失败（本机通过只是因为有残留）。
+- **改造前的历史不在 `master` 上**：`master` 的**地基** `8d0ab78`（"init: 导入改造前基线"）是**单提交重建**的，
+  它下面没有历史；改造期的提交都直接追加在它上面（`git log --oneline` 看得到）。
+  要找**改造前**的东西必须去 `refs/remotes/raw-origin/*`（旧仓库 master / phase1..phase5）→ 考古要用 **`git log --all -S '...'`**。
+- **依赖服务怎么起**（阶段 2 统一后，实测）：
+  - `agent-mysql` / `searxng` / `redis-stack-server` 由**仓库根的 `docker-compose.yml`** 管理
+    （`name: code-agent-deps`）；**`my-nginx` 仍归 WSL 里的 `~/nginx/docker-compose.yaml`**
+    （它的挂载源是 WSL 路径，搬到 Windows 侧 compose 会**静默挂空目录**）；
+  - 一键脚本：`./scripts/start-deps.ps1` / `./scripts/stop-deps.ps1`；
+  - **4 个容器都是 `restart: unless-stopped`** → 打开 Docker Desktop（= 启动引擎）会自动拉起；
+    被手动 stop 过的除外，那时用一键脚本；
+  - MySQL 数据在**命名卷** `mysql-data`；首次初始化会执行 `scripts/mysql-init/*.sql`
+    （里面建只读账号 `agent_readonly`）。
+- **搜索已不依赖浏览器**（阶段 2）：`browser_tools.py` 只调 SearXNG 的 JSON API，
+  文件名是历史遗留；**Selenium / Edge / msedgedriver / 调试端口都不再需要**。
 
 ### evals 相关
 
-- **重跑前必须清残留**：`runtime/checkpoint/`、`runtime/chroma_db/`、`data/knowledge/` **根目录**
+- **重跑前必须清残留**：`runtime/checkpoints.db`（阶段 1 起的 SQLite 记忆）、`runtime/chroma_db/`、`data/knowledge/` **根目录**
   （Agent 自学习写入的）、MySQL `agent_test` 表、WSL uploads（保留 `.gitkeep`）；
   知识库预置是 **35 条（7 个文件 × 每文件 5 条）**，`real_knowledge/` 4 个 + `distractors/` 3 个。
 - 单题重跑用**新 run-id**（避免覆盖），并先删对应的 checkpoint。
 - `runtime/runs/` 被 gitignore；**正式结果才复制到 `docs/evidence/`** 纳入版本控制。
+  ⚠️ 2026-09 用户把**改造前**那批旧存档（旧模型 + 软口径）**移出了仓库**，`docs/evidence/` 现在是空的；
+  备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`（13 个文件），
+  git 历史里也有（如 `git show 1ea2687^:docs/evidence/baseline-final.json` —— `1ea2687` 是**删除**这批存档的提交，
+  所以要用它的父提交 `^`；拿删除之后的提交去 show 只会得到 `path ... does not exist in ...`）。
+  阶段 6 会产出新口径的结果。
 - 计分口径偏软：`pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分。
 - **MCP 工具没有"需要关闭的 client"**（实测，langchain-mcp-adapters 0.1.1）：
   `MultiServerMCPClient.get_tools()` 的 docstring 明写
@@ -117,8 +149,10 @@ tests/                           80 个测试（config / prompts / mysql_safe_id
 
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 → **做全仓扫描类操作必须排除**（否则扫到生成物）。
 - `docs/` 结构（2026-08-31 整理后）：`handover.md` + `evidence/`（存档，只追加）+ `archive/`（历史素材）。
+  当前 `evidence/` 与 `archive/` **内容已被移出仓库**（用户决定，备份在 `backup/1new/backup/old-data/docs/`），
+  只剩空目录；阶段 6 重做评估后会重新往里写结果。
 
-## 当前进度（2026-08-31 更新）
+## 当前进度（2026-09-19 更新）
 
 **已经走完的**：
 ```
@@ -133,13 +167,15 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 **已知遗留**：
 
-1. **E013 偶发 timeout** —— 根因（`retry_count` 不自增 → 无限打回）**已在阶段 1 修复并验证**：
-   把自增去掉后测试立刻以 `GraphRecursionError: Recursion limit of 100` 失败。
-   evals 重做后该存档作废。
-2. **评估体系待重做**（口径偏软：14/30 题没有产物级断言）→ 阶段 6。
-3. **前端构建产物**：`app/web/frontend/dist/` 必须入库；⚠️ 根 `.gitignore` 曾有裸 `dist/`
+1. **评估体系待重做**（口径偏软：14/30 题没有产物级断言）→ 阶段 6。
+2. **前端构建产物**：`app/web/frontend/dist/` 必须入库；⚠️ 根 `.gitignore` 曾有裸 `dist/`
    会把新构建的哈希资源一并吞掉（已改为 `/dist/`）。改前端后必须 `npm run build` 并提交
    **新增与删除**的资源文件。
+3. **Web 端节点级实时推送**（现在只在任务完成后一次性推送）→ 阶段 5 的 T5.6（用现有 WS，不引 SSE）。
+
+> ✅ **阶段 1 已修完的**（别再当成遗留）：E013 无限打回（`retry_count` 不自增）、
+> checkpointer 未接线、`file_saver.py` 待删、全新 clone 下运行时目录缺失。
+> 细节与正反两向证据见 `program-fix第八版/讨论结论汇总.md` 的「验证记录（阶段 1）」。
 
 ## 数字来源速查
 
@@ -149,5 +185,5 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
 | 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |
-| 评估指标 | 见 README 表格 | `docs/evidence/*.json` 的 `overall` / `pass_rate` |
+| 评估指标 | 见 README 表格（均为**改造前旧口径**） | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 1ea2687^:docs/evidence/<file>` |
 | 跟踪文件数 | `git ls-files` 计数 | `git ls-files \| Measure-Object` |

@@ -12,15 +12,21 @@
 main.py (CLI REPL)                app/web/server.py (FastAPI + Vue3 Web UI, 端口 8000)
        └────────────┬──────────────────────┘
                     ▼
+   执行模式（`--mode`，默认 auto）：
+     single → 只跑 Executor（快，适合查询类）
+     multi  → 恒定走下面完整三阶段
+     auto   → 先由 route_node 判复杂度，simple 走 single、complex 走 multi
+                    ▼
    多 Agent 协作图（app/code_agent/agent/multi_agent.py, LangGraph StateGraph）
    Planner（纯 LLM 规划，输出结构化计划 JSON）
         ↓
    Executor（create_react_agent，全量工具，按计划执行）
         ↓
    Verifier（只读白名单 12 个工具，对照「需求 + 计划 + 执行轨迹」验收）
-        ↓ FAIL → 带原因打回 Executor（⚠️ 打回上限当前未生效，见下）
+        ↓ FAIL → 带原因打回 Executor（上限 `MAX_RETRY = 2` 次；再不过就以最后一次结果收尾）
 
    ├── LLM：DeepSeek（OpenAI 兼容接口；Web UI 内可热切换模型 / 地址 / Key）
+   │        模型**按角色配**（Planner / Executor / Verifier / Router），注册表 `config/models.json`
    ├── Memory：SqliteSaver（`runtime/checkpoints.db`，按 thread_id 恢复跨轮对话，
    │            进程重启后仍记得；Web UI 的"历史会话"就是读它）
    └── Tools：6 个自建 MCP Server（stdio 子进程）+ FileManagementToolkit
@@ -41,7 +47,7 @@ main.py (CLI REPL)                app/web/server.py (FastAPI + Vue3 Web UI, 端�
 | Python | 3.13+ |
 | 包管理 | [uv](https://docs.astral.sh/uv/) |
 | 操作系统 | Windows（PowerShell 工具与 WSL2 工具依赖宿主环境） |
-| 可选 | WSL2 Ubuntu（虚拟机工具）、Docker（MySQL / SearXNG） |
+| 可选 | WSL2 Ubuntu（虚拟机工具）、Docker（MySQL / SearXNG / Redis） |
 
 ### 安装
 
@@ -77,8 +83,9 @@ MODEL_API_KEY=你的API密钥
 ### 运行（命令行）
 
 ```bash
-uv run python main.py                        # 默认启动
+uv run python main.py                        # 默认启动（执行模式 auto）
 uv run python main.py --thread-id my-session # 指定会话 ID
+uv run python main.py --mode single          # 执行模式：auto（默认）/ single / multi
 uv run python main.py --debug                # 调试模式（详细日志）
 ```
 
@@ -95,8 +102,9 @@ uv run uvicorn app.web.server:app --port 8000
 ```
 
 - 聊天界面：任务完成后一次性推送结构化结果——Planner 计划、工具调用轨迹（可折叠）、
-  Verifier 验收徽章、token / 耗时统计
-- 模型设置：界面内热切换模型 / API 地址 / Key（设置只存本机 `runtime/web-settings.json`，不进仓库）
+  Verifier 验收徽章、token / 耗时统计；**顶部有执行模式下拉框**（auto / single / multi）
+- 模型设置：界面内热切换模型 / API 地址 / Key，**四个角色（Planner / Executor / Verifier / Router）
+  分别选模型**（数据源是 `config/models.json`）；设置只存本机 `runtime/web-settings.json`，不进仓库
 - 会话列表：读 `runtime/checkpoints.db`；**点击任一会话即可切换并回放历史**，之后的对话在原会话上续聊
 
 > 前端（Vue 3 + Vite）源码在 `app/web/frontend/`，构建产物 `dist/` 已入库——不装 Node 也能直接运行；
@@ -146,7 +154,8 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 | 🔍 代码分析 | AST 解析、diff 生成、项目结构扫描、文件片段读取 |
 
 > 📌 **关于浏览器**：搜索已改为直接调 SearXNG 的 JSON API，**移除了 Selenium + Edge 那一整套**
-> （调试端口、msedgedriver 版本匹配、滚动懒加载、HTML 清洗），代码从 228 行降到 69 行，环境要求也更简单。
+> （调试端口、msedgedriver 版本匹配、滚动懒加载、HTML 清洗），`browser_tools.py` 从 **228 行降到 70 行**，
+> 环境要求也更简单。
 > 若将来要做「**操作真实网页**」（Computer Use / Browser Agent：点击、填表、截图），
 > 应另建 Playwright 工具 —— 那与「搜索取数」是两件事。
 
@@ -156,20 +165,25 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 `tool_selection`（工具选择）/ `task_completion`（任务完成）/ `multi_step`（多步推理）/
 `cross_tool`（跨工具协作）/ `error_recovery`（错误恢复）/ `safety`（安全）。
 
-| 阶段 | 存档文件 | overall | pass_rate | total_tokens | 平均延迟 |
-|---|---|---|---|---|---|
-| 改造前基线（单 Agent） | `docs/evidence/baseline-final.json` | **0.983** | 1.0 | 978,865 | 34.0s |
-| optimized 单 Agent | `docs/evidence/evals-optimized-final.json` | **1.0** | 1.0 | 896,475 | 30.3s |
-| 多 Agent（当前架构） | `docs/evidence/evals-multiagent-merged.json` | **0.967** | 0.967 | 1,257,397 | 53.4s |
-| RAG 基准（独立基准） | `docs/evidence/rag-bench-baseline.json` | top1 **0.6** / top3 1.0 / recall **0.4** | — | — | 13.4ms |
+> ⚠️ **下表是「改造前」的存档，文件现在已不在仓库里** —— `docs/evidence/` 的内容已移出仓库
+> （备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`，也能用
+> `git show 1ea2687^:docs/evidence/<文件名>` 从历史取回）。
+> 留着它们是为了说明"改造前长什么样"；**当前架构的成绩，要等评估体系重做（阶段 6）之后才有效**。
 
-**⚠️ 读这些数字前必看的口径说明**（详见 `docs/evidence/README.md`）：
+| 阶段 | 存档文件（已移出仓库） | overall | pass_rate | total_tokens | 平均延迟 |
+|---|---|---|---|---|---|
+| 改造前基线（单 Agent） | `baseline-final.json` | **0.983** | 1.0 | 978,865 | 34.0s |
+| optimized 单 Agent | `evals-optimized-final.json` | **1.0** | 1.0 | 896,475 | 30.3s |
+| 多 Agent（改造前那版） | `evals-multiagent-merged.json` | **0.967** | 0.967 | 1,257,397 | 53.4s |
+| RAG 基准（独立基准） | `rag-bench-baseline.json` | top1 **0.6** / top3 1.0 / recall **0.4** | — | — | 13.4ms |
+
+**⚠️ 读这些数字前必看的口径说明**（细节见存档里的 `README.md` 与 `evals-baseline-report.md`）：
 
 1. 全部基于 `deepseek-v4-flash` 跑出，**换模型后不可比**；
 2. 当时的评分器里**弱断言占比不小**（实测 **14/30 题没有任何"产物级"断言**），
-   所以这些分数应理解为「**回归通过率**」，不是「通用任务成功率」；
+   所以这些分数应理解为「**回归通过率**」，不是「**通用任务成功率**」；
 3. `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 的**部分分** → 偏乐观；
-4. 项目正在做一轮系统性改造（见 `docs/handover.md`），**完成后会重做评估体系并归档新结果**。
+4. 项目正在做一轮系统性改造（见 `docs/handover.md`），**阶段 6 会重做评分器与题集，并归档新口径的结果**。
 
 ```bash
 # 跑全量（30 题）
@@ -178,12 +192,16 @@ uv run python evals/run_e2e.py --all --run-id baseline
 # 跑单题（用新 run-id，避免覆盖）
 uv run python evals/run_e2e.py --task E001 --run-id single-test
 
+# 指定执行模式（默认 auto）与临时角色模型
+uv run python evals/run_e2e.py --all --mode multi --role-models "planner=ds-v41-flash"
+
 # RAG 基准
 uv run python evals/rag_bench.py
 ```
 
-特性：每题含**明文对话存档**（失败可定位到具体一步）、token 用量统计、断点续跑（按 run-id）。
-结果先写 `runtime/runs/`（gitignore），正式结果复制到 `docs/evidence/` 纳入版本控制。
+特性：每题含**明文对话存档**（失败可定位到具体一步）、token 用量统计、按 run-id 断点续跑。
+结果先写 `runtime/runs/`（gitignore）；正式结果才复制到 `docs/evidence/` 纳入版本控制
+（该目录当前为空，阶段 6 重做评估后会重新写入）。
 
 ## 技术栈
 
@@ -201,34 +219,35 @@ uv run python evals/rag_bench.py
 ## 项目结构
 
 ```
-├── main.py                        # CLI 入口（argparse）
+├── main.py                        # CLI 入口（argparse：--thread-id / --new-session / --mode / --debug）
 ├── app/
 │   ├── code_agent/
 │   │   ├── agent/
-│   │   │   ├── multi_agent.py     # ★ Planner → Executor → Verifier 状态图
+│   │   │   ├── multi_agent.py     # ★ 状态图（route_node / planner / executor / verifier + 条件边）
 │   │   │   ├── code_agent.py      # REPL 循环 + evals 非交互接口 run_single_task
-│   │   │   └── prompts.py         # System / Planner / Verifier 提示词
-│   │   ├── model/llm.py           # ChatOpenAI 工厂（build_llm / get_llm / set_llm）
-│   │   ├── config.py              # 所有配置（从 .env 读）
+│   │   │   └── prompts.py         # System / Planner / Verifier / Executor（计划版）提示词
+│   │   ├── model/llm.py           # LLMRegistry：get_llm(role) / chain / invoke_with_fallback
+│   │   ├── config.py              # 所有配置（从 .env 读）+ setup_logging（stderr）
 │   │   ├── mcp_servers/           # 6 个 MCP Server（powershell / 搜索 / mysql / vm / code_tools）
 │   │   │                          #   └ browser_tools.py = 搜索（JSON API）；文件名是历史遗留
 │   │   ├── rag/rag.py             # RAG MCP Server（ChromaDB）
 │   │   ├── tools/
-│   │   │   ├── file_tools.py      # FileManagementToolkit（限定在 workspace）
+│   │   │   └── file_tools.py      # FileManagementToolkit（限定在 workspace）
 │   │   └── utils/mcp.py           # MCP 工具加载工厂
 │   └── web/
 │       ├── server.py              # FastAPI（WS + REST + 静态托管）
 │       └── frontend/              # Vue3 + Vite（dist 已入库）
+├── config/models.json             # 模型注册表 + 角色分配 + 降级链（进版本控制）
 ├── data/knowledge/                # 知识库源文件：35 条（7 个文件 × 每文件 5 条）
-├── runtime/                       # ⚠️ gitignore：checkpoint / chroma_db / workspace / runs
+├── scripts/                       # start-deps.ps1 / stop-deps.ps1 / mysql-init/*.sql
+├── runtime/                       # ⚠️ gitignore：checkpoints.db + checkpoint / chroma_db / workspace / runs
 ├── evals/                         # 评估：任务的题集 / 评分器 / runner / RAG 基准
-├── tests/                         # 36 个测试（单元 + 工具级）
+├── tests/                         # 80 个测试（单元 + 工具级）
 ├── docs/
-│   ├── evidence/                  # 评估结果存档（只追加，含 README 说明口径）
-│   ├── archive/                   # 历史归档（interview 素材 / optimized 计划 / zcode 计划）
-│   └── handover.md                # 交接文档
+│   └── handover.md                # 交接文档（evidence/ 与 archive/ 的内容已移出仓库）
 ├── AGENTS.md                      # AI 助手约定与已知坑
-└── .gitee.yml                     # CI（跑 pytest）
+├── docker-compose.yml             # mysql / searxng / redis 三个依赖服务（nginx 由 WSL 侧 compose 管）
+└── .gitee.yml                     # CI（ruff check → ruff format --check → pytest）
 ```
 
 ## 数量与来源对照（每个数字都能复核）
@@ -240,7 +259,7 @@ uv run python evals/rag_bench.py
 | 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | 测试覆盖率 | **66%**（819 语句 / 278 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`） |
-| 评估指标 | 见上表 | `docs/evidence/*.json` 的 `overall` / `pass_rate` 字段 |
+| 评估指标 | 见上表（均为**改造前旧口径**） | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 
 ## License
 
