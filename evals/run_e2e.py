@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.agent.code_agent import run_single_task
-from app.code_agent.config import WORKSPACE_DIR
+from app.code_agent.config import MODEL_NAME, WORKSPACE_DIR
 from evals.tasks import TASKS, get_tasks
 from evals.verifiers import EvalContext, VerifierResult
 
@@ -255,7 +255,7 @@ def build_meta(run_id: str, results: list[dict]) -> dict:
         "run_id": run_id,
         "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "git_commit": get_git_commit(),
-        "model": "deepseek-v4-flash",
+        "model": MODEL_NAME,          # 不再硬编码：换模型后存档里的 model 字段会跟着变
         "evals_version": "v2.0",
         "total_tasks": len(results),
         "overall": {
