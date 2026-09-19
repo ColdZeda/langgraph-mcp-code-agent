@@ -221,10 +221,11 @@ uv run python evals/rag_bench.py
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 59 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 60 | `uv run python -m pytest tests/ -q` |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
+| 测试覆盖率 | **61%**（662 语句 / 255 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`） |
 | 评估指标 | 见上表 | `docs/evidence/*.json` 的 `overall` / `pass_rate` 字段 |
 
 ## License
