@@ -103,6 +103,16 @@ export async function loadSession(threadId) {
   } catch { /* 服务未就绪时静默 */ }
 }
 
+/** 取模型注册表（config/models.json 的内容），给设置面板的四个角色下拉框当数据源。 */
+export async function loadModels() {
+  try {
+    const res = await fetch('/api/models')
+    return await res.json()
+  } catch {
+    return { models: [], roles: {} }
+  }
+}
+
 export async function loadSettings() {
   const res = await fetch('/api/settings')
   return res.json()

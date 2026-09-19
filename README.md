@@ -59,7 +59,20 @@ uv sync
 MODEL_API_KEY=你的API密钥
 # 可选: MODEL_NAME=deepseek-v4-flash
 # 可选: MODEL_BASE_URL=https://api.deepseek.com
+# 可选: CODE_AGENT_LLM_TIMEOUT=60      # 单次调用超时（秒）
 ```
+
+**模型是按角色配的**（Planner / Executor / Verifier / Router），配置在 **`config/models.json`**（进版本控制）：
+
+```jsonc
+"roles":    { "planner": "ds-v4-flash", "executor": "ds-v4-flash",
+              "verifier": "ds-v4-flash", "router": "ds-v4-flash" },
+"fallback": { "executor": [] }   // 填备用模型即启用"主力报错/超时自动降级"
+```
+
+- 默认四个角色同一个模型（行为可预期）；可在 **Web UI 的模型设置面板**里分别选，改完热生效；
+- 跑评估时可临时覆盖而不改配置：`--role-models "planner=x,executor=y"`；
+- 每次运行的结果 JSON 会记录 `role_models`（哪个角色用了哪个模型）。
 
 ### 运行（命令行）
 
@@ -176,7 +189,8 @@ uv run python evals/rag_bench.py
 
 - **Agent 框架**：LangGraph（StateGraph + `create_react_agent`）
 - **MCP 适配**：langchain-mcp-adapters + FastMCP（stdio 子进程）
-- **LLM**：ChatOpenAI → DeepSeek（可切换任意 OpenAI 兼容接口）
+- **LLM**：ChatOpenAI → DeepSeek（可切换任意 OpenAI 兼容接口）；
+  **按角色可配**（`config/models.json`）+ 降级链 + 超时
 - **向量数据库**：ChromaDB（本地持久化）
 - **Embedding**：sentence-transformers（all-MiniLM-L6-v2，本地运行）
 - **搜索**：SearXNG（JSON API，经 httpx 调用，不经过浏览器）
@@ -221,7 +235,7 @@ uv run python evals/rag_bench.py
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 60 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 80 | `uv run python -m pytest tests/ -q` |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |

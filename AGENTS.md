@@ -35,7 +35,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 指定会话 | `uv run python main.py --thread-id x` |
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（60 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（80 个） |
 | 全量评估（30 题） | `uv run python evals/run_e2e.py --all --run-id <name>` |
 | 单题评估 | `uv run python evals/run_e2e.py --task E011 --run-id <name>` |
 | RAG 基准 | `uv run python evals/rag_bench.py` |
@@ -61,8 +61,9 @@ app/code_agent/
 └── utils/mcp.py                 load_mcp_tools（工厂；client 无需关闭，见「已知坑」）
 app/web/server.py                FastAPI：WS /ws/chat + REST（sessions/settings）+ 静态托管 dist
 evals/                           tasks.py(30 题) / verifiers.py(评分器) / run_e2e.py(脚本) / rag_bench.py / compare.py
-tests/                           60 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
-                                 multi_agent / checkpoint / mcp_tool_lifecycle / tool_level）
+tests/                           80 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+                                 multi_agent / checkpoint / route / llm_registry /
+                                 mcp_tool_lifecycle / tool_level）
 ```
 
 ## 已知坑（务必先看）
@@ -76,6 +77,8 @@ tests/                           60 个测试（config / prompts / mysql_safe_id
 | CLI 会话 ID | 默认取 `.env` 的 `CODE_AGENT_THREAD_ID`（默认 `default`）→ 关掉再打开会续上次对话；`--new-session` 开新会话 |
 | **Verifier 打回** | ✅ 已修：`retry_count` 在 `executor_node` 里「是重跑才 +1」→ 最多打回 `MAX_RETRY`(2) 次，Executor 共跑 `MAX_RETRY+1` 次 |
 | `file_saver.py` | ✅ **已删除**（连同 `tests/test_file_saver.py`）；它曾是全仓唯一非法 UTF-8 的 `.py` |
+| **执行模式** | `single` / `multi` / `auto`：`auto` 先由 `route_node` 判复杂度（写进 `state["route"]`），simple 只跑 Executor、complex 走完整三阶段；CLI `--mode`、evals `--mode`、Web UI 下拉框都能选 |
+| **模型按角色配** | 注册表在 `config/models.json`（roles + fallback）；`get_llm(role)`，默认 executor；`--role-models "executor=x"` 可临时覆盖；结果 JSON 记录 `role_models`。⚠️ **测试里必须同时 patch `ma.get_llm` 与 `ma.registry`**，否则 planner 会真的调模型（实测让 pytest 从 8s 变 104s） |
 
 ### 环境与工具链
 
@@ -124,8 +127,9 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 **当前阶段**：**改造期**。方案文档在**仓库外**：`E:\agentstart\上班\work-content\program-fix第八版\`
 （**第八版 = 第七版 + 执行期实测订正**；第七版是冻结原档，第六版是原始底稿）。
-阶段 0（文档清洗与仓库整理）已完成；阶段 1（修 P0 缺陷）进行中；
-后续阶段按顺序执行，**每阶段做完停下汇报 + 提交推送**。
+阶段 0（文档清洗与仓库整理）、阶段 1（修 P0 缺陷）、阶段 2（降复杂度与容器化）、
+阶段 3（执行模式与模型配置）已完成；后续阶段按顺序执行，
+**每阶段做完停下汇报 + 提交推送**。
 
 **已知遗留**：
 
@@ -141,7 +145,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 60 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 80 | `uv run python -m pytest tests/ -q` |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
 | 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |
