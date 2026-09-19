@@ -25,7 +25,7 @@ main.py (CLI REPL)                app/web/server.py (FastAPI + Vue3 Web UI, 端�
    │            进程重启后仍记得；Web UI 的"历史会话"就是读它）
    └── Tools：6 个自建 MCP Server（stdio 子进程）+ FileManagementToolkit
        ├── powershell_tools.py   Windows 命令执行（危险命令黑名单）
-       ├── browser_tools.py      Selenium Edge + SearXNG 搜索
+       ├── browser_tools.py      搜索（SearXNG JSON API；文件名是历史遗留）
        ├── mysql_tools.py        MySQL 增删改查（参数化 + 标识符转义）
        ├── vm.py                 WSL2 桥接（危险命令拦截 + 超时）
        ├── code_tools.py         AST 解析 / diff / 项目结构扫描 / 文件片段读取
@@ -40,7 +40,7 @@ main.py (CLI REPL)                app/web/server.py (FastAPI + Vue3 Web UI, 端�
 |---|---|
 | Python | 3.13+ |
 | 包管理 | [uv](https://docs.astral.sh/uv/) |
-| 操作系统 | Windows（PowerShell 工具、WSL2 工具、Edge 依赖宿主环境） |
+| 操作系统 | Windows（PowerShell 工具与 WSL2 工具依赖宿主环境） |
 | 可选 | WSL2 Ubuntu（虚拟机工具）、Docker（MySQL / SearXNG） |
 
 ### 安装
@@ -126,11 +126,16 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 | 工具 | 能力 |
 |---|---|
 | 🖥️ PowerShell | 执行 Windows 命令、进程管理（危险命令黑名单拦截） |
-| 🌐 浏览器 | Selenium + SearXNG 网页搜索（实时信息） |
+| 🌐 搜索 | SearXNG 搜索（JSON API，**无需浏览器**；返回标题 / URL / 摘要 / 来源引擎 / 结果总数） |
 | 🗄️ MySQL | 建库建表、CRUD、查询（参数化 + `_safe_ident` 标识符转义） |
 | 🐧 WSL2 VM | Linux 命令执行、文件部署（危险命令拦截 + 超时） |
 | 📚 RAG | 知识库 CRUD 闭环（ChromaDB 向量检索 + 本地 embedding） |
 | 🔍 代码分析 | AST 解析、diff 生成、项目结构扫描、文件片段读取 |
+
+> 📌 **关于浏览器**：搜索已改为直接调 SearXNG 的 JSON API，**移除了 Selenium + Edge 那一整套**
+> （调试端口、msedgedriver 版本匹配、滚动懒加载、HTML 清洗），代码从 228 行降到 69 行，环境要求也更简单。
+> 若将来要做「**操作真实网页**」（Computer Use / Browser Agent：点击、填表、截图），
+> 应另建 Playwright 工具 —— 那与「搜索取数」是两件事。
 
 ## 评估体系
 
@@ -174,7 +179,7 @@ uv run python evals/rag_bench.py
 - **LLM**：ChatOpenAI → DeepSeek（可切换任意 OpenAI 兼容接口）
 - **向量数据库**：ChromaDB（本地持久化）
 - **Embedding**：sentence-transformers（all-MiniLM-L6-v2，本地运行）
-- **浏览器**：Selenium + BeautifulSoup4 + SearXNG
+- **搜索**：SearXNG（JSON API，经 httpx 调用，不经过浏览器）
 - **数据库**：PyMySQL
 - **Web**：FastAPI + WebSocket；前端 Vue 3 + Vite
 - **包管理**：uv（Python 3.13）
@@ -191,7 +196,8 @@ uv run python evals/rag_bench.py
 │   │   │   └── prompts.py         # System / Planner / Verifier 提示词
 │   │   ├── model/llm.py           # ChatOpenAI 工厂（build_llm / get_llm / set_llm）
 │   │   ├── config.py              # 所有配置（从 .env 读）
-│   │   ├── mcp_servers/           # 6 个 MCP Server（powershell / browser / mysql / vm / code_tools）
+│   │   ├── mcp_servers/           # 6 个 MCP Server（powershell / 搜索 / mysql / vm / code_tools）
+│   │   │                          #   └ browser_tools.py = 搜索（JSON API）；文件名是历史遗留
 │   │   ├── rag/rag.py             # RAG MCP Server（ChromaDB）
 │   │   ├── tools/
 │   │   │   ├── file_tools.py      # FileManagementToolkit（限定在 workspace）

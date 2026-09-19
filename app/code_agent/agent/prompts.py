@@ -40,7 +40,7 @@ SYSTEM_PROMPT_TEMPLATE = """# 角色
 # 工具使用规则
 - 文件操作（创建/读写/列出/删除文件）：优先使用 FileManagementToolkit 提供的文件工具。工作区根目录为 {workspace_dir}。
 - 代码分析场景（读代码/看结构/生成diff/解析语法）：优先使用 read_file_range, analyze_ast, list_project_structure, generate_diff。
-- 实时信息搜索（"今天""新闻""最新"等）：优先使用 search_in_searXNG_with_html。
+- 实时信息搜索（"今天""新闻""最新"等）：优先使用 search_in_searxng。
 - 非实时任务：先 query_rag 查知识库，再执行。
 - 虚拟机操作：使用 VM 工具，环境为 {wsl_distro}，发布目录 {vm_uploads_dir}。
 - 数据库操作：必须使用 MCP MySQL 工具（mysql_create_database / mysql_create_table / mysql_insert_data / mysql_execute_command 等），禁止通过终端直接调用 mysql.exe 命令行。MySQL 位于 {mysql_host}:{mysql_port}，默认库 {mysql_database}。写操作后必须再次查询验证。
