@@ -17,6 +17,9 @@ RUNTIME_DIR = PROJECT_ROOT / "runtime"
 KNOWLEDGE_DIR = Path(os.getenv("CODE_AGENT_KNOWLEDGE_DIR", DATA_DIR / "knowledge"))
 WORKSPACE_DIR = Path(os.getenv("CODE_AGENT_WORKSPACE_DIR", RUNTIME_DIR / "workspace"))
 CHECKPOINT_DIR = Path(os.getenv("CODE_AGENT_CHECKPOINT_DIR", RUNTIME_DIR / "checkpoint"))
+# 阶段 1 起：跨轮记忆改用 SQLite（langgraph 的 AsyncSqliteSaver，按 thread_id 恢复）。
+# 旧的 CHECKPOINT_DIR（JSON 目录）已废弃 —— 保留常量只为兼容与清理。
+CHECKPOINT_DB = Path(os.getenv("CODE_AGENT_CHECKPOINT_DB", RUNTIME_DIR / "checkpoints.db"))
 CHROMA_DIR = Path(os.getenv("CODE_AGENT_CHROMA_DIR", RUNTIME_DIR / "chroma_db"))
 RUNS_DIR = Path(os.getenv("CODE_AGENT_RUNS_DIR", RUNTIME_DIR / "runs"))
 

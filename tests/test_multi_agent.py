@@ -2,10 +2,15 @@
 
 覆盖 T1.1 的修复：`retry_count` 必须真正自增，Verifier 反复判 FAIL 时图要在
 MAX_RETRY 次打回后正常结束（而不是无限打回、直到撞 RecursionError / 超时）。
+
+⚠️ T1.2 之后记忆是真的持久化的（checkpointer 按 thread_id 落 SQLite）→
+测试必须**隔离**：checkpoint DB 指向临时文件 + 每个用例用独立 thread_id，
+否则用例之间会互相读到对方的对话。
 """
 
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -56,13 +61,24 @@ def fake_planner(monkeypatch):
     return llm
 
 
-async def test_verifier_fail_retries_then_stops(fake_planner):
+@pytest.fixture
+def thread_id(monkeypatch, tmp_path):
+    """隔离的 checkpoint DB + 独立 thread_id。"""
+    monkeypatch.setattr(ma, "CHECKPOINT_DB", tmp_path / "checkpoints.db")
+    return f"test-{uuid4().hex[:8]}"
+
+
+async def test_verifier_fail_retries_then_stops(fake_planner, thread_id):
     """Verifier 恒判 FAIL 时：Executor 跑 MAX_RETRY+1 次后结束，不抛异常。"""
     executor = _FakeAgent([f"exec-{i}" for i in range(1, 6)])
     verifier = _FakeAgent([FAIL_VERDICT] * 5)
 
     result = await ma.run_multi_agent(
-        "一个必然验收失败的任务", [], executor_agent=executor, verifier_agent=verifier
+        "一个必然验收失败的任务",
+        [],
+        executor_agent=executor,
+        verifier_agent=verifier,
+        thread_id=thread_id,
     )
 
     assert executor.calls == ma.MAX_RETRY + 1, (
@@ -73,13 +89,13 @@ async def test_verifier_fail_retries_then_stops(fake_planner):
     assert "FAIL" in result["verdict"].upper()
 
 
-async def test_verifier_fail_reason_reaches_executor(fake_planner):
+async def test_verifier_fail_reason_reaches_executor(fake_planner, thread_id):
     """第 2 轮起，Executor 收到的 prompt 里必须带上 Verifier 的 FAIL 原因。"""
     executor = _FakeAgent(["exec-1", "exec-2", "exec-3"])
     verifier = _FakeAgent([FAIL_VERDICT] * 3)
 
     await ma.run_multi_agent(
-        "任务", [], executor_agent=executor, verifier_agent=verifier
+        "任务", [], executor_agent=executor, verifier_agent=verifier, thread_id=thread_id
     )
 
     assert executor.calls >= 2, "至少要有一次重跑，才能验证失败原因是否回灌"
@@ -89,13 +105,13 @@ async def test_verifier_fail_reason_reaches_executor(fake_planner):
     assert "REASON-XYZ" in second_prompt, "重跑时必须把 FAIL 原因回灌给 Executor"
 
 
-async def test_verifier_pass_stops_immediately(fake_planner):
+async def test_verifier_pass_stops_immediately(fake_planner, thread_id):
     """验收通过 → 只跑一次 Executor，retry_count 保持 0。"""
     executor = _FakeAgent(["exec-1", "exec-2"])
     verifier = _FakeAgent([PASS_VERDICT, PASS_VERDICT])
 
     result = await ma.run_multi_agent(
-        "任务", [], executor_agent=executor, verifier_agent=verifier
+        "任务", [], executor_agent=executor, verifier_agent=verifier, thread_id=thread_id
     )
 
     assert executor.calls == 1

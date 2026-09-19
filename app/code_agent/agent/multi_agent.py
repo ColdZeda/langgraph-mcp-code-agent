@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 
 from app.code_agent.agent.prompts import PROMPT_CONTEXT, SYSTEM_PROMPT_TEMPLATE
+from app.code_agent.config import CHECKPOINT_DB
 from app.code_agent.model.llm import get_llm
 
 # ═══════════════════════════════════════════════════════════════════
@@ -54,7 +57,11 @@ class AgentState(TypedDict):
     executor_messages: list           # Executor 消息流（组装对话存档用）
     verifier_messages: list           # Verifier 消息流
     step_count: int                   # Executor 执行步数（近似原单 Agent 步数）
-    history: list                     # 跨轮对话历史（REPL 用，可选）
+    # ── 跨轮记忆（唯一的会话通道）──
+    # ⚠️ 必须带 `add_messages` reducer：没 reducer 的通道是"新值覆盖旧值"，
+    #    那样即使接了 checkpointer，按 thread_id 也恢复不出对话。
+    #    每轮由 run_multi_agent 在图跑完后追加一对 (任务, 最终回复)。
+    messages: Annotated[list[AnyMessage], add_messages]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -203,8 +210,9 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     tokens = 0
     messages: list = []
     step_count = 0
-    history = state.get("history") or []
-    input_messages = [*history, HumanMessage(content=user_msg)]
+    # 跨轮记忆来自 state["messages"]（checkpointer 按 thread_id 恢复，add_messages 负责累积）
+    prior_turns = list(state.get("messages") or [])
+    input_messages = [*prior_turns, HumanMessage(content=user_msg)]
     async for chunk in executor_agent.astream(
         {"messages": input_messages}, config={"recursion_limit": 100}
     ):
@@ -315,8 +323,11 @@ def build_verifier_agent(all_tools: list, verify_tool_names: set[str] | None = N
     )
 
 
-def build_graph(executor_agent: Any, verifier_agent: Any):
-    """组装 StateGraph。executor_agent / verifier_agent 为已构造的 agent 实例。"""
+def build_graph(executor_agent: Any, verifier_agent: Any, checkpointer: Any = None):
+    """组装 StateGraph。executor_agent / verifier_agent 为已构造的 agent 实例。
+
+    ⚠️ `checkpointer` 是刻意保留的接线，**不要删**（跨轮记忆靠它，曾在上一次重构中被误删）。
+    """
     graph = StateGraph(AgentState)
 
     async def _executor_wrapper(state):
@@ -337,7 +348,7 @@ def build_graph(executor_agent: Any, verifier_agent: Any):
         decide_after_verify,
         {"executor": "executor", "end": END},
     )
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -350,9 +361,12 @@ async def run_multi_agent(
     *,
     executor_agent: Any | None = None,
     verifier_agent: Any | None = None,
-    history: list | None = None,
+    thread_id: str = "default",
 ) -> dict:
     """执行单次多 Agent 任务。
+
+    跨轮记忆由 checkpointer 按 `thread_id` 持久化（SQLite），进程重启后仍在。
+    调用方**只需传增量输入**（当前任务），历史由 state["messages"] 自动恢复。
 
     返回: {plan, executor_result, executor_trace, verdict, retry_count,
            token_usage, final_response}
@@ -362,20 +376,38 @@ async def run_multi_agent(
     if verifier_agent is None:
         verifier_agent = build_verifier_agent(all_tools)
 
-    app = build_graph(executor_agent, verifier_agent)
-    state = await app.ainvoke(
-        {"user_input": user_input, "retry_count": 0, "token_usage": 0, "history": history or []},
-        config={"recursion_limit": 100},
-    )
-
-    final_response = state["executor_result"]
-    if "FAIL" in state["verdict"].upper():
-        parsed = _extract_json(state["verdict"])
-        reason = (parsed or {}).get("reason", state["verdict"])
-        final_response = (
-            f"任务执行完成，但验收未通过（已重试 {state['retry_count']} 次）：\n"
-            f"验收意见：{reason}\n\n执行结果：\n{state['executor_result']}"
+    CHECKPOINT_DB.parent.mkdir(parents=True, exist_ok=True)
+    async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_DB)) as saver:
+        app = build_graph(executor_agent, verifier_agent, checkpointer=saver)
+        config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
+        state = await app.ainvoke(
+            # 只传增量：历史在 checkpoint 里，靠 messages 的 add_messages reducer 累积
+            {"user_input": user_input, "retry_count": 0, "token_usage": 0},
+            config=config,
         )
+
+        final_response = state["executor_result"]
+        if "FAIL" in str(state.get("verdict", "")).upper():
+            parsed = _extract_json(state["verdict"])
+            reason = (parsed or {}).get("reason", state["verdict"])
+            final_response = (
+                f"任务执行完成，但验收未通过（已重试 {state['retry_count']} 次）：\n"
+                f"验收意见：{reason}\n\n执行结果：\n{state['executor_result']}"
+            )
+
+        # 把本轮 (任务, 最终回复) 写回线程记忆。
+        # ⚠️ 只在图跑完后写一次 —— 若让 executor_node 每次返回都写，
+        #    重试轮次会把中间结果也塞进记忆。
+        await app.aupdate_state(
+            config,
+            {
+                "messages": [
+                    HumanMessage(content=user_input),
+                    AIMessage(content=final_response),
+                ]
+            },
+        )
+
     return {
         "plan": state["plan"],
         "executor_result": state["executor_result"],

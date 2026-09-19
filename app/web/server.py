@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -17,10 +18,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 from app.code_agent.agent.multi_agent import build_executor_agent, build_verifier_agent, run_multi_agent
 from app.code_agent.config import (
     BROWSER_SERVER_PATH,
+    CHECKPOINT_DB,
     CHECKPOINT_DIR,
     CODE_TOOLS_SERVER_PATH,
     MYSQL_SERVER_PATH,
@@ -160,27 +163,68 @@ async def test_settings(body: dict):
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
-# ── 会话（checkpoint 目录映射）──
+# ── 会话（读 checkpointer 的 SQLite）──
+
+def _uuid6_to_unix(checkpoint_id: str) -> float | None:
+    """LangGraph 的 checkpoint_id 是 UUIDv6（时间有序）→ 转成 unix 秒，供界面排序/显示。
+
+    解析失败返回 None（界面自己兜底），绝不因为时间戳解析问题让接口报错。
+    """
+    try:
+        h = checkpoint_id.replace("-", "")
+        ts_100ns = int(h[0:12] + h[13:16], 16)        # UUIDv6：time_high(48) + time_low(12)
+        return ts_100ns / 1e7 - 12219292800           # 1582-10-15 → unix 纪元
+    except Exception:
+        return None
+
 
 @app.get("/api/sessions")
 async def list_sessions():
-    if not CHECKPOINT_DIR.exists():
+    """列出历史会话（来自 checkpoint 数据库，按最近活跃排序）。"""
+    if not CHECKPOINT_DB.exists():
         return []
-    items = []
-    for child in CHECKPOINT_DIR.iterdir():
-        if not child.is_dir():
-            continue
-        files = [f for f in child.glob("*") if f.is_file()]
-        if not files:
-            continue
-        latest = max(f.stat().st_mtime for f in files)
-        items.append({
-            "threadId": child.name,
-            "fileCount": len(files),
-            "updatedAt": latest,
-        })
-    items.sort(key=lambda x: x["updatedAt"], reverse=True)
+    try:
+        conn = sqlite3.connect(str(CHECKPOINT_DB))
+        try:
+            rows = conn.execute(
+                "SELECT thread_id, COUNT(*) AS n, MAX(checkpoint_id) AS last_id "
+                "FROM checkpoints GROUP BY thread_id"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:                        # 库还没建表/被占用 → 当作空列表
+        logger.warning(f"读取会话列表失败：{e}")
+        return []
+
+    items = [
+        {
+            "threadId": tid,
+            "checkpointCount": n,
+            "updatedAt": _uuid6_to_unix(last_id) if last_id else None,
+        }
+        for tid, n, last_id in rows
+    ]
+    items.sort(key=lambda x: (x["updatedAt"] or 0), reverse=True)
     return items
+
+
+@app.get("/api/sessions/{thread_id}/messages")
+async def get_session_messages(thread_id: str):
+    """回放某个会话的历史消息（从 checkpointer 恢复），供前端"点历史会话继续聊"。"""
+    if not CHECKPOINT_DB.exists():
+        return {"threadId": thread_id, "messages": []}
+    async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_DB)) as saver:
+        tup = await saver.aget_tuple({"configurable": {"thread_id": thread_id}})
+    if not tup:
+        return {"threadId": thread_id, "messages": []}
+
+    raw = (tup.checkpoint.get("channel_values") or {}).get("messages") or []
+    messages = []
+    for m in raw:
+        role = "user" if m.__class__.__name__ == "HumanMessage" else "assistant"
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        messages.append({"role": role, "content": content[:8000]})
+    return {"threadId": thread_id, "messages": messages}
 
 
 # ── WebSocket 聊天 ──
@@ -200,7 +244,10 @@ def _summarize_trace(trace_list: list[dict], limit: int = 30, arg_chars: int = 2
 @app.websocket("/ws/chat")
 async def ws_chat(ws: WebSocket):
     await ws.accept()
-    state = {"thread_id": str(uuid.uuid4())[:8], "history": []}
+    state = {"thread_id": str(uuid.uuid4())[:8]}
+    # 连接建立后**主动**把当前 threadId 推给前端 —— 否则界面一直显示"(连接后自动生成)"，
+    # 而后端其实已经在用这个随机 ID 了（前端之前只在收到 new_session 的回复时才拿到 ID）。
+    await ws.send_text(json.dumps({"type": "session", "threadId": state["thread_id"]}))
     logger.info(f"WS 连接建立 thread_id={state['thread_id']}")
 
     try:
@@ -217,8 +264,18 @@ async def ws_chat(ws: WebSocket):
                 await ws.send_text(json.dumps({"type": "pong"}))
                 continue
             if mtype == "new_session":
-                state = {"thread_id": str(uuid.uuid4())[:8], "history": []}
+                state = {"thread_id": str(uuid.uuid4())[:8]}
                 await ws.send_text(json.dumps({"type": "session", "threadId": state["thread_id"]}))
+                continue
+            if mtype == "load_session":
+                # 切换到一个历史会话：只更新 thread_id，历史由前端调
+                # GET /api/sessions/{id}/messages 拉取回放。
+                requested = str(msg.get("threadId") or "").strip()
+                if not requested:
+                    await ws.send_text(json.dumps({"type": "error", "message": "load_session 缺少 threadId"}))
+                    continue
+                state["thread_id"] = requested
+                await ws.send_text(json.dumps({"type": "session", "threadId": requested}))
                 continue
             if mtype != "chat":
                 await ws.send_text(json.dumps({"type": "error", "message": f"未知消息类型 {mtype}"}))
@@ -248,7 +305,7 @@ async def ws_chat(ws: WebSocket):
                         runtime.tools,
                         executor_agent=runtime.executor_agent,
                         verifier_agent=runtime.verifier_agent,
-                        history=state["history"],
+                        thread_id=state["thread_id"],
                     )
                 except Exception as e:
                     logger.exception("任务执行失败")
@@ -256,11 +313,7 @@ async def ws_chat(ws: WebSocket):
                     continue
 
                 elapsed = round(time.time() - start, 1)
-                state["history"].extend([
-                    {"role": "user", "content": user_input},
-                    {"role": "assistant", "content": result["final_response"]},
-                ])
-                state["history"] = state["history"][-10:]
+                # 跨轮记忆由 checkpointer 落库（run_multi_agent 内部完成），这里不再手写 history
 
                 await ws.send_text(json.dumps({
                     "type": "result",

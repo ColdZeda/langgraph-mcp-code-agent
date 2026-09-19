@@ -65,8 +65,7 @@ async def run_agent(thread_id: str = "default", debug: bool = False):
 
     logger.info("多 Agent（Planner→Executor→Verifier）创建完成，进入对话循环")
 
-    history: list = []  # 跨轮记忆（消息对）
-
+    # 跨轮记忆不再手写：由 checkpointer 按 thread_id 持久化（见 run_multi_agent）
     while True:
         user_input = input("用户: ")
 
@@ -82,7 +81,7 @@ async def run_agent(thread_id: str = "default", debug: bool = False):
             tools,
             executor_agent=executor_agent,
             verifier_agent=verifier_agent,
-            history=history,
+            thread_id=thread_id,
         )
 
         elapsed = time.time() - start_time
@@ -98,11 +97,6 @@ async def run_agent(thread_id: str = "default", debug: bool = False):
         print("-" * 30)
         print(result["final_response"])
         print("=" * 60)
-
-        # 更新跨轮记忆（用户输入 + 最终回复）
-        history.append(HumanMessage(content=user_input))
-        history.append(AIMessage(content=result["final_response"]))
-        history = history[-10:]  # 只保留最近 5 轮，避免上下文膨胀
 
         print()
 
@@ -166,6 +160,7 @@ async def run_single_task(
             tools,
             executor_agent=executor_agent,
             verifier_agent=verifier_agent,
+            thread_id=thread_id,
         )
     except asyncio.CancelledError:
         raise
