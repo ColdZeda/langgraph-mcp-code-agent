@@ -151,6 +151,9 @@ tests/                           154 个测试（config / prompts / mysql_safe_i
 - **对话压实 / token 预算**（`agent/context.py`）：
   历史估算超 `COMPACT_THRESHOLD=6000` token → 最老的一段压成四段式摘要（**摘要失败就原样保留**，
   省 token 不能把历史弄丢）；`NODE_TOKEN_BUDGET=30000` 剪枝、`TASK_TOKEN_BUDGET=200000` 硬终止。
+  ⚠️ 任务级上限在 **executor 的 ReAct 循环内部逐步判**（不只在节点入口判）——
+  只在入口判的话，一次"读大文件 + 反复重读"能在**单个节点调用**里烧掉十几万 token 而不触发。
+  粒度是"每步一判"，所以实际可能在"上限 + 一步的成本"处才停下（实测设为 12000 时在 26,456 停下并报告）。
 - **RAG 分块 + 精排**：collection 换名 `terminal_knowledge_v2`（**新旧粒度不能混在一个 collection**，
   否则检索更差）；id 是 `f"{source}#{块序号}"`，元数据 `{source, chunk, mtime}`，增量按 `where={"source":…}` 删旧。
   reranker 从**本地路径**加载（`CODE_AGENT_RERANKER_PATH`），**路径不存在就降级为纯向量召回，不联网**。

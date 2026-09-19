@@ -302,6 +302,8 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             NODE_TOKEN_BUDGET,
             pruned,
         )
+    budget_hit = False
+    spent_before = state.get("token_usage", 0)
     async for chunk in executor_agent.astream(
         {"messages": input_messages}, config={"recursion_limit": 100}
     ):
@@ -319,6 +321,38 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
                         )
                     for tc in getattr(msg, "tool_calls", None) or []:
                         trace.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
+        # ⚠️ 任务级预算**必须在这里也要判**：单个 executor 节点内部的 ReAct 循环
+        #    是不经过图节点边界的，只在节点入口判的话，一次"读大文件 + 反复重读"
+        #    就能在**一次**节点调用里烧掉十几万 token 而永远不触发上限（实测 127,071）。
+        if over_task_budget(spent_before + tokens, TASK_TOKEN_BUDGET):
+            budget_hit = True
+            logger.warning(
+                "任务级 token 预算击穿：本节点已用 %d（累计 %d / 上限 %d），提前终止 ReAct 循环",
+                tokens,
+                spent_before + tokens,
+                TASK_TOKEN_BUDGET,
+            )
+            break
+
+    if budget_hit:
+        return {
+            "executor_result": (
+                f"【已终止】本次任务累计消耗 {spent_before + tokens} token，"
+                f"达到上限 {TASK_TOKEN_BUDGET}（CODE_AGENT_TASK_TOKEN_BUDGET），"
+                f"在第 {step_count} 步提前停止。\n"
+                f"已执行的工具调用：{_trace_to_text(trace)}\n"
+                f"终止前拿到的最后一段结论：{last_content[:500] or '（无）'}\n"
+                "如需继续，请缩小任务范围（例如只读需要的文件片段）后重试。"
+            ),
+            "budget_exceeded": True,
+            "executor_trace": _trace_to_text(trace),
+            "executor_trace_list": trace,
+            "executor_messages": messages,
+            "step_count": step_count,
+            "token_usage": spent_before + tokens,
+            "pruned_messages": state.get("pruned_messages", 0) + pruned,
+        }
+
     return {
         "executor_result": last_content or "（Executor 未产出最终回复）",
         "executor_trace": _trace_to_text(trace),
@@ -326,7 +360,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         "executor_messages": messages,
         "step_count": step_count,
         "retry_count": state.get("retry_count", 0) + (1 if is_retry else 0),
-        "token_usage": state.get("token_usage", 0) + tokens,
+        "token_usage": spent_before + tokens,
         "pruned_messages": state.get("pruned_messages", 0) + pruned,
     }
 
