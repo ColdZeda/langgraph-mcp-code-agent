@@ -4,6 +4,7 @@ import { reactive } from 'vue'
 export const store = reactive({
   wsStatus: 'connecting', // connecting | open | closed
   threadId: '',
+  mode: 'auto', // 执行模式：auto | single | multi（由界面下拉框切换）
   messages: [], // {id, role: 'user'|'assistant', text?, result?|error?}
   sending: false,
   sessions: [],
@@ -61,7 +62,14 @@ function handleWsMessage(msg) {
 export function sendChat(message) {
   if (!message.trim() || store.wsStatus !== 'open' || store.sending) return
   store.messages.push({ id: `u_${Date.now()}`, role: 'user', text: message.trim() })
-  ws.send(JSON.stringify({ type: 'chat', message: message.trim(), threadId: store.threadId || undefined }))
+  ws.send(
+    JSON.stringify({
+      type: 'chat',
+      message: message.trim(),
+      threadId: store.threadId || undefined,
+      mode: store.mode,
+    })
+  )
 }
 
 export function newSession() {

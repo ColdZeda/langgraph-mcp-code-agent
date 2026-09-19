@@ -293,6 +293,11 @@ async def ws_chat(ws: WebSocket):
                 )
                 continue
 
+            # 执行模式：由前端下拉框随每条消息带上（白名单校验，非法值回落 auto）
+            mode = str(msg.get("mode") or "auto").strip().lower()
+            if mode not in ("auto", "single", "multi"):
+                mode = "auto"
+
             user_input = str(msg.get("message") or "").strip()
             if not user_input:
                 await ws.send_text(json.dumps({"type": "error", "message": "消息不能为空"}))
@@ -326,6 +331,7 @@ async def ws_chat(ws: WebSocket):
                         executor_agent=runtime.executor_agent,
                         verifier_agent=runtime.verifier_agent,
                         thread_id=state["thread_id"],
+                        mode=mode,
                     )
                 except Exception as e:
                     logger.exception("任务执行失败")
@@ -349,6 +355,8 @@ async def ws_chat(ws: WebSocket):
                             "tokenUsage": result.get("token_usage", 0),
                             "stepCount": result.get("step_count", 0),
                             "retryCount": result.get("retry_count", 0),
+                            "mode": result.get("mode", mode),
+                            "route": result.get("route", ""),
                             "elapsedSec": elapsed,
                         },
                         ensure_ascii=False,

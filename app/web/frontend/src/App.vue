@@ -24,6 +24,14 @@ function switchSession(threadId) {
         <span class="brand-name">Code Agent</span>
       </div>
       <button class="btn-new" @click="$refs.chat?.newSession()">＋ 新会话</button>
+      <label class="mode-row">
+        <span class="session-title">执行模式</span>
+        <select v-model="store.mode" class="mode-select" :disabled="store.sending">
+          <option value="auto">auto（按复杂度自动）</option>
+          <option value="single">single（单 Agent，快）</option>
+          <option value="multi">multi（完整三阶段）</option>
+        </select>
+      </label>
       <div class="session-title">历史会话（checkpoint）</div>
       <div class="session-list">
         <div
@@ -63,6 +71,9 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f17
 .btn-new { padding: 9px; border: 1px solid #3b82f6; background: #2563eb; color: #fff; border-radius: 8px; cursor: pointer; font-size: 13px; }
 .btn-new:hover { background: #1d4ed8; }
 .session-title { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }
+.mode-row { display: flex; flex-direction: column; gap: 4px; }
+.mode-select { padding: 6px 8px; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; font-size: 12px; }
+.mode-select:disabled { opacity: 0.6; }
 .session-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .session-item { padding: 8px 10px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
 .session-item:hover { border-color: #3b82f6; }
