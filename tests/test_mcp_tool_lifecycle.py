@@ -38,8 +38,9 @@ def test_adapter_client_cannot_be_used_as_context_manager():
 
 async def test_run_single_task_does_not_need_client_cleanup(monkeypatch):
     """`run_single_task` 不依赖任何 client 清理 API，应正常返回结果。"""
+
     async def fake_loader(*, client_id, server_path):
-        return []                     # 工具列表（0.1.x 下无需保留 client）
+        return []  # 工具列表（0.1.x 下无需保留 client）
 
     async def fake_run_multi_agent(*args, **kwargs):
         assert kwargs.get("thread_id") == "probe", "evals 路径必须把 thread_id 传下去"
@@ -63,7 +64,9 @@ async def test_run_single_task_does_not_need_client_cleanup(monkeypatch):
     monkeypatch.setattr(ca, "build_executor_agent", lambda tools: None)
     monkeypatch.setattr(ca, "build_verifier_agent", lambda tools: None)
 
-    response, trace, conversation, steps, tokens = await ca.run_single_task("任务", thread_id="probe")
+    response, trace, conversation, steps, tokens = await ca.run_single_task(
+        "任务", thread_id="probe"
+    )
 
     assert response == "已完成"
     assert not response.startswith("[ERROR]"), f"不应因清理/适配器问题失败：{response}"

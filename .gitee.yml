@@ -10,7 +10,7 @@ on:
 
 jobs:
   test:
-    name: Unit + Evals Tests
+    name: Lint + Tests
     runs-on: linux-latest
     container:
       image: python:3.13-slim
@@ -24,5 +24,11 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
       - name: Run tests
-        run: uv run python -m pytest tests/ evals/ -v --tb=short
+        run: uv run python -m pytest tests/ -v --tb=short

@@ -1,4 +1,11 @@
-from app.code_agent.config import MYSQL_DATABASE, MYSQL_HOST, MYSQL_PORT, VM_UPLOADS_DIR, WORKSPACE_DIR, WSL_DISTRO
+from app.code_agent.config import (
+    MYSQL_DATABASE,
+    MYSQL_HOST,
+    MYSQL_PORT,
+    VM_UPLOADS_DIR,
+    WORKSPACE_DIR,
+    WSL_DISTRO,
+)
 
 # --- 系统提示词 ---
 

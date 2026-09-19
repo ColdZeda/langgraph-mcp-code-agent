@@ -86,7 +86,9 @@ def setup_logging(name: str = "code_agent") -> logging.Logger:
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
+            logging.Formatter(
+                "%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S"
+            )
         )
         logger.addHandler(handler)
     logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))

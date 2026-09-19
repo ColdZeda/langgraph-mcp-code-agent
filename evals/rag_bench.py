@@ -17,8 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.mcp_servers import code_tools  # noqa: F401 确保路径
-from app.code_agent.rag.rag import query_rag_from_local, collection
-
+from app.code_agent.rag.rag import collection, query_rag_from_local
 
 # ── 测试查询集：每个问题对应真实答案的关键词 ──
 QUERIES = [
@@ -51,15 +50,18 @@ def measure_accuracy() -> tuple[float, list[dict]]:
     hits_top1 = 0
     hits_top3 = 0
     details = []
-    for query, expected, topic in QUERIES:
+    for query, expected, _topic in QUERIES:
         emb = None
         # 用与 query_rag 相同的查询逻辑
         from app.code_agent.rag.rag import embed_model
+
         emb = embed_model.encode(query).tolist()
         results = collection.query(query_embeddings=[emb], n_results=3)
 
         if not results["documents"] or not results["documents"][0]:
-            details.append({"query": query, "hit_top1": False, "hit_top3": False, "top_results": []})
+            details.append(
+                {"query": query, "hit_top1": False, "hit_top3": False, "top_results": []}
+            )
             continue
 
         docs = results["documents"][0]
@@ -76,15 +78,20 @@ def measure_accuracy() -> tuple[float, list[dict]]:
         if top3_hit:
             hits_top3 += 1
 
-        details.append({
-            "query": query,
-            "hit_top1": top1_hit,
-            "hit_top3": top3_hit,
-            "top_results": [
-                {"id": ids[i] if i < len(ids) else "?", "distance": distances[i] if i < len(distances) else None}
-                for i in range(len(docs))
-            ],
-        })
+        details.append(
+            {
+                "query": query,
+                "hit_top1": top1_hit,
+                "hit_top3": top3_hit,
+                "top_results": [
+                    {
+                        "id": ids[i] if i < len(ids) else "?",
+                        "distance": distances[i] if i < len(distances) else None,
+                    }
+                    for i in range(len(docs))
+                ],
+            }
+        )
 
     return round(hits_top1 / len(QUERIES), 3), round(hits_top3 / len(QUERIES), 3), details
 
@@ -92,6 +99,7 @@ def measure_accuracy() -> tuple[float, list[dict]]:
 def measure_recall() -> float:
     """召回率：查 python 主题，看 5 条 python 知识能召回几条。"""
     from app.code_agent.rag.rag import embed_model
+
     emb = embed_model.encode("Python 编程规范").tolist()
     results = collection.query(query_embeddings=[emb], n_results=10)
 
@@ -109,6 +117,7 @@ def measure_recall() -> float:
 def measure_ordering() -> str:
     """相关性排序：检查返回结果 distance 是否递增（越相关越前 → distance 越小）。"""
     from app.code_agent.rag.rag import embed_model
+
     emb = embed_model.encode("Python 字符串格式化").tolist()
     results = collection.query(query_embeddings=[emb], n_results=5)
 
@@ -153,7 +162,12 @@ def main():
         "ordering": ordering,
         "query_details": details,
     }
-    out_path = Path(__file__).resolve().parents[1] / "runtime" / "runs" / f"rag_bench_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    out_path = (
+        Path(__file__).resolve().parents[1]
+        / "runtime"
+        / "runs"
+        / f"rag_bench_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)

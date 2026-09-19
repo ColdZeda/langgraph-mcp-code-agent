@@ -34,7 +34,9 @@ def get_llm() -> ChatOpenAI:
     return _llm
 
 
-def set_llm(model: str | None = None, base_url: str | None = None, api_key: str | None = None) -> ChatOpenAI:
+def set_llm(
+    model: str | None = None, base_url: str | None = None, api_key: str | None = None
+) -> ChatOpenAI:
     """替换当前 llm 实例（只覆盖传入的字段）。调用方需自行重建持有 llm 的 agent。"""
     global _llm
     _llm = build_llm(model=model, base_url=base_url, api_key=api_key)

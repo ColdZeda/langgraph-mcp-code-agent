@@ -26,6 +26,7 @@ async def load_mcp_tools(*, client_id: str, server_path: Path) -> list:
 
 async def _load_mcp_with_client(*, client_id: str, server_path: Path) -> tuple:
     import os as _os
+
     env = dict(_os.environ)
     env["PYTHONPATH"] = str(PROJECT_ROOT)
     params = {

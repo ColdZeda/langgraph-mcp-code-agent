@@ -56,8 +56,15 @@ class TestPromptContext:
 
     def test_required_keys(self):
         """应包含所有必要变量。"""
-        required = {"name", "workspace_dir", "wsl_distro", "vm_uploads_dir",
-                     "mysql_host", "mysql_port", "mysql_database"}
+        required = {
+            "name",
+            "workspace_dir",
+            "wsl_distro",
+            "vm_uploads_dir",
+            "mysql_host",
+            "mysql_port",
+            "mysql_database",
+        }
         assert required.issubset(set(PROMPT_CONTEXT.keys()))
 
     def test_name_is_string(self):

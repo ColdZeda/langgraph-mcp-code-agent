@@ -71,7 +71,9 @@ def collect_trace_from_messages(messages: list) -> list[dict]:
     return trace
 
 
-async def run_task(task, thread_id: str, timeout: int) -> tuple[str, list[dict], list[dict], int, int, float]:
+async def run_task(
+    task, thread_id: str, timeout: int
+) -> tuple[str, list[dict], list[dict], int, int, float]:
     """运行单个任务，返回 (response, tool_calls_trace, conversation, step_count, token_usage, elapsed_sec)。"""
     start = time.time()
 
@@ -83,7 +85,7 @@ async def run_task(task, thread_id: str, timeout: int) -> tuple[str, list[dict],
         elapsed = time.time() - start
         return response or "", tool_trace, conversation, step_count, token_usage, round(elapsed, 1)
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         elapsed = time.time() - start
         return "", [], [], 0, 0, round(elapsed, 1)
     except Exception as e:
@@ -97,19 +99,23 @@ def run_verifiers(task, context: EvalContext) -> list[dict]:
     for vf in task.verifiers:
         try:
             result: VerifierResult = vf(context)
-            results.append({
-                "name": result.name,
-                "passed": result.passed,
-                "score": result.score if result.score is not None else None,
-                "reason": result.reason,
-            })
+            results.append(
+                {
+                    "name": result.name,
+                    "passed": result.passed,
+                    "score": result.score if result.score is not None else None,
+                    "reason": result.reason,
+                }
+            )
         except Exception as e:
-            results.append({
-                "name": getattr(vf, "__name__", "unknown"),
-                "passed": None,
-                "score": None,
-                "reason": f"verifier error: {e}",
-            })
+            results.append(
+                {
+                    "name": getattr(vf, "__name__", "unknown"),
+                    "passed": None,
+                    "score": None,
+                    "reason": f"verifier error: {e}",
+                }
+            )
     return results
 
 
@@ -137,7 +143,9 @@ def aggregate_dimensions(tasks_results: list[dict]) -> dict:
     return {
         dim: {
             "score": round(sum(scores) / len(scores), 3) if scores else 0.0,
-            "pass_rate": round(sum(1 for s in scores if s >= 0.5) / len(scores), 3) if scores else 0.0,
+            "pass_rate": round(sum(1 for s in scores if s >= 0.5) / len(scores), 3)
+            if scores
+            else 0.0,
             "tasks": len(scores),
         }
         for dim, scores in dims.items()
@@ -168,7 +176,9 @@ async def main_async(tasks: list, run_id: str, force: bool = False):
     existing_results = None if force else load_existing_results(run_id)
     completed_ids = {r["id"] for r in existing_results} if existing_results else set()
     if completed_ids:
-        print(f"断点续跑: 已跳过 {len(completed_ids)} 题, 剩余 {len(tasks) - len(completed_ids)} 题\n")
+        print(
+            f"断点续跑: 已跳过 {len(completed_ids)} 题, 剩余 {len(tasks) - len(completed_ids)} 题\n"
+        )
 
     # 追踪失败的前置任务
     failed_ids: set[str] = set()
@@ -182,12 +192,22 @@ async def main_async(tasks: list, run_id: str, force: bool = False):
         # 前置任务检查
         if any(dep_id in failed_ids for dep_id in task.depends_on):
             print(f"[{i}/{len(tasks)}] {task.id} (SKIPPED — 前置失败)")
-            results.append({
-                "id": task.id, "dimension": task.dimension, "difficulty": task.difficulty,
-                "score": 0.0, "verifiers": [], "step_count": 0, "tool_calls": 0,
-                "latency_sec": 0, "token_usage": 0, "status": "skipped",
-                "response": "", "conversation": [],
-            })
+            results.append(
+                {
+                    "id": task.id,
+                    "dimension": task.dimension,
+                    "difficulty": task.difficulty,
+                    "score": 0.0,
+                    "verifiers": [],
+                    "step_count": 0,
+                    "tool_calls": 0,
+                    "latency_sec": 0,
+                    "token_usage": 0,
+                    "status": "skipped",
+                    "response": "",
+                    "conversation": [],
+                }
+            )
             save_results_incremental(run_id, results, build_meta(run_id, results))
             continue
 
@@ -200,7 +220,9 @@ async def main_async(tasks: list, run_id: str, force: bool = False):
         thread_id = f"eval-{task.id}"
         print(f"[{i}/{len(tasks)}] {task.id} [{task.dimension}] {task.prompt[:60]}...")
 
-        response, tool_trace, conversation, step_count, token_usage, elapsed = await run_task(task, thread_id, task.timeout_sec)
+        response, tool_trace, conversation, step_count, token_usage, elapsed = await run_task(
+            task, thread_id, task.timeout_sec
+        )
 
         # 判断状态
         if elapsed >= task.timeout_sec and not response:
@@ -212,23 +234,41 @@ async def main_async(tasks: list, run_id: str, force: bool = False):
 
         # 跑 verifier
         ctx = EvalContext(
-            task=task, response=response if status == "completed" else "",
-            tool_calls=tool_trace, step_count=step_count,
-            elapsed_sec=elapsed, workspace=WORKSPACE_DIR,
+            task=task,
+            response=response if status == "completed" else "",
+            tool_calls=tool_trace,
+            step_count=step_count,
+            elapsed_sec=elapsed,
+            workspace=WORKSPACE_DIR,
         )
         verifier_results = run_verifiers(task, ctx) if status == "completed" else []
         score, _ = compute_scores(verifier_results)
 
         result = {
-            "id": task.id, "dimension": task.dimension, "difficulty": task.difficulty,
-            "score": score, "verifiers": verifier_results,
-            "step_count": step_count, "tool_calls": len(tool_trace),
-            "latency_sec": elapsed, "token_usage": token_usage, "status": status,
-            "response": response, "conversation": conversation,
+            "id": task.id,
+            "dimension": task.dimension,
+            "difficulty": task.difficulty,
+            "score": score,
+            "verifiers": verifier_results,
+            "step_count": step_count,
+            "tool_calls": len(tool_trace),
+            "latency_sec": elapsed,
+            "token_usage": token_usage,
+            "status": status,
+            "response": response,
+            "conversation": conversation,
         }
         results.append(result)
 
-        icon = "✅" if status == "completed" else "⏱️" if status == "timeout" else "❌" if status == "error" else "⏭️"
+        icon = (
+            "✅"
+            if status == "completed"
+            else "⏱️"
+            if status == "timeout"
+            else "❌"
+            if status == "error"
+            else "⏭️"
+        )
         print(f"  {icon} {status} score={score} ({elapsed}s)")
 
         if status in ("error", "timeout"):
@@ -255,7 +295,7 @@ def build_meta(run_id: str, results: list[dict]) -> dict:
         "run_id": run_id,
         "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "git_commit": get_git_commit(),
-        "model": MODEL_NAME,          # 不再硬编码：换模型后存档里的 model 字段会跟着变
+        "model": MODEL_NAME,  # 不再硬编码：换模型后存档里的 model 字段会跟着变
         "evals_version": "v2.0",
         "total_tasks": len(results),
         "overall": {
@@ -263,7 +303,9 @@ def build_meta(run_id: str, results: list[dict]) -> dict:
             "pass_rate": pass_rate,
             "avg_steps": round(sum(steps) / len(steps), 1) if steps else 0,
             "avg_latency_sec": round(sum(latencies) / len(latencies), 1) if latencies else 0,
-            "avg_tool_calls": round(sum(tool_calls_list) / len(tool_calls_list), 1) if tool_calls_list else 0,
+            "avg_tool_calls": round(sum(tool_calls_list) / len(tool_calls_list), 1)
+            if tool_calls_list
+            else 0,
             "total_token_usage": sum(token_list) if token_list else 0,
         },
         "by_dimension": dims,
@@ -272,12 +314,12 @@ def build_meta(run_id: str, results: list[dict]) -> dict:
 
 def print_summary(results: list[dict], run_id: str):
     meta = build_meta(run_id, results)
-    print(f"\n{'='*55}")
+    print(f"\n{'=' * 55}")
     print(f"Run: {run_id}  |  {meta['total_tasks']} tasks  |  Overall: {meta['overall']['score']}")
-    print(f"{'='*55}")
+    print(f"{'=' * 55}")
     for dim, data in meta["by_dimension"].items():
         print(f"  {dim:20s}  {data['score']:.2f}  ({data['tasks']} tasks)")
-    print(f"\n  状态分布:")
+    print("\n  状态分布:")
     statuses = {}
     for r in results:
         statuses[r["status"]] = statuses.get(r["status"], 0) + 1

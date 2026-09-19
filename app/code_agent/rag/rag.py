@@ -1,14 +1,13 @@
+import logging
 import os
-from pathlib import Path
+import sys
 from typing import Annotated
 
 import chromadb
-from pydantic import Field
-
-import logging
-
-from sentence_transformers import SentenceTransformer
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
+from sentence_transformers import SentenceTransformer
+
 from app.code_agent.config import (
     CHROMA_DIR,
     EMBEDDING_MODEL_CACHE_DIR,
@@ -21,11 +20,12 @@ logging.getLogger("modelscope").setLevel(logging.WARNING)
 
 mcp = FastMCP()
 
-# MCP stdio 协议：stdout 是 JSON-RPC 通道，任何 print 都会污染协议，所以用 stderr 打日志
-import sys as _sys
+
 def _log(msg: str) -> None:
-    _sys.stderr.write(msg + "\n")
-    _sys.stderr.flush()
+    # MCP stdio 协议：stdout 是 JSON-RPC 通道，任何 print 都会污染协议，所以用 stderr 打日志
+    sys.stderr.write(msg + "\n")
+    sys.stderr.flush()
+
 
 # ── 加载 Embedding 模型 ──
 # 核心文件 model.safetensors 存在 → 直接从本地加载，不走网络
@@ -35,6 +35,7 @@ else:
     # 首次：从 ModelScope 下载（只下载 PyTorch 格式）
     import sys
     from contextlib import redirect_stderr
+
     from modelscope import snapshot_download
 
     # 抑制下载进度条（否则会通过 stdio 污染 MCP 协议）
@@ -46,8 +47,11 @@ else:
                 "sentence-transformers/all-MiniLM-L6-v2",
                 cache_dir=str(EMBEDDING_MODEL_CACHE_DIR),
                 ignore_file_pattern=[
-                    "*/onnx/*", "*/openvino/*",
-                    "*.h5", "*.ot", "pytorch_model.bin",
+                    "*/onnx/*",
+                    "*/openvino/*",
+                    "*.h5",
+                    "*.ot",
+                    "pytorch_model.bin",
                 ],
             )
         finally:
@@ -79,7 +83,7 @@ def seed_knowledge_base():
     # 从 ChromaDB 拉出现有数据：{id: 上次的 mtime}
     existing = collection.get()
     existing_mtimes = {}
-    for doc_id, meta in zip(existing["ids"], existing["metadatas"]):
+    for doc_id, meta in zip(existing["ids"], existing["metadatas"], strict=True):
         existing_mtimes[doc_id] = (meta or {}).get("mtime", 0)
 
     new_ids, new_docs, new_embeddings, new_metadatas = [], [], [], []
@@ -137,7 +141,7 @@ def query_rag_from_local(
     query: Annotated[
         str,
         Field(description="访问知识库查询的内容", examples=["终端的操作规范"]),
-    ] = ""
+    ] = "",
 ) -> str:
     query_embedding = embed_model.encode(query).tolist()
     results = collection.query(query_embeddings=[query_embedding], n_results=3)
@@ -157,10 +161,26 @@ def query_rag_from_local(
 
 # ════════════════ 工具 2：保存知识（自学习核心） ════════════════
 
-@mcp.tool(name="save_knowledge", description="将学到的知识保存到本地知识库。写入 knowledge/ 文件夹并立即向量化入库，无需等待重启。")
+
+@mcp.tool(
+    name="save_knowledge",
+    description="将学到的知识保存到本地知识库。写入 knowledge/ 文件夹并立即向量化入库，无需等待重启。",
+)
 def save_knowledge(
-    title: Annotated[str, Field(description="知识标题，同时用作文件名（不需要加 .txt 后缀）", examples=["Vue项目创建规范"])],
-    content: Annotated[str, Field(description="知识的完整内容", examples=["创建Vue3项目：cd 目标目录; vue create 项目名 --default"])],
+    title: Annotated[
+        str,
+        Field(
+            description="知识标题，同时用作文件名（不需要加 .txt 后缀）",
+            examples=["Vue项目创建规范"],
+        ),
+    ],
+    content: Annotated[
+        str,
+        Field(
+            description="知识的完整内容",
+            examples=["创建Vue3项目：cd 目标目录; vue create 项目名 --default"],
+        ),
+    ],
 ) -> str:
     safe_title = title.replace("/", "_").replace("\\", "_")
     filepath = KNOWLEDGE_DIR / f"{safe_title}.txt"
@@ -181,9 +201,16 @@ def save_knowledge(
 
 # ════════════════ 工具 3：删除知识 ════════════════
 
-@mcp.tool(name="delete_knowledge", description="从知识库中删除指定知识。同时删除 knowledge/ 文件和 ChromaDB 向量。")
+
+@mcp.tool(
+    name="delete_knowledge",
+    description="从知识库中删除指定知识。同时删除 knowledge/ 文件和 ChromaDB 向量。",
+)
 def delete_knowledge(
-    title: Annotated[str, Field(description="要删除的知识标题（不需要加 .txt 后缀）", examples=["Vue项目创建规范"])],
+    title: Annotated[
+        str,
+        Field(description="要删除的知识标题（不需要加 .txt 后缀）", examples=["Vue项目创建规范"]),
+    ],
 ) -> str:
     safe_title = title.replace("/", "_").replace("\\", "_")
     filepath = KNOWLEDGE_DIR / f"{safe_title}.txt"
@@ -201,17 +228,25 @@ def delete_knowledge(
         deleted_vector = False
 
     if deleted_file or deleted_vector:
-        _log(f"[delete_knowledge] 已删除: {safe_title} (文件={deleted_file}, 向量={deleted_vector})")
+        _log(
+            f"[delete_knowledge] 已删除: {safe_title} (文件={deleted_file}, 向量={deleted_vector})"
+        )
         return f"知识 '{safe_title}' 已从知识库删除"
     return f"知识 '{safe_title}' 不存在，无需删除"
 
 
 # ════════════════ 工具 4：更新知识 ════════════════
 
+
 @mcp.tool(name="update_knowledge", description="更新知识库中的已有知识。等同于先删除再保存。")
 def update_knowledge(
     title: Annotated[str, Field(description="要更新的知识标题", examples=["Vue项目创建规范"])],
-    content: Annotated[str, Field(description="更新后的完整内容", examples=["创建Vue3项目：npm create vue@latest 项目名"])],
+    content: Annotated[
+        str,
+        Field(
+            description="更新后的完整内容", examples=["创建Vue3项目：npm create vue@latest 项目名"]
+        ),
+    ],
 ) -> str:
     safe_title = title.replace("/", "_").replace("\\", "_")
     filepath = KNOWLEDGE_DIR / f"{safe_title}.txt"

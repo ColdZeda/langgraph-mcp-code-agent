@@ -21,11 +21,11 @@ REJECT = [
     "DELETE FROM evals",
     "INSERT INTO evals VALUES (1)",
     "CREATE TABLE t (id INT)",
-    "  drop table evals  ",          # 前后空白 + 大小写
-    "(DROP TABLE evals)",            # 括号开头
-    "SELECT 1; DROP TABLE evals",    # 多语句
+    "  drop table evals  ",  # 前后空白 + 大小写
+    "(DROP TABLE evals)",  # 括号开头
+    "SELECT 1; DROP TABLE evals",  # 多语句
     "SELECT * FROM evals; DELETE FROM evals;",
-    "",                              # 空语句
+    "",  # 空语句
 ]
 
 ALLOW = [
@@ -36,7 +36,7 @@ ALLOW = [
     "DESC evals",
     "EXPLAIN SELECT 1",
     "WITH cte AS (SELECT 1 AS a) SELECT * FROM cte",
-    "SELECT * FROM evals;",          # 合法的尾部单个分号
+    "SELECT * FROM evals;",  # 合法的尾部单个分号
 ]
 
 

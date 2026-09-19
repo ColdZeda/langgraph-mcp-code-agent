@@ -6,6 +6,7 @@
 - REST：会话列表 / 模型设置（热切换，改后自动重建 agent）/ 连接测试
 - 前端构建产物（app/web/frontend/dist）存在时自动托管
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,11 +21,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-from app.code_agent.agent.multi_agent import build_executor_agent, build_verifier_agent, run_multi_agent
+from app.code_agent.agent.multi_agent import (
+    build_executor_agent,
+    build_verifier_agent,
+    run_multi_agent,
+)
 from app.code_agent.config import (
     BROWSER_SERVER_PATH,
     CHECKPOINT_DB,
-    CHECKPOINT_DIR,
     CODE_TOOLS_SERVER_PATH,
     MYSQL_SERVER_PATH,
     POWERSHELL_SERVER_PATH,
@@ -81,6 +85,7 @@ task_lock = asyncio.Lock()  # Agent 依赖本机环境（Edge/WSL/MySQL），同
 
 # ── 设置持久化（runtime/ 已被 gitignore，key 只落本地）──
 
+
 def load_settings() -> dict:
     if SETTINGS_PATH.exists():
         try:
@@ -121,6 +126,7 @@ app = FastAPI(title="Code Agent Web", lifespan=lifespan)
 
 # ── 模型设置 ──
 
+
 @app.get("/api/settings")
 async def get_settings():
     return masked_settings(load_settings())
@@ -157,13 +163,14 @@ async def test_settings(body: dict):
             api_key=str(body.get("api_key") or "").strip() or None,
         )
         start = time.time()
-        resp = await test_llm.ainvoke("回复两个字：正常")
+        await test_llm.ainvoke("回复两个字：正常")
         return {"ok": True, "elapsedSec": round(time.time() - start, 1)}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 # ── 会话（读 checkpointer 的 SQLite）──
+
 
 def _uuid6_to_unix(checkpoint_id: str) -> float | None:
     """LangGraph 的 checkpoint_id 是 UUIDv6（时间有序）→ 转成 unix 秒，供界面排序/显示。
@@ -172,8 +179,8 @@ def _uuid6_to_unix(checkpoint_id: str) -> float | None:
     """
     try:
         h = checkpoint_id.replace("-", "")
-        ts_100ns = int(h[0:12] + h[13:16], 16)        # UUIDv6：time_high(48) + time_low(12)
-        return ts_100ns / 1e7 - 12219292800           # 1582-10-15 → unix 纪元
+        ts_100ns = int(h[0:12] + h[13:16], 16)  # UUIDv6：time_high(48) + time_low(12)
+        return ts_100ns / 1e7 - 12219292800  # 1582-10-15 → unix 纪元
     except Exception:
         return None
 
@@ -192,7 +199,7 @@ async def list_sessions():
             ).fetchall()
         finally:
             conn.close()
-    except sqlite3.Error as e:                        # 库还没建表/被占用 → 当作空列表
+    except sqlite3.Error as e:  # 库还没建表/被占用 → 当作空列表
         logger.warning(f"读取会话列表失败：{e}")
         return []
 
@@ -204,7 +211,7 @@ async def list_sessions():
         }
         for tid, n, last_id in rows
     ]
-    items.sort(key=lambda x: (x["updatedAt"] or 0), reverse=True)
+    items.sort(key=lambda x: x["updatedAt"] or 0, reverse=True)
     return items
 
 
@@ -228,6 +235,7 @@ async def get_session_messages(thread_id: str):
 
 
 # ── WebSocket 聊天 ──
+
 
 def _summarize_trace(trace_list: list[dict], limit: int = 30, arg_chars: int = 200) -> list[dict]:
     out = []
@@ -272,13 +280,17 @@ async def ws_chat(ws: WebSocket):
                 # GET /api/sessions/{id}/messages 拉取回放。
                 requested = str(msg.get("threadId") or "").strip()
                 if not requested:
-                    await ws.send_text(json.dumps({"type": "error", "message": "load_session 缺少 threadId"}))
+                    await ws.send_text(
+                        json.dumps({"type": "error", "message": "load_session 缺少 threadId"})
+                    )
                     continue
                 state["thread_id"] = requested
                 await ws.send_text(json.dumps({"type": "session", "threadId": requested}))
                 continue
             if mtype != "chat":
-                await ws.send_text(json.dumps({"type": "error", "message": f"未知消息类型 {mtype}"}))
+                await ws.send_text(
+                    json.dumps({"type": "error", "message": f"未知消息类型 {mtype}"})
+                )
                 continue
 
             user_input = str(msg.get("message") or "").strip()
@@ -289,16 +301,24 @@ async def ws_chat(ws: WebSocket):
                 state["thread_id"] = str(msg["threadId"])
 
             if task_lock.locked():
-                await ws.send_text(json.dumps({"type": "error", "code": "busy", "message": "有任务正在执行，请等待完成"}))
+                await ws.send_text(
+                    json.dumps(
+                        {"type": "error", "code": "busy", "message": "有任务正在执行，请等待完成"}
+                    )
+                )
                 continue
 
             async with task_lock:
                 start = time.time()
-                await ws.send_text(json.dumps({
-                    "type": "start",
-                    "threadId": state["thread_id"],
-                    "message": "Planner → Executor → Verifier 协作中...",
-                }))
+                await ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "start",
+                            "threadId": state["thread_id"],
+                            "message": "Planner → Executor → Verifier 协作中...",
+                        }
+                    )
+                )
                 try:
                     result = await run_multi_agent(
                         user_input,
@@ -309,24 +329,31 @@ async def ws_chat(ws: WebSocket):
                     )
                 except Exception as e:
                     logger.exception("任务执行失败")
-                    await ws.send_text(json.dumps({"type": "error", "message": f"{type(e).__name__}: {e}"}))
+                    await ws.send_text(
+                        json.dumps({"type": "error", "message": f"{type(e).__name__}: {e}"})
+                    )
                     continue
 
                 elapsed = round(time.time() - start, 1)
                 # 跨轮记忆由 checkpointer 落库（run_multi_agent 内部完成），这里不再手写 history
 
-                await ws.send_text(json.dumps({
-                    "type": "result",
-                    "threadId": state["thread_id"],
-                    "plan": result["plan"],
-                    "verdict": result["verdict"],
-                    "finalResponse": result["final_response"],
-                    "toolTrace": _summarize_trace(result.get("executor_trace_list")),
-                    "tokenUsage": result.get("token_usage", 0),
-                    "stepCount": result.get("step_count", 0),
-                    "retryCount": result.get("retry_count", 0),
-                    "elapsedSec": elapsed,
-                }, ensure_ascii=False))
+                await ws.send_text(
+                    json.dumps(
+                        {
+                            "type": "result",
+                            "threadId": state["thread_id"],
+                            "plan": result["plan"],
+                            "verdict": result["verdict"],
+                            "finalResponse": result["final_response"],
+                            "toolTrace": _summarize_trace(result.get("executor_trace_list")),
+                            "tokenUsage": result.get("token_usage", 0),
+                            "stepCount": result.get("step_count", 0),
+                            "retryCount": result.get("retry_count", 0),
+                            "elapsedSec": elapsed,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
     except WebSocketDisconnect:
         logger.info(f"WS 连接断开 thread_id={state['thread_id']}")
     except Exception as e:

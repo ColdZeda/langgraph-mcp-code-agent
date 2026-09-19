@@ -2,8 +2,6 @@
 
 import ast
 import difflib
-import os
-import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -23,7 +21,10 @@ def _resolve_path(file_path: str) -> Path:
 
 # ── 工具 1: 读取文件片段 ──────────────────────────────────────────
 
-@mcp.tool(description="读取指定文件的指定行范围（1-based 行号），用于查看源码内容。读项目源码用相对路径，读 workspace 产物用其相对路径。")
+
+@mcp.tool(
+    description="读取指定文件的指定行范围（1-based 行号），用于查看源码内容。读项目源码用相对路径，读 workspace 产物用其相对路径。"
+)
 def read_file_range(
     file_path: Annotated[
         str,
@@ -33,7 +34,9 @@ def read_file_range(
         ),
     ],
     start_line: Annotated[int, Field(description="起始行号（从 1 开始）", examples=[1])] = 1,
-    end_line: Annotated[int, Field(description="结束行号（含），0 表示读到文件末尾", examples=[20])] = 0,
+    end_line: Annotated[
+        int, Field(description="结束行号（含），0 表示读到文件末尾", examples=[20])
+    ] = 0,
 ) -> str:
     """读取指定文件的指定行范围（1-based），end_line=0 表示读到末尾。"""
     path = _resolve_path(file_path)
@@ -58,7 +61,10 @@ def read_file_range(
 
 # ── 工具 2: 生成 unified diff ─────────────────────────────────────
 
-@mcp.tool(description="对比文件当前内容与 new_content，返回 unified diff 格式的变更记录，用于展示代码修改")
+
+@mcp.tool(
+    description="对比文件当前内容与 new_content，返回 unified diff 格式的变更记录，用于展示代码修改"
+)
 def generate_diff(
     file_path: Annotated[
         str,
@@ -67,7 +73,9 @@ def generate_diff(
             examples=["app/code_agent/agent/code_agent.py"],
         ),
     ],
-    new_content: Annotated[str, Field(description="修改后的完整文件内容（是全文，不是 diff 片段）")],
+    new_content: Annotated[
+        str, Field(description="修改后的完整文件内容（是全文，不是 diff 片段）")
+    ],
 ) -> str:
     """对比文件当前内容与 new_content，返回 unified diff 格式的差异。"""
     path = _resolve_path(file_path)
@@ -96,6 +104,7 @@ def generate_diff(
 
 
 # ── 工具 3: AST 解析 ──────────────────────────────────────────────
+
 
 @mcp.tool(description="解析 Python 文件的 AST，返回函数/类/导入等代码结构摘要；语法错误会明确报告")
 def analyze_ast(
@@ -143,8 +152,7 @@ def analyze_ast(
             functions.append(f"{prefix}async def {node.name}(...)  (第 {node.lineno} 行)")
         elif isinstance(node, ast.ClassDef):
             methods = [
-                m.name for m in node.body
-                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+                m.name for m in node.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
             ]
             classes.append(f"class {node.name}(...)  — {len(methods)} 个方法 (第 {node.lineno} 行)")
         elif isinstance(node, ast.Assign):
@@ -171,7 +179,10 @@ def analyze_ast(
 
 # ── 工具 4: 项目结构扫描 ──────────────────────────────────────────
 
-@mcp.tool(description="递归列出目录结构树，用于了解项目组织。查看项目根用 '.' 或直接给 app/ 等子目录")
+
+@mcp.tool(
+    description="递归列出目录结构树，用于了解项目组织。查看项目根用 '.' 或直接给 app/ 等子目录"
+)
 def list_project_structure(
     root_path: Annotated[
         str,
@@ -188,9 +199,18 @@ def list_project_structure(
         return f"错误：目录不存在 — {root}"
 
     IGNORE_DIRS = {
-        "__pycache__", ".git", ".idea", ".venv", "venv",
-        "node_modules", ".mypy_cache", ".pytest_cache",
-        ".reasonix", "runtime", ".temp", ".code",
+        "__pycache__",
+        ".git",
+        ".idea",
+        ".venv",
+        "venv",
+        "node_modules",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".reasonix",
+        "runtime",
+        ".temp",
+        ".code",
     }
 
     result: list[str] = [str(root)]
@@ -206,7 +226,7 @@ def list_project_structure(
         for i, entry in enumerate(entries):
             if entry.name in IGNORE_DIRS or entry.name.startswith(".") and entry.is_dir():
                 continue
-            is_last = (i == len(entries) - 1)
+            is_last = i == len(entries) - 1
             connector = "└── " if is_last else "├── "
             result.append(f"{prefix}{connector}{entry.name}{'/' if entry.is_dir() else ''}")
 

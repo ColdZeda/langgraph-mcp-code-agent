@@ -4,10 +4,9 @@ import io
 import subprocess
 import sys
 import threading
-
-import psutil
 from typing import Annotated
 
+import psutil
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
@@ -18,19 +17,19 @@ mcp = FastMCP()
 # ── 危险命令检测 ──
 
 _DANGEROUS_POWERSHELL_PATTERNS = [
-    r"\bRemove-Item\s+-Path\s+/\*",   # Remove-Item 根目录通配
+    r"\bRemove-Item\s+-Path\s+/\*",  # Remove-Item 根目录通配
     r"\bRemove-Item\s+.*-Recurse\s+-Force\b",  # 强制递归删除
-    r"\bFormat-\w+",                    # Format-Volume / Format-HardDisk
-    r"\bdel\s+/[fsq]",                  # del /f /s /q
-    r"\brd\s+/[sq]\b",                  # rd /s /q
-    r"\brmdir\s+/[sq]\b",               # rmdir /s /q
-    r"\bStop-Computer\b",               # 关机
-    r"\bRestart-Computer\b",            # 重启
-    r"\bshutdown\b",                     # shutdown 命令
-    r"\bformat\s+[a-zA-Z]:",            # format C: 等
-    r"\bdel /[fsq].*system32",           # 删除系统目录
-    r"\bRemove-Item.*system32",          # 删除系统目录
-    r"\bdiskpart\b",                     # 磁盘分区
+    r"\bFormat-\w+",  # Format-Volume / Format-HardDisk
+    r"\bdel\s+/[fsq]",  # del /f /s /q
+    r"\brd\s+/[sq]\b",  # rd /s /q
+    r"\brmdir\s+/[sq]\b",  # rmdir /s /q
+    r"\bStop-Computer\b",  # 关机
+    r"\bRestart-Computer\b",  # 重启
+    r"\bshutdown\b",  # shutdown 命令
+    r"\bformat\s+[a-zA-Z]:",  # format C: 等
+    r"\bdel /[fsq].*system32",  # 删除系统目录
+    r"\bRemove-Item.*system32",  # 删除系统目录
+    r"\bdiskpart\b",  # 磁盘分区
     r"\bClear-Content\s+.*\.(dll|exe|sys)\b",  # 清空系统文件
 ]
 
@@ -38,6 +37,7 @@ _DANGEROUS_POWERSHELL_PATTERNS = [
 def _is_dangerous(command: str) -> str | None:
     """检查 PowerShell 命令是否包含危险操作。返回 None 表示安全，返回字符串表示拦截原因。"""
     import re as _re
+
     for pattern in _DANGEROUS_POWERSHELL_PATTERNS:
         if _re.search(pattern, command, _re.IGNORECASE):
             return f"🚫 安全拦截：PowerShell 命令匹配危险模式 '{pattern}'，已阻止执行。"
@@ -107,7 +107,11 @@ def _get_powershell_processes():
         try:
             if proc.info["name"] and "powershell" in proc.info["name"].lower():
                 processes.append(
-                    {"pid": proc.info["pid"], "name": proc.info["name"], "cmdline": proc.info["cmdline"]}
+                    {
+                        "pid": proc.info["pid"],
+                        "name": proc.info["name"],
+                        "cmdline": proc.info["cmdline"],
+                    }
                 )
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
@@ -115,6 +119,7 @@ def _get_powershell_processes():
 
 
 # ── MCP 工具 ──
+
 
 @mcp.tool(name="close_powershell", description="关闭所有 PowerShell 进程")
 def close_all_powershell() -> str:
@@ -140,7 +145,9 @@ def close_all_powershell() -> str:
 
 @mcp.tool(name="execute_powershell_command", description="直接执行 PowerShell 命令并返回结果")
 def execute_powershell_command(
-    command: Annotated[str, Field(description="要执行的 PowerShell 命令", examples=["Get-Process"])]
+    command: Annotated[
+        str, Field(description="要执行的 PowerShell 命令", examples=["Get-Process"])
+    ],
 ) -> str:
     """直接执行 PowerShell 命令并返回结果。"""
     try:

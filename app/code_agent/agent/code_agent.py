@@ -1,20 +1,21 @@
-import argparse
 import asyncio
-import json
 import os
 import sys
 import time
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.code_agent.agent.multi_agent import build_executor_agent, build_verifier_agent, run_multi_agent
+from app.code_agent.agent.multi_agent import (
+    build_executor_agent,
+    build_verifier_agent,
+    run_multi_agent,
+)
 from app.code_agent.config import (
     BROWSER_SERVER_PATH,
     CODE_TOOLS_SERVER_PATH,
     MYSQL_SERVER_PATH,
     POWERSHELL_SERVER_PATH,
     RAG_SERVER_PATH,
-    THREAD_ID,
     VM_SERVER_PATH,
     setup_logging,
 )
@@ -48,7 +49,7 @@ async def run_agent(thread_id: str = "default", debug: bool = False):
     logger.info("Agent 启动中...")
 
     logger.info("加载 MCP 工具...")
-    *tool_sets, = await asyncio.gather(
+    (*tool_sets,) = await asyncio.gather(
         load_mcp_tools(client_id="powershell", server_path=POWERSHELL_SERVER_PATH),
         load_mcp_tools(client_id="rag", server_path=RAG_SERVER_PATH),
         load_mcp_tools(client_id="browser", server_path=BROWSER_SERVER_PATH),
@@ -89,11 +90,11 @@ async def run_agent(thread_id: str = "default", debug: bool = False):
         print("-" * 30)
         print(result["plan"])
 
-        print(f"\n🔍 [Verifier] 验收结果：")
+        print("\n🔍 [Verifier] 验收结果：")
         print("-" * 30)
         print(result["verdict"])
 
-        print(f"\n🤖 [Executor] 最终回复：")
+        print("\n🤖 [Executor] 最终回复：")
         print("-" * 30)
         print(result["final_response"])
         print("=" * 60)
@@ -112,6 +113,7 @@ def main(thread_id: str = "default", debug: bool = False):
 
 
 # ── Evals 非交互接口 ──
+
 
 async def run_single_task(
     task_prompt: str, thread_id: str = "eval"
@@ -141,7 +143,7 @@ async def run_single_task(
             return_exceptions=True,
         )
         tool_sets = []
-        for (cid, _sp), res in zip(_MCP_SERVERS, _results):
+        for (cid, _sp), res in zip(_MCP_SERVERS, _results, strict=True):
             if isinstance(res, Exception):
                 raise RuntimeError(
                     f"MCP server '{cid}' 加载失败: {type(res).__name__}: {res}"
@@ -176,7 +178,6 @@ async def run_single_task(
     #   若将来升级适配器、改为长连接会话，再按新 API 补清理。
 
     # ── 组装 conversation（明文，人可读）──
-    plan_obj = json.loads(result["plan"]) if result["plan"].startswith("{") else {}
     conversation.append({"role": "planner", "content": result["plan"][:2000]})
     for msg in result["executor_messages"]:
         if isinstance(msg, HumanMessage):

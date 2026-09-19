@@ -21,15 +21,15 @@ VM_COMMAND_TIMEOUT = int(os.environ.get("CODE_AGENT_VM_TIMEOUT", "60"))
 
 # 危险命令黑名单
 _DANGEROUS_PATTERNS = [
-    r"\brm\s+-rf\s+/\s",         # rm -rf / (仅匹配根目录，不误拦 /home/...)
-    r"\brm\s+-rf\s+/\*",         # rm -rf /*
-    r"\bdd\s+if=",                # dd 磁盘操作
-    r"\bmkfs\b",                  # 格式化
-    r"fork\s*bomb",               # fork 炸弹
-    r":\(\)\s*\{",                # shell fork bomb
-    r"chmod\s+.*777\s+/\s",       # chmod 777 / (仅匹配根目录)
-    r">\s*/dev/sda",              # 写入磁盘设备
-    r"\bshutdown\b",              # 关机/重启
+    r"\brm\s+-rf\s+/\s",  # rm -rf / (仅匹配根目录，不误拦 /home/...)
+    r"\brm\s+-rf\s+/\*",  # rm -rf /*
+    r"\bdd\s+if=",  # dd 磁盘操作
+    r"\bmkfs\b",  # 格式化
+    r"fork\s*bomb",  # fork 炸弹
+    r":\(\)\s*\{",  # shell fork bomb
+    r"chmod\s+.*777\s+/\s",  # chmod 777 / (仅匹配根目录)
+    r">\s*/dev/sda",  # 写入磁盘设备
+    r"\bshutdown\b",  # 关机/重启
     r"\breboot\b",
     r"\bpoweroff\b",
     r"\bhalt\b",
@@ -39,6 +39,7 @@ _DANGEROUS_PATTERNS = [
 def _is_dangerous(command: str) -> str | None:
     """检查命令是否包含危险操作。返回 None 表示安全，返回字符串表示拦截原因。"""
     import re as _re
+
     for pattern in _DANGEROUS_PATTERNS:
         if _re.search(pattern, command, _re.IGNORECASE):
             return f"🚫 安全拦截：命令匹配危险模式 '{pattern}'，已阻止执行。"
@@ -89,7 +90,9 @@ def windows_path_to_wsl_path(path: str) -> str:
 # 在 Ubuntu 虚拟机中创建目录，对应 Linux 的 mkdir -p。
 @mcp.tool(name="make_dir_in_vm", description="在 Ubuntu 虚拟机中创建目录，相当于 mkdir -p 命令")
 def make_dir_in_vm(
-    dir_path: Annotated[str, Field(description="要创建的目录路径", examples=[VM_UPLOADS_DIR + "/test3"])]
+    dir_path: Annotated[
+        str, Field(description="要创建的目录路径", examples=[VM_UPLOADS_DIR + "/test3"])
+    ],
 ) -> str:
     sys.stderr.write(f"dir_path {dir_path}\n")
     return run_vm_shell_command("mkdir -p " + shlex.quote(dir_path))
@@ -98,7 +101,7 @@ def make_dir_in_vm(
 # 查看 Ubuntu 虚拟机中的目录内容，对应 Linux 的 ls -al。
 @mcp.tool(name="list_files_in_vm", description="查看 Ubuntu 虚拟机中指定目录，相当于 ls -al 命令")
 def list_files_in_vm(
-    dir_path: Annotated[str, Field(description="要查看的目录路径", examples=[VM_UPLOADS_DIR])]
+    dir_path: Annotated[str, Field(description="要查看的目录路径", examples=[VM_UPLOADS_DIR])],
 ) -> str:
     sys.stderr.write(f"dir_path {dir_path}\n")
     return run_vm_shell_command("ls -al " + shlex.quote(dir_path))
@@ -107,10 +110,19 @@ def list_files_in_vm(
 # 向 Ubuntu 虚拟机中的指定路径写入文件内容。
 @mcp.tool(name="write_file_to_vm", description="向 Ubuntu 虚拟机中写入指定文件")
 def write_file_to_vm(
-    file_path: Annotated[str, Field(description="写入虚拟机中的文件地址", examples=[VM_UPLOADS_DIR + "/test2/index.html"])],
-    content: Annotated[str, Field(description="写入虚拟机中的文件内容", examples=["<div>hello wsl</div>"])],
+    file_path: Annotated[
+        str,
+        Field(
+            description="写入虚拟机中的文件地址", examples=[VM_UPLOADS_DIR + "/test2/index.html"]
+        ),
+    ],
+    content: Annotated[
+        str, Field(description="写入虚拟机中的文件内容", examples=["<div>hello wsl</div>"])
+    ],
 ) -> str:
-    with tempfile.NamedTemporaryFile(delete=False, mode="w", encoding="utf-8", newline="") as tmp_file:
+    with tempfile.NamedTemporaryFile(
+        delete=False, mode="w", encoding="utf-8", newline=""
+    ) as tmp_file:
         tmp_file.write(content)
         tmp_file_path = tmp_file.name
 
@@ -139,8 +151,16 @@ def change_file_permission_in_vm(file_path: str, mode: str) -> str:
 # 把 Windows 本地目录上传到 Ubuntu 虚拟机目录，并尽量保持原有目录结构。
 @mcp.tool(name="upload_directory_to_vm", description="将本地文件目录上传至 Ubuntu 虚拟机指定目录")
 def upload_directory_to_vm(
-    local_dir: Annotated[str, Field(description="本地文件目录", examples=["E:/agentstart/work/ai-agent-test/.temp/vue3-test"])],
-    vm_dest_dir: Annotated[str, Field(description="虚拟机文件目录", examples=[VM_UPLOADS_DIR + "/vue3-test"])],
+    local_dir: Annotated[
+        str,
+        Field(
+            description="本地文件目录",
+            examples=["E:/agentstart/work/ai-agent-test/.temp/vue3-test"],
+        ),
+    ],
+    vm_dest_dir: Annotated[
+        str, Field(description="虚拟机文件目录", examples=[VM_UPLOADS_DIR + "/vue3-test"])
+    ],
 ) -> str:
     local_dir = os.path.abspath(local_dir)
     if not os.path.exists(local_dir):
@@ -166,14 +186,20 @@ def upload_directory_to_vm(
         sys.stderr.write(f"{root} {dirs} {files}\n")
 
         rel_path = os.path.relpath(root, local_dir)
-        vm_subdir = vm_dest_dir if rel_path == "." else posixpath.join(vm_dest_dir, rel_path.replace("\\", "/"))
+        vm_subdir = (
+            vm_dest_dir
+            if rel_path == "."
+            else posixpath.join(vm_dest_dir, rel_path.replace("\\", "/"))
+        )
         make_dir_in_vm(vm_subdir)
 
         for file_name in files:
             local_file_path = os.path.join(root, file_name)
             local_file_wsl_path = windows_path_to_wsl_path(local_file_path)
             vm_file_path = posixpath.join(vm_subdir, file_name)
-            result = run_vm_shell_command(f"cp {shlex.quote(local_file_wsl_path)} {shlex.quote(vm_file_path)}")
+            result = run_vm_shell_command(
+                f"cp {shlex.quote(local_file_wsl_path)} {shlex.quote(vm_file_path)}"
+            )
             sys.stderr.write(f"{result}\n")
             copied_count += 1
 

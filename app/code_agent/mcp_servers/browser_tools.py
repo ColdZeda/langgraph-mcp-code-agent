@@ -6,6 +6,7 @@
 ⚠️ 边界：本工具只负责「**搜索取数**」。将来若要做「**操作真实网页**」（Computer Use /
 Browser Agent，需要点击、填表、截图），那是另一件事，应另建 Playwright 工具。
 """
+
 import sys
 from typing import Annotated
 

@@ -6,6 +6,7 @@
 - Verifier：只读工具白名单（按计划动态挂载子集），对照「需求 + 计划 + 执行轨迹」验收
 - 打回机制：Verifier FAIL 时带原因打回 Executor 重做，最多 2 轮
 """
+
 from __future__ import annotations
 
 import json
@@ -27,13 +28,21 @@ from app.code_agent.model.llm import get_llm
 
 READONLY_TOOL_NAMES: set[str] = {
     # code_tools（MCP）只读
-    "read_file_range", "generate_diff", "analyze_ast", "list_project_structure",
+    "read_file_range",
+    "generate_diff",
+    "analyze_ast",
+    "list_project_structure",
     # MySQL 只读（查询/结构，无写权限）
-    "mysql_list_databases", "mysql_list_tables", "mysql_describe_tables", "mysql_execute_query",
+    "mysql_list_databases",
+    "mysql_list_tables",
+    "mysql_describe_tables",
+    "mysql_execute_query",
     # RAG 查询
     "query_rag",
     # FileManagementToolkit 读/查看类
-    "read_file", "list_directory", "file_search",
+    "read_file",
+    "list_directory",
+    "file_search",
 }
 
 MAX_RETRY = 2  # Verifier 打回上限
@@ -43,20 +52,21 @@ MAX_RETRY = 2  # Verifier 打回上限
 # 图状态
 # ═══════════════════════════════════════════════════════════════════
 
+
 class AgentState(TypedDict):
-    user_input: str          # 原始用户需求
-    plan: str                # Planner 产出（JSON 字符串）
-    executor_result: str     # Executor 最终回复
-    executor_trace: str      # Executor 工具调用摘要（供 Verifier 参考）
-    verdict: str             # Verifier 判定（JSON：verdict/reason）
-    retry_count: int         # 已打回次数
-    token_usage: int         # 全流程 token 累计
+    user_input: str  # 原始用户需求
+    plan: str  # Planner 产出（JSON 字符串）
+    executor_result: str  # Executor 最终回复
+    executor_trace: str  # Executor 工具调用摘要（供 Verifier 参考）
+    verdict: str  # Verifier 判定（JSON：verdict/reason）
+    retry_count: int  # 已打回次数
+    token_usage: int  # 全流程 token 累计
     # evals 存档用（结构化输出）
-    executor_trace_list: list[dict]   # Executor 工具调用 trace [{name, args}]
-    verifier_trace_list: list[dict]   # Verifier 工具调用 trace
-    executor_messages: list           # Executor 消息流（组装对话存档用）
-    verifier_messages: list           # Verifier 消息流
-    step_count: int                   # Executor 执行步数（近似原单 Agent 步数）
+    executor_trace_list: list[dict]  # Executor 工具调用 trace [{name, args}]
+    verifier_trace_list: list[dict]  # Verifier 工具调用 trace
+    executor_messages: list  # Executor 消息流（组装对话存档用）
+    verifier_messages: list  # Verifier 消息流
+    step_count: int  # Executor 执行步数（近似原单 Agent 步数）
     # ── 跨轮记忆（唯一的会话通道）──
     # ⚠️ 必须带 `add_messages` reducer：没 reducer 的通道是"新值覆盖旧值"，
     #    那样即使接了 checkpointer，按 thread_id 也恢复不出对话。
@@ -122,6 +132,7 @@ VERIFIER_PROMPT = """你是任务验收员（Verifier）。你的职责是对照
 # 工具函数
 # ═══════════════════════════════════════════════════════════════════
 
+
 def _extract_json(text: str) -> dict | None:
     """从 LLM 输出中提取 JSON 对象（容错：支持 ```json 包裹 / 前后杂文本）。"""
     if not text:
@@ -147,13 +158,14 @@ def _msg_tokens(msg: Any) -> int:
 def _plan_to_text(plan: str) -> str:
     obj = _extract_json(plan)
     if obj and obj.get("steps"):
-        return "\n".join(f"{i+1}. {s}" for i, s in enumerate(obj["steps"]))
+        return "\n".join(f"{i + 1}. {s}" for i, s in enumerate(obj["steps"]))
     return plan or "（无计划）"
 
 
 # ═══════════════════════════════════════════════════════════════════
 # 节点实现
 # ═══════════════════════════════════════════════════════════════════
+
 
 async def planner_node(state: AgentState) -> dict:
     """纯 LLM 规划，产出结构化计划。"""
@@ -164,7 +176,9 @@ async def planner_node(state: AgentState) -> dict:
             f"{state['verdict']}\n）"
         )
     prompt = PLANNER_PROMPT.format(user_input=state["user_input"], retry_context=retry_context)
-    resp = await get_llm().ainvoke([SystemMessage(content="你是规划员。"), HumanMessage(content=prompt)])
+    resp = await get_llm().ainvoke(
+        [SystemMessage(content="你是规划员。"), HumanMessage(content=prompt)]
+    )
     plan_text = resp.content if isinstance(resp.content, str) else str(resp.content)
     parsed = _extract_json(plan_text)
     if parsed and parsed.get("steps"):
@@ -194,7 +208,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     """
     plan_steps = _plan_to_text(state.get("plan", ""))
     prev_verdict = str(state.get("verdict") or "")
-    is_retry = "FAIL" in prev_verdict.upper()      # 上一轮验收失败 → 本次是重跑
+    is_retry = "FAIL" in prev_verdict.upper()  # 上一轮验收失败 → 本次是重跑
     if is_retry:
         user_msg = (
             f"【任务】{state['user_input']}\n"
@@ -203,7 +217,9 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             "请针对验收意见修正后重做，完成后再总结结果。"
         )
     else:
-        user_msg = f"【任务】{state['user_input']}\n【执行计划】\n{plan_steps}\n请按计划执行并完成任务。"
+        user_msg = (
+            f"【任务】{state['user_input']}\n【执行计划】\n{plan_steps}\n请按计划执行并完成任务。"
+        )
 
     last_content = ""
     trace: list[dict] = []
@@ -225,7 +241,9 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
                 tokens += _msg_tokens(msg)
                 if isinstance(msg, AIMessage):
                     if msg.content:
-                        last_content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                        last_content = (
+                            msg.content if isinstance(msg.content, str) else str(msg.content)
+                        )
                     for tc in getattr(msg, "tool_calls", None) or []:
                         trace.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
     return {
@@ -237,6 +255,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         "retry_count": state.get("retry_count", 0) + (1 if is_retry else 0),
         "token_usage": state.get("token_usage", 0) + tokens,
     }
+
 
 async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
     """只读验收：对照需求+计划+执行轨迹，输出 PASS/FAIL + 原因。"""
@@ -261,7 +280,9 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
                 tokens += _msg_tokens(msg)
                 if isinstance(msg, AIMessage):
                     if msg.content:
-                        verdict_text = msg.content if isinstance(msg.content, str) else str(msg.content)
+                        verdict_text = (
+                            msg.content if isinstance(msg.content, str) else str(msg.content)
+                        )
                     for tc in getattr(msg, "tool_calls", None) or []:
                         trace.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
     parsed = _extract_json(verdict_text)
@@ -289,6 +310,7 @@ def decide_after_verify(state: AgentState) -> Literal["executor", "end"]:
 # ═══════════════════════════════════════════════════════════════════
 # Agent 构造
 # ═══════════════════════════════════════════════════════════════════
+
 
 def build_executor_agent(tools: list) -> Any:
     """构造 Executor：现有 create_react_agent，全量工具 + 现有系统 Prompt。"""
@@ -354,6 +376,7 @@ def build_graph(executor_agent: Any, verifier_agent: Any, checkpointer: Any = No
 # ═══════════════════════════════════════════════════════════════════
 # 异步入口（供 evals / REPL 使用）
 # ═══════════════════════════════════════════════════════════════════
+
 
 async def run_multi_agent(
     user_input: str,
