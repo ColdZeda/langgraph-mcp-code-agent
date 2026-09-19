@@ -99,8 +99,11 @@ tests/                           36 个测试（config / file_saver / mysql_safe
 - 单题重跑用**新 run-id**（避免覆盖），并先删对应的 checkpoint。
 - `runtime/runs/` 被 gitignore；**正式结果才复制到 `docs/evidence/`** 纳入版本控制。
 - 计分口径偏软：`pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分。
-- 超时取消时会**漏关 MCP 子进程**（`code_agent.py:173-179` 只捕获 `Exception`，
-  而 3.13 下取消抛 `CancelledError`）→ 全量跑会累积僵尸进程。
+- 超时取消时的资源清理（`code_agent.py` 的 `finally`，已修）：
+  实测校正 —— **单次取消不会漏关**（取消在进入清理块之前就投递完了，6/6 都能关掉）；
+  危险的是「**清理期间又收到一次取消**」：只 `except Exception` 会让剩余 client 全部关不掉，
+  而只改成 `except BaseException` 也不行（吞掉一次取消后，后续每个 await 都会立刻再抛，实测 0/6）。
+  现在的写法是把清理放进**独立任务 + `asyncio.shield`**，取消只能打断"等待"、打不断"清理"。
 
 ### 仓库整理
 
