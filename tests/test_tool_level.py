@@ -1,4 +1,10 @@
-"""Evals 评估运行器 — 直接调用工具函数验证，不依赖 Agent REPL。"""
+"""工具级测试 — 直接调用工具函数验证，不依赖 Agent REPL。
+
+原名 evals/test_evals.py，阶段 0（T0.4）移到 tests/ 并改名，目的是消除
+"跑 pytest tests/ evals/ = 跑评估"的歧义：
+- 这里只是工具级断言（写文件 / 读片段 / AST / diff），不会跑 30 题端到端评估；
+- 端到端评估的入口是 evals/run_e2e.py（脚本，不是 pytest 测试）。
+"""
 
 import sys
 from pathlib import Path
@@ -8,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from evals.tasks import get_tasks
 
 
-class TestEvalsToolLevel:
+class TestToolLevel:
     """工具级验证（不依赖 LLM）。"""
 
     def test_e001_write_file(self):
