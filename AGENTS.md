@@ -33,8 +33,9 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 装依赖 | `uv sync` |
 | 跑 Agent（REPL） | `uv run python main.py` |
 | 指定会话 | `uv run python main.py --thread-id x` |
+| 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（36 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（59 个） |
 | 全量评估（30 题） | `uv run python evals/run_e2e.py --all --run-id <name>` |
 | 单题评估 | `uv run python evals/run_e2e.py --task E011 --run-id <name>` |
 | RAG 基准 | `uv run python evals/rag_bench.py` |
@@ -57,23 +58,23 @@ app/code_agent/
 ├── mcp_servers/                 powershell(2) / browser(1) / mysql(10) / vm(4) / code_tools(4)
 ├── rag/rag.py                   RAG MCP Server（4 个工具；import 时建库 + 灌知识）
 ├── tools/file_tools.py          FileManagementToolkit(root_dir=WORKSPACE_DIR) → 7 个工具
-├── tools/file_saver.py          ⚠️ 自定义 Checkpoint Saver，**已弃用待删除**
 └── utils/mcp.py                 load_mcp_tools / load_mcp_tools_managed（工厂）
 app/web/server.py                FastAPI：WS /ws/chat + REST（sessions/settings）+ 静态托管 dist
 evals/                           tasks.py(30 题) / verifiers.py(评分器) / run_e2e.py(脚本) / rag_bench.py / compare.py
-tests/                           36 个测试（config / file_saver / mysql_safe_ident / prompts / tool_level）
+tests/                           59 个测试（config / prompts / mysql_safe_ident / mysql_readonly / multi_agent / checkpoint / cleanup / tool_level）
 ```
 
 ## 已知坑（务必先看）
 
-### 架构层面的"未接线 / 不生效"（都是已知的，不要被文档误导）
+### 架构层面的关键事实（阶段 1 已修，别按老印象理解）
 
-| 现象 | 真相 |
+| 项 | 现状 |
 |---|---|
-| "跨重启记忆" | **未接线**：`multi_agent.py:327` 是 `graph.compile()` 无参；`runtime/checkpoint/` 实测为空 → Web UI 的"历史会话"恒为空 |
-| "Verifier 打回最多 2 轮" | **不生效**：`retry_count` 全仓**没有任何一处自增**（`:36/49/154/179/263/354` 全是读）→ 会一直打回，直到撞 evals 的 240s 超时 |
-| CLI `--thread-id` | **收下就丢**（`code_agent.py:41` 从未传下去），且 `main.py:12` 默认是随机 UUID → 每次启动都是新会话 |
-| Web 侧跨轮 history | 存的是 `{"role","content"}` **字典**，CLI 侧存的是 `HumanMessage` 对象（两处不一致，都在待改造清单里） |
+| **跨轮记忆** | ✅ 已接线：`SqliteSaver`（`AsyncSqliteSaver`）+ `runtime/checkpoints.db`；`AgentState.messages` 用 `add_messages` reducer 累积；每轮由 `run_multi_agent` 在图跑完后追加一对 (任务, 回复) |
+| **thread_id** | 三条路径**都必须传**：CLI（`run_agent`）、Web（`server.py`）、evals（`run_single_task` ← `run_e2e.py` 的 `eval-<id>`）。漏传会直接报错 |
+| CLI 会话 ID | 默认取 `.env` 的 `CODE_AGENT_THREAD_ID`（默认 `default`）→ 关掉再打开会续上次对话；`--new-session` 开新会话 |
+| **Verifier 打回** | ✅ 已修：`retry_count` 在 `executor_node` 里「是重跑才 +1」→ 最多打回 `MAX_RETRY`(2) 次，Executor 共跑 `MAX_RETRY+1` 次 |
+| `file_saver.py` | ✅ **已删除**（连同 `tests/test_file_saver.py`）；它曾是全仓唯一非法 UTF-8 的 `.py` |
 
 ### 环境与工具链
 
@@ -117,24 +118,26 @@ tests/                           36 个测试（config / file_saver / mysql_safe
 prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 / 多 Agent 0.967）→ Web UI ✅
 ```
 
-**当前阶段**：**改造期**。方案文档在**仓库外**：`E:\agentstart\上班\work-content\program-fix第七版\`
-（8 个阶段 + `讨论结论汇总.md`；第六版作为原始底稿保留在 `program-fix第六版/`）。
-阶段 0（文档清洗与仓库整理）已完成；后续阶段按顺序执行，**每阶段做完停下汇报 + 提交推送**。
+**当前阶段**：**改造期**。方案文档在**仓库外**：`E:\agentstart\上班\work-content\program-fix第八版\`
+（**第八版 = 第七版 + 执行期实测订正**；第七版是冻结原档，第六版是原始底稿）。
+阶段 0（文档清洗与仓库整理）已完成；阶段 1（修 P0 缺陷）进行中；
+后续阶段按顺序执行，**每阶段做完停下汇报 + 提交推送**。
 
 **已知遗留**：
 
-1. **E013 偶发 timeout**（未根治）——推断根因：`retry_count` 不自增 → 无限打回 → 先撞 evals 的 240s 超时；
-   `recursion_limit: 100` 只是理论天花板。**未验证**，且 evals 重做后该存档作废。
-2. 记忆未接线（见上表）；`file_saver.py` 待删除（它有 3 个致命缺陷：`put_writes` 空实现、
-   `get_tuple` 不返回 `pending_writes`、异步方法是同步透传）。
-3. 全新 clone 下 `pytest` 会在运行时目录断言上失败（见上）。
-4. 评估体系待重做（口径偏软：14/30 题没有产物级断言）。
+1. **E013 偶发 timeout** —— 根因（`retry_count` 不自增 → 无限打回）**已在阶段 1 修复并验证**：
+   把自增去掉后测试立刻以 `GraphRecursionError: Recursion limit of 100` 失败。
+   evals 重做后该存档作废。
+2. **评估体系待重做**（口径偏软：14/30 题没有产物级断言）→ 阶段 6。
+3. **前端构建产物**：`app/web/frontend/dist/` 必须入库；⚠️ 根 `.gitignore` 曾有裸 `dist/`
+   会把新构建的哈希资源一并吞掉（已改为 `/dist/`）。改前端后必须 `npm run build` 并提交
+   **新增与删除**的资源文件。
 
 ## 数字来源速查
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 36 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 59 | `uv run python -m pytest tests/ -q` |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
 | 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |

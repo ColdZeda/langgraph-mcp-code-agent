@@ -21,8 +21,8 @@ main.py (CLI REPL)                app/web/server.py (FastAPI + Vue3 Web UI, 端�
         ↓ FAIL → 带原因打回 Executor（⚠️ 打回上限当前未生效，见下）
 
    ├── LLM：DeepSeek（OpenAI 兼容接口；Web UI 内可热切换模型 / 地址 / Key）
-   ├── Memory：⚠️ 当前未接线（`build_graph` 是 `graph.compile()` 无参；
-   │            `runtime/checkpoint/` 实测为空，Web UI 的"历史会话"因此恒为空）
+   ├── Memory：SqliteSaver（`runtime/checkpoints.db`，按 thread_id 恢复跨轮对话，
+   │            进程重启后仍记得；Web UI 的"历史会话"就是读它）
    └── Tools：6 个自建 MCP Server（stdio 子进程）+ FileManagementToolkit
        ├── powershell_tools.py   Windows 命令执行（危险命令黑名单）
        ├── browser_tools.py      Selenium Edge + SearXNG 搜索
@@ -71,8 +71,8 @@ uv run python main.py --debug                # 调试模式（详细日志）
 
 退出：`exit` / `quit` / `q` / `退出` / `bye`
 
-> ⚠️ 不传 `--thread-id` 时**每次启动都会生成新的随机 ID**，所以当前无法跨重启续聊
-> （记忆未接线 + ID 随机，两处都在改造计划里）。
+> **跨轮记忆**存在 `runtime/checkpoints.db`：不传参数时用 `.env` 的 `CODE_AGENT_THREAD_ID`
+> （默认 `default`）→ **关掉再打开会继续上一次的对话**；想开一个新会话用 `--new-session`。
 
 ### 运行（Web UI）
 
@@ -84,7 +84,7 @@ uv run uvicorn app.web.server:app --port 8000
 - 聊天界面：任务完成后一次性推送结构化结果——Planner 计划、工具调用轨迹（可折叠）、
   Verifier 验收徽章、token / 耗时统计
 - 模型设置：界面内热切换模型 / API 地址 / Key（设置只存本机 `runtime/web-settings.json`，不进仓库）
-- 会话列表：读 `runtime/checkpoint/` 的目录名 → **记忆未接线，当前恒为空**
+- 会话列表：读 `runtime/checkpoints.db`；**点击任一会话即可切换并回放历史**，之后的对话在原会话上续聊
 
 > 前端（Vue 3 + Vite）源码在 `app/web/frontend/`，构建产物 `dist/` 已入库——不装 Node 也能直接运行；
 > 改前端后 `cd app/web/frontend && npm install && npm run build` 重新构建。
@@ -178,7 +178,6 @@ uv run python evals/rag_bench.py
 │   │   ├── rag/rag.py             # RAG MCP Server（ChromaDB）
 │   │   ├── tools/
 │   │   │   ├── file_tools.py      # FileManagementToolkit（限定在 workspace）
-│   │   │   └── file_saver.py      # 自定义 Checkpoint Saver（⚠️ 已弃用，待删除）
 │   │   └── utils/mcp.py           # MCP 工具加载工厂
 │   └── web/
 │       ├── server.py              # FastAPI（WS + REST + 静态托管）
@@ -199,7 +198,7 @@ uv run python evals/rag_bench.py
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 36 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 59 | `uv run python -m pytest tests/ -q` |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
