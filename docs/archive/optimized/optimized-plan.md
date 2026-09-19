@@ -1,7 +1,7 @@
 # Optimized 阶段优化计划 — 多 Agent 架构改造
 
 > 状态：方案讨论定稿，待实施
-> 关联文档：`../evidence/evals-baseline-report.md`（评估体系）、`../evidence/baseline-final.json`（baseline 存档）、`../interview/resume-star.md`（STAR 叙事）
+> 关联文档：`../../evidence/evals-baseline-report.md`（评估体系）、`../../evidence/baseline-final.json`（baseline 存档）、`../interview/resume-star.md`（STAR 叙事）
 
 ---
 
