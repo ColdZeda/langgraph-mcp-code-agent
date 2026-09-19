@@ -1,0 +1,55 @@
+# docker-compose.yml —— 只定义【可在 Windows 侧管理】的依赖服务
+#
+# 为什么 Agent 主体不容器化：
+#   6 个 MCP 工具里，PowerShell（powershell.exe）与 WSL2（wsl.exe）必须依赖 Windows 宿主环境，
+#   Linux 容器里跑不了。详见 README 的「环境依赖」章节。
+#
+# 为什么 nginx 不在这里：
+#   它的挂载源是 WSL 里的 /home/leprite/nginx/*，而本文件在 Windows 侧执行。
+#   从 Windows 跑 compose 时，Linux 路径会被解析到 docker-desktop 发行版 → 找不到 →
+#   Docker 会【静默挂载空目录】（不报错，最难查）。所以 nginx 继续由 WSL 里的
+#   ~/nginx/docker-compose.yaml 管理；scripts/start-deps.ps1 会把两边都拉起来。
+name: code-agent-deps
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: agent-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root          # 对应 app/code_agent/config.py 的默认值
+      MYSQL_DATABASE: agent_test         # 对应 config.py 的默认库名
+    ports:
+      - "3307:3306"                      # 对应 config.py 的 MYSQL_PORT 默认值
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 只读账号初始化脚本（首次初始化数据目录时执行一次）
+      - ./scripts/mysql-init:/docker-entrypoint-initdb.d:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "8888:8080"                      # 对应 config.py 的 SEARXNG_URL 默认值
+    volumes:
+      # 这两个是【Windows 路径】，从 Windows 跑 compose 没问题
+      - "E:/agentstart/work/searXNG/config:/etc/searxng"
+      - "E:/agentstart/work/searXNG/data:/var/cache/searxng"
+
+  redis:
+    image: redis/redis-stack-server
+    container_name: redis-stack-server
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # ⚠️ 故意不挂数据卷 —— 定位是【纯缓存】，数据可丢（阶段 4 会用它做工具结果缓存）
+
+volumes:
+  mysql-data:

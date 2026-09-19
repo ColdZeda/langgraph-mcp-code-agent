@@ -89,20 +89,37 @@ uv run uvicorn app.web.server:app --port 8000
 > 前端（Vue 3 + Vite）源码在 `app/web/frontend/`，构建产物 `dist/` 已入库——不装 Node 也能直接运行；
 > 改前端后 `cd app/web/frontend && npm install && npm run build` 重新构建。
 
-### 启动依赖服务（可选）
+### 启动依赖服务
 
-依赖服务是 Docker 容器。**注意启动方式不一样**（实测各自是哪种，见下表）：
+```powershell
+.\scripts\start-deps.ps1     # 一键起全部 4 个：mysql / searxng / redis / nginx
+.\scripts\stop-deps.ps1      # 停止（保留容器，下次起得更快）
+```
 
-| 容器 | 谁创建的 | 启动方式 |
-|---|---|---|
-| `agent-mysql` | compose（WSL `~/mysql/docker-compose.yaml`） | `wsl -d Ubuntu -- bash -lc "cd ~/mysql && docker compose up -d"` |
-| `my-nginx` | compose（WSL `~/nginx/docker-compose.yaml`） | `wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"` |
-| `searxng` | `docker run` | `docker start searxng` |
-| `redis-stack-server` | `docker run` | `docker start redis-stack-server` |
+或手动分两步：
 
-> - **Docker Desktop 的"启动按钮"等于 `docker start`**，用的是容器创建时固化的配置；
->   改了 compose 文件必须用 `docker compose up -d` 才生效。
-> - 这四个容器的重启策略当前都是 `no` → **Docker Desktop 重启后不会自动起来**，需要手动起。
+```powershell
+docker compose up -d                                            # mysql / searxng / redis
+wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
+```
+
+| 服务 | 容器 | 端口 | 说明 |
+|---|---|---|---|
+| MySQL 沙盒 | `agent-mysql` | 3307→3306 | 数据存在**命名卷** `mysql-data`；首次初始化会执行 `scripts/mysql-init/*.sql` |
+| 搜索 | `searxng` | 8888→8080 | 配置/缓存在 `E:\agentstart\work\searXNG\{config,data}` |
+| 缓存 | `redis-stack-server` | 6379 | 纯缓存，**故意不挂卷**（数据可丢） |
+| 静态发布 | `my-nginx` | 80 | 挂载源在 WSL（见下），由 WSL 里那份 compose 管理 |
+
+**为什么 Agent 主体不容器化**：6 个 MCP 工具里，**PowerShell（`powershell.exe`）与 WSL2（`wsl.exe`）**
+必须依赖 Windows 宿主环境，Linux 容器里跑不了。
+
+**为什么 nginx 单独管理**：它的挂载源是 WSL 里的 `/home/leprite/nginx/*`（配合 `vm.py` 的"上传产物到 WSL"链路），
+而主 compose 在 Windows 侧执行 —— 从 Windows 跑会把 Linux 路径解析到 docker-desktop 发行版，
+导致**静默挂载空目录**（不报错，最难查）。所以两边分开管，`start-deps.ps1` 会把两边都拉起来。
+
+> 4 个容器都带 `restart: unless-stopped` → **打开 Docker Desktop（= 启动 Docker 引擎）时会自动起来**。
+> 例外：如果你**手动 stop** 过某个容器，引擎不会自动起它（这是 `unless-stopped` 的定义），
+> 这时用 `scripts\start-deps.ps1` 即可。
 
 ## 功能
 
