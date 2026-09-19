@@ -1,0 +1,38 @@
+{
+  "_readme": [
+    "模型注册表 —— 这个文件进版本控制（配置是人写的，不是运行时产物）。",
+    "用法：roles 决定每个角色默认用哪个模型；fallback 决定某角色失败时的降级顺序（可留空）。",
+    "密钥不放这里，放 .env（MODEL_API_KEY）；这里只写模型名与 base_url。",
+    "新增模型：在 models 里加一条，再把 roles/fallback 指过去即可。"
+  ],
+  "models": {
+    "ds-v4-flash": {
+      "provider": "openai-compatible",
+      "model": "deepseek-v4-flash",
+      "base_url": "https://api.deepseek.com"
+    },
+    "ds-v41-flash": {
+      "provider": "openai-compatible",
+      "model": "deepseek-v4.1-flash",
+      "base_url": "https://api.deepseek.com"
+    },
+    "qwen-max": {
+      "provider": "openai-compatible",
+      "model": "qwen-max",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    }
+  },
+  "roles": {
+    "planner": "ds-v4-flash",
+    "executor": "ds-v4-flash",
+    "verifier": "ds-v4-flash",
+    "router": "ds-v4-flash"
+  },
+  "fallback": {
+    "planner": [],
+    "executor": [],
+    "verifier": [],
+    "router": []
+  },
+  "timeout_sec": 60
+}

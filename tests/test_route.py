@@ -17,6 +17,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.agent import multi_agent as ma
 
+
+class _FakeRegistry:
+    """假注册表：planner 节点走 registry.chain("planner")。
+
+    ⚠️ 只 patch get_llm 是不够的 —— 那样测试会**真的调用模型**（实测每次 13~19 秒）。
+    """
+
+    def __init__(self, llm):
+        self._llm = llm
+
+    def chain(self, role="executor"):
+        return [self._llm]
+
+    def role_models(self):
+        return {r: "fake-model" for r in ("planner", "executor", "verifier", "router")}
+
+
 PLAN_JSON = '{"goal": "g", "steps": ["s1"], "verify_tools": ["read_file_range"]}'
 PASS_VERDICT = '{"verdict": "PASS", "reason": "ok"}'
 
@@ -60,8 +77,10 @@ class _FakeAgent:
 
 @pytest.fixture
 def thread_id(monkeypatch, tmp_path):
+    llm = _FakeLLM()
     monkeypatch.setattr(ma, "CHECKPOINT_DB", tmp_path / "checkpoints.db")
-    monkeypatch.setattr(ma, "get_llm", lambda *a, **k: _FakeLLM())
+    monkeypatch.setattr(ma, "get_llm", lambda *a, **k: llm)
+    monkeypatch.setattr(ma, "registry", _FakeRegistry(llm))
     return f"route-test-{uuid4().hex[:8]}"
 
 

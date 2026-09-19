@@ -37,7 +37,7 @@ from app.code_agent.config import (
     VM_SERVER_PATH,
     setup_logging,
 )
-from app.code_agent.model.llm import build_llm, set_llm
+from app.code_agent.model.llm import ROLE_NAMES, build_llm, registry, set_llm
 from app.code_agent.tools.file_tools import file_tools
 from app.code_agent.utils.mcp import load_mcp_tools
 
@@ -105,19 +105,36 @@ def masked_settings(settings: dict) -> dict:
     return {
         "model": settings.get("model") or "",
         "base_url": settings.get("base_url") or "",
+        "roles": settings.get("roles") or {},
         "api_key_set": bool(key),
         "api_key_tail": key[-4:] if len(key) >= 8 else "",
     }
+
+
+def apply_settings(settings: dict) -> None:
+    """把（本地保存的）设置应用到 LLM 注册表。
+
+    ⚠️ 启动时也要走这里 —— 改造前 lifespan 只传了 model/base_url、**漏传 api_key**，
+    导致在界面里填的 Key 重启后失效。
+    """
+    set_llm(
+        model=settings.get("model") or None,
+        base_url=settings.get("base_url") or None,
+        api_key=settings.get("api_key") or None,
+    )
+    roles = settings.get("roles") or {}
+    if roles:
+        registry.set_role_models(roles)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await runtime.load()
     settings = load_settings()
-    if settings.get("model") or settings.get("base_url"):
-        set_llm(model=settings.get("model"), base_url=settings.get("base_url"))
+    if settings:
+        apply_settings(settings)  # 含 api_key 与各角色模型（改造前漏了 api_key）
         runtime.rebuild_agents()
-        logger.info(f"已应用本地模型设置: model={settings.get('model')}")
+        logger.info(f"已应用本地模型设置: {masked_settings(settings)}")
     yield
 
 
@@ -132,9 +149,36 @@ async def get_settings():
     return masked_settings(load_settings())
 
 
+@app.get("/api/models")
+async def list_models():
+    """模型注册表（给前端下拉框当数据源）。"""
+    return {
+        "roles": registry.role_models(),
+        "roleNames": list(ROLE_NAMES),
+        "models": [
+            {
+                "key": key,
+                "model": spec.get("model", key),
+                "base_url": spec.get("base_url", ""),
+                "provider": spec.get("provider", "openai-compatible"),
+            }
+            for key, spec in registry.models.items()
+        ],
+    }
+
+
 @app.post("/api/settings")
 async def update_settings(body: dict):
-    """更新模型设置并热切换（只覆盖传入字段；api_key 传空串表示清除为 .env 默认）。"""
+    """更新模型设置并热切换（只覆盖传入字段；api_key 传空串表示清除为 .env 默认）。
+
+    支持：旧的三个字段（model / base_url / api_key）+ 新增的 `roles`（按角色的模型键）。
+    ⚠️ 未知字段会**记日志**而不是静默丢弃（改造前是白名单循环，前端加字段会被无声吞掉）。
+    """
+    known = {"model", "base_url", "api_key", "roles"}
+    unknown = [k for k in body if k not in known]
+    if unknown:
+        logger.warning(f"/api/settings 收到未知字段（已忽略）：{unknown}")
+
     settings = load_settings()
     for field in ("model", "base_url", "api_key"):
         if field in body:
@@ -143,12 +187,15 @@ async def update_settings(body: dict):
                 settings[field] = value
             else:
                 settings.pop(field, None)
+
+    roles_in = body.get("roles")
+    if isinstance(roles_in, dict):
+        cleaned = {r: str(v).strip() for r, v in roles_in.items() if r in ROLE_NAMES}
+        merged = {**(settings.get("roles") or {}), **cleaned}
+        settings["roles"] = {r: v for r, v in merged.items() if v}  # 空值 = 恢复配置默认
+
     save_settings(settings)
-    set_llm(
-        model=settings.get("model") or None,
-        base_url=settings.get("base_url") or None,
-        api_key=settings.get("api_key") or None,
-    )
+    apply_settings(settings)
     runtime.rebuild_agents()
     return {"ok": True, **masked_settings(settings)}
 

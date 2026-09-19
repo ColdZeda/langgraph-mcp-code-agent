@@ -24,7 +24,7 @@ from app.code_agent.agent.prompts import (
     SYSTEM_PROMPT_TEMPLATE,
 )
 from app.code_agent.config import CHECKPOINT_DB
-from app.code_agent.model.llm import get_llm
+from app.code_agent.model.llm import get_llm, invoke_with_fallback, registry, with_fallback
 
 # ═══════════════════════════════════════════════════════════════════
 # Verifier 只读工具白名单（代码级强制：不在名单内的工具绝不会挂载给 Verifier）
@@ -181,8 +181,10 @@ async def planner_node(state: AgentState) -> dict:
             f"{state['verdict']}\n）"
         )
     prompt = PLANNER_PROMPT.format(user_input=state["user_input"], retry_context=retry_context)
-    resp = await get_llm().ainvoke(
-        [SystemMessage(content="你是规划员。"), HumanMessage(content=prompt)]
+    # 走 planner 角色的降级链（模型报错/超时会自动换下一个）
+    resp = await invoke_with_fallback(
+        registry.chain("planner"),
+        [SystemMessage(content="你是规划员。"), HumanMessage(content=prompt)],
     )
     plan_text = resp.content if isinstance(resp.content, str) else str(resp.content)
     parsed = _extract_json(plan_text)
@@ -342,7 +344,7 @@ def route_task(task: str | dict) -> Literal["simple", "complex"]:
 def _llm_classify_complexity(task_text: str) -> Literal["simple", "complex"]:
     """用一次轻量 LLM 调用判断复杂度；**失败时保守走 complex**（宁可多花 token 也别漏验证）。"""
     try:
-        resp = get_llm().invoke(ROUTER_PROMPT.format(task=task_text))
+        resp = get_llm("router").invoke(ROUTER_PROMPT.format(task=task_text))
         verdict = str(resp.content).strip().lower()
         return "complex" if "complex" in verdict else "simple"
     except Exception:
@@ -388,8 +390,10 @@ def build_executor_agent(tools: list, *, mode: str = "multi", llm: Any | None = 
 
     template = SYSTEM_PROMPT_TEMPLATE if mode == "single" else EXECUTOR_PLAN_PROMPT
     prompt = PromptTemplate.from_template(template=template)
+    # 走 executor 角色的降级链：主力失败时 LangChain 会自动切到备用模型
+    model = llm or with_fallback(registry.chain("executor"))
     return create_react_agent(
-        model=llm or get_llm(),
+        model=model,
         tools=tools,
         debug=False,
         prompt=prompt.format(**PROMPT_CONTEXT),
@@ -408,7 +412,7 @@ def build_verifier_agent(all_tools: list, verify_tool_names: set[str] | None = N
         "【绝不修改、创建、删除任何文件或数据】。"
     )
     return create_react_agent(
-        model=get_llm(),
+        model=with_fallback(registry.chain("verifier")),
         tools=verifier_tools,
         debug=False,
         prompt=verifier_prompt,

@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.agent.code_agent import run_single_task
 from app.code_agent.config import MODEL_NAME, WORKSPACE_DIR
+from app.code_agent.model.llm import registry
 from evals.tasks import TASKS, get_tasks
 from evals.verifiers import EvalContext, VerifierResult
 
@@ -325,6 +326,7 @@ def build_meta(run_id: str, results: list[dict]) -> dict:
         "git_commit": get_git_commit(),
         "model": MODEL_NAME,  # 不再硬编码：换模型后存档里的 model 字段会跟着变
         "mode": RUN_MODE,  # 本次运行用的执行模式（single / multi / auto）
+        "role_models": registry.role_models(),  # 每个角色实际用的模型键
         "evals_version": "v2.0",
         "total_tasks": len(results),
         "overall": {
@@ -399,6 +401,12 @@ if __name__ == "__main__":
     run_id = args.run_id or f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     RUN_MODE = args.mode
+
+    # --role-models：本次运行的临时覆盖（不改 config/models.json）
+    if args.role_models:
+        applied = registry.override_from_spec(args.role_models)
+        print(f"角色模型临时覆盖：{applied}")
+    print(f"当前角色模型：{registry.role_models()}")
 
     print(f"Run ID: {run_id}  |  {len(selected)} tasks  |  force={args.force}  |  mode={args.mode}")
     asyncio.run(main_async(selected, run_id, args.force, args.mode))

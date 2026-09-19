@@ -56,6 +56,10 @@ MODEL_NAME = os.getenv("MODEL_NAME", "deepseek-v4-flash")
 MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "https://api.deepseek.com")
 MODEL_API_KEY = os.getenv("MODEL_API_KEY")
 
+# 单次 LLM 调用的超时（秒）。管的是"模型**太慢**/挂起"，
+# 与降级链（管"模型**报错**"）是两件事，两个都要有。
+LLM_TIMEOUT = int(os.getenv("CODE_AGENT_LLM_TIMEOUT", "60"))
+
 # 流式请求时请求 API 返回 usage 统计（DeepSeek 支持 stream_options.include_usage）。
 # 若换成不支持的 API 可设 LLM_STREAM_USAGE=0 关闭，此时 token 统计会退化为 0。
 LLM_STREAM_USAGE = os.getenv("LLM_STREAM_USAGE", "1").lower() in ("1", "true", "yes", "on")
