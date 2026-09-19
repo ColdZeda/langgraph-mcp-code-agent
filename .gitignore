@@ -30,3 +30,4 @@ runtime/*
 node_modules/
 .pytest_cache
 .zcode/
+.coverage

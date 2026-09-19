@@ -52,10 +52,10 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 指定会话 | `uv run python main.py --thread-id x` |
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（80 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（154 个） |
 | 全量评估（30 题） | `uv run python evals/run_e2e.py --all --run-id <name>` |
 | 单题评估 | `uv run python evals/run_e2e.py --task E011 --run-id <name>` |
-| RAG 基准 | `uv run python evals/rag_bench.py` |
+| RAG 基准（含分块/精排指标） | `uv run python evals/rag_bench.py` |
 | 重建前端 | `cd app/web/frontend && npm run build` |
 
 > ⚠️ `pytest` **不能**跑评估（不认 `--task`）；评估一律用 `evals/run_e2e.py`。
@@ -69,21 +69,27 @@ app/code_agent/
 ├── agent/multi_agent.py         ★ 状态图：route_node / planner_node / executor_node / verifier_node
 │                                  + _route_decide / after_executor / decide_after_verify
 │                                  + READONLY_TOOL_NAMES（Verifier 只读白名单）+ build_graph(mode=…)
+├── agent/context.py             上下文工程：工具结果外置(T4.1) / 对话压实(T4.2) / token 预算(T4.3)
+├── agent/memory.py              分层记忆读写：自动注入(T4.4②) / 自动沉淀(T4.4③)
 ├── agent/code_agent.py          REPL 循环 run_agent() + evals 入口 run_single_task()
 ├── agent/prompts.py             SYSTEM_PROMPT_TEMPLATE（Plan→Execute→Verify 三步法）+ PROMPT_CONTEXT
 ├── model/llm.py                 LLMRegistry：get_llm(role) / chain(role) / invoke_with_fallback
 │                                  + build_llm / set_llm（热切换后需重建 agent）
 ├── config.py                    所有配置 + setup_logging（stderr）
 ├── mcp_servers/                 powershell(2) / browser(1) / mysql(10) / vm(4) / code_tools(4)
-├── rag/rag.py                   RAG MCP Server（4 个工具；import 时建库 + 灌知识）
+├── rag/rag.py                   RAG MCP Server（4 个工具，**薄壳**）
+├── rag/store.py                 知识库核心：分块索引 / 粗召回 / CrossEncoder 精排（全懒加载）
+├── rag/chunking.py              纯分块函数（不 import torch，单测毫秒级）
 ├── tools/file_tools.py          FileManagementToolkit(root_dir=WORKSPACE_DIR) → 7 个工具
-└── utils/mcp.py                 load_mcp_tools（工厂；client 无需关闭，见「已知坑」）
+├── utils/mcp.py                 load_mcp_tools（工厂；client 无需关闭，见「已知坑」）
+├── utils/tool_cache.py          只读工具结果缓存（Redis；挂了自动降级）
+└── utils/tool_wrap.py           工具包装：结果外置 + 结果缓存（MCP 就地改 / 同步工具换代理）
 config/models.json               模型注册表 + 角色分配 + 降级链（**进版本控制**，不要放 runtime/）
 app/web/server.py                FastAPI：WS /ws/chat + REST（sessions/settings/models）+ 静态托管 dist
 evals/                           tasks.py(30 题) / verifiers.py(评分器) / run_e2e.py(脚本) / rag_bench.py / compare.py
-tests/                           80 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
-                                 multi_agent / checkpoint / route / llm_registry /
-                                 mcp_tool_lifecycle / tool_level）
+tests/                           154 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+                                 multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
+                                 tool_level / context / memory / tool_cache / tool_wrap / rag_chunking）
 ```
 
 ## 已知坑（务必先看）
@@ -122,6 +128,41 @@ tests/                           80 个测试（config / prompts / mysql_safe_id
     （里面建只读账号 `agent_readonly`）。
 - **搜索已不依赖浏览器**（阶段 2）：`browser_tools.py` 只调 SearXNG 的 JSON API，
   文件名是历史遗留；**Selenium / Edge / msedgedriver / 调试端口都不再需要**。
+
+### 上下文工程与分层记忆（阶段 4，四条都是实测结论）
+
+- **工具结果外置**（`utils/tool_wrap.py` + `agent/context.py`）：
+  阈值 `EXTERNALIZE_THRESHOLD=6000` 字符或 150 行 → 落盘 `runtime/tool_results/`，上下文里只留预览 + 路径。
+  ⚠️ **`read_file_range` / `read_file` 在豁免名单里，不许外置** ——
+  实测同一道"读全文并总结"的题：外置后模型看不见内容，改用分段读绕过去，
+  **12 次工具调用 / 25 步，token 从 17,361 涨到 127,071（7.3 倍）**。
+  另外**读 `tool_results/` 里的文件时绝不再外置**（同内容同 hash → 又指向同一个文件 = 死循环）。
+- **包装工具的两条路径**（踩过两次，别重蹈）：
+  MCP 工具的 `coroutine` 是 **StructuredTool 声明过的字段**，可以就地替换；
+  但 FileManagementToolkit 的工具是 **pydantic 模型**，往实例上塞 `coroutine` 会直接报
+  `ValueError: "CopyFileTool" object has no field "coroutine"` → 这类工具要**换成同名 StructuredTool 代理**。
+  所以 `wrap_tools()` **必须接返回值**（`tools = wrap_tools(tools, cache)`），不是原地改。
+- **缓存命中要补回二元组**：`content_and_artifact` 的工具返回裸字符串会被 LangChain 拒绝，
+  所以命中缓存时返回 `(文本, None)`。
+- **只读工具缓存**（`utils/tool_cache.py`）：只缓存只读工具，**且默认不收 `mysql_execute_query`**
+  （它只读，但返回的是会变的数据 —— "先写再查"的题会拿到过期结果）。
+  任何写操作执行后**清空本会话缓存**；Redis 不可用则静默降级。
+  评估时每个任务一个独立 scope，避免跨任务串味。
+- **对话压实 / token 预算**（`agent/context.py`）：
+  历史估算超 `COMPACT_THRESHOLD=6000` token → 最老的一段压成四段式摘要（**摘要失败就原样保留**，
+  省 token 不能把历史弄丢）；`NODE_TOKEN_BUDGET=30000` 剪枝、`TASK_TOKEN_BUDGET=200000` 硬终止。
+- **RAG 分块 + 精排**：collection 换名 `terminal_knowledge_v2`（**新旧粒度不能混在一个 collection**，
+  否则检索更差）；id 是 `f"{source}#{块序号}"`，元数据 `{source, chunk, mtime}`，增量按 `where={"source":…}` 删旧。
+  reranker 从**本地路径**加载（`CODE_AGENT_RERANKER_PATH`），**路径不存在就降级为纯向量召回，不联网**。
+  实测：top-1（文件粒度）0.6 → **0.9**、recall 0.4 → **1.0**、稳态延迟 13.2ms → **81ms**。
+  ⚠️ **本机的 reranker 是从 hf-mirror 下的**（HuggingFace 直连超时、ModelScope 没有这个模型），
+  位置 `../embedding-model/cross-encoder/ms-marco-MiniLM-L-6-v2`，**在仓库外、不进版本控制**。
+- **自动注入 / 自动沉淀**（`agent/memory.py`）：在 **Agent 进程内**直接调 `rag/store.py`，**不走 MCP** ——
+  MCP 工具每次调用都要新起 python 子进程重新 import chromadb + torch，延迟从毫秒级变秒级。
+  ⚠️ **评估时 `run_single_task` 强制关掉自动沉淀**（`auto_deposit=False`），
+  否则评测过程产生的经验会写进知识库、改写后续题目的检索结果。
+- **`import app.code_agent.rag.store` 不加载模型**（全懒加载）：单测里碰它不会去 load torch。
+  测试环境由 `tests/conftest.py` 统一关掉自动注入 / 自动沉淀 / 工具缓存。
 
 ### evals 相关
 
@@ -162,8 +203,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 **当前阶段**：**改造期**。方案文档在**仓库外**：`E:\agentstart\上班\work-content\program-fix第八版\`
 （**第八版 = 第七版 + 执行期实测订正**；第七版是冻结原档，第六版是原始底稿）。
 阶段 0（文档清洗与仓库整理）、阶段 1（修 P0 缺陷）、阶段 2（降复杂度与容器化）、
-阶段 3（执行模式与模型配置）已完成；后续阶段按顺序执行，
-**每阶段做完停下汇报 + 提交推送**。
+阶段 3（执行模式与模型配置）、**阶段 4（上下文工程与分层记忆）**已完成；
+后续阶段按顺序执行，**每阶段做完停下汇报 + 提交推送**。
 
 **已知遗留**：
 
@@ -172,6 +213,11 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
    会把新构建的哈希资源一并吞掉（已改为 `/dist/`）。改前端后必须 `npm run build` 并提交
    **新增与删除**的资源文件。
 3. **Web 端节点级实时推送**（现在只在任务完成后一次性推送）→ 阶段 5 的 T5.6（用现有 WS，不引 SSE）。
+4. **RAG 检索会把干扰项排到第一**：实测 10 道题里有 **4 道**的 top-1 落在 `distractors/`（故意写错的知识），
+   正解来源 top-1 只有 0.6。测试集本身很小（35 块）+ CrossEncoder 偏词汇匹配，属于**已知局限**；
+   阶段 6 重做评估时应把它作为"检索质量"的真实指标之一（别只看关键词命中）。
+5. **`.coverage` 曾被误提交**（阶段 4 发现）：它是二进制覆盖率数据，不该进版本控制 ——
+   已从索引移除并加进 `.gitignore`。
 
 > ✅ **阶段 1 已修完的**（别再当成遗留）：E013 无限打回（`retry_count` 不自增）、
 > checkpointer 未接线、`file_saver.py` 待删、全新 clone 下运行时目录缺失。
@@ -181,9 +227,11 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 80 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 154 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 68%（1430 语句 / 461 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`） |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
-| 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |
-| 评估指标 | 见 README 表格（均为**改造前旧口径**） | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 1ea2687^:docs/evidence/<file>` |
+| 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
+| RAG 检索指标 | top1(文件粒度) **0.9** / top3 1.0 / recall **1.0** / 稳态 **81ms** | `uv run python evals/rag_bench.py` |
+| 评估指标（改造前旧口径） | 见 README 表格 | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 1ea2687^:docs/evidence/<file>` |
 | 跟踪文件数 | `git ls-files` 计数 | `git ls-files \| Measure-Object` |

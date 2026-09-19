@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import time
+from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -21,6 +22,8 @@ from app.code_agent.config import (
 )
 from app.code_agent.tools.file_tools import file_tools
 from app.code_agent.utils.mcp import load_mcp_tools
+from app.code_agent.utils.tool_cache import ToolCache
+from app.code_agent.utils.tool_wrap import wrap_tools
 
 # 统一 stdio 为 UTF-8（Windows 控制台默认是 GBK）。
 # 做能力判断而不是直接调用：pytest 会把 sys.stdin 换成没有 reconfigure 的替身，
@@ -59,6 +62,10 @@ async def run_agent(thread_id: str = "default", debug: bool = False, mode: str =
     )
     tools = [t for tool_set in tool_sets for t in tool_set]
     tools.extend(file_tools)
+    # 阶段 4：统一包一层「结果外置 + 只读结果缓存」（缓存作用域 = 本次会话）
+    # ⚠️ 必须接返回值：只有同步 `_run` 的工具会被换成代理对象，不是原地改
+    cache = ToolCache(scope=f"cli-{thread_id}")
+    tools = wrap_tools(tools, cache)
     logger.info(f"共加载 {len(tools)} 个工具")
 
     executor_agent = build_executor_agent(tools, mode=mode)
@@ -103,9 +110,15 @@ async def run_agent(thread_id: str = "default", debug: bool = False, mode: str =
         print()
 
 
-def main(thread_id: str = "default", debug: bool = False):
+def main(thread_id: str = "default", debug: bool = False, mode: str = "auto"):
+    """CLI 入口。
+
+    ⚠️ `mode` 必须在这里收下并转给 `run_agent` ——
+    阶段 3 的 `main.py` 已经在传 `mode=args.mode`，但这个函数当时没加参数，
+    导致 `uv run python main.py` **直接 TypeError 崩掉**（阶段 4 发现并修复）。
+    """
     try:
-        asyncio.run(run_agent(thread_id=thread_id, debug=debug))
+        asyncio.run(run_agent(thread_id=thread_id, debug=debug, mode=mode))
     except KeyboardInterrupt:
         print("\n再见！")
     except Exception:
@@ -152,6 +165,11 @@ async def run_single_task(
             tool_sets.append(res)
         tools = [t for tool_set in tool_sets for t in tool_set]
         tools.extend(file_tools)
+        # 阶段 4：包装「结果外置 + 只读结果缓存」。
+        # ⚠️ 每个任务一个**独立的缓存作用域** —— 跨任务复用缓存会让
+        #    "上一个任务改过的文件"污染"下一个任务的读取"（缓存命中越准，错得越隐蔽）。
+        cache = ToolCache(scope=f"eval-{thread_id}-{uuid4().hex[:8]}")
+        tools = wrap_tools(tools, cache)
 
         executor_agent = build_executor_agent(tools, mode=mode)
         verifier_agent = build_verifier_agent(tools)
@@ -163,7 +181,11 @@ async def run_single_task(
             verifier_agent=verifier_agent,
             thread_id=thread_id,
             mode=mode,
+            # ⚠️ 评估必须关掉「自动沉淀」：否则评测过程产生的临时经验会写进知识库，
+            #    从而改变后续题目的检索结果（同一批数据前后不可比）。
+            auto_deposit=False,
         )
+        await cache.aclose()
     except asyncio.CancelledError:
         raise
     except Exception as e:

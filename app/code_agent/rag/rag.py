@@ -1,24 +1,33 @@
+"""RAG MCP Server（阶段 4 · T4.4 改造后）。
+
+**这里只剩一层薄薄的工具壳**：真正的分块 / 索引 / 检索 / 精排逻辑都在
+`app/code_agent/rag/store.py`，因为 Agent 进程也要用同一套（自动注入 / 自动沉淀），
+而走 MCP 工具每次调用都要新起 python 子进程，太慢。
+
+改造前后对比：
+  | | 改造前 | 改造后 |
+  |---|---|---|
+  | 索引进度 | 整篇文档一个向量（内容一长就被"平均"掉） | **按语义块**建索引，每块一个向量 |
+  | 检索 | 向量 top-3 | 向量粗召回 top-10 → **CrossEncoder 精排** → top-3 |
+  | collection | `terminal_knowledge` | `terminal_knowledge_v2`（两种粒度不能混） |
+"""
+
 import logging
-import os
 import sys
 from typing import Annotated
 
-import chromadb
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
-from sentence_transformers import SentenceTransformer
 
-from app.code_agent.config import (
-    CHROMA_DIR,
-    EMBEDDING_MODEL_CACHE_DIR,
-    EMBEDDING_MODEL_PATH,
-    KNOWLEDGE_DIR,
-)
+from app.code_agent.rag import store
 
 # 抑制 ModelScope 下载进度条污染 MCP stdio 协议
 logging.getLogger("modelscope").setLevel(logging.WARNING)
 
 mcp = FastMCP()
+
+# 启动时灌一次库（增量：mtime 没变的文件会跳过）
+store.ensure_seeded()
 
 
 def _log(msg: str) -> None:
@@ -27,132 +36,25 @@ def _log(msg: str) -> None:
     sys.stderr.flush()
 
 
-# ── 加载 Embedding 模型 ──
-# 核心文件 model.safetensors 存在 → 直接从本地加载，不走网络
-if os.path.exists(EMBEDDING_MODEL_PATH / "model.safetensors"):
-    embed_model = SentenceTransformer(str(EMBEDDING_MODEL_PATH))
-else:
-    # 首次：从 ModelScope 下载（只下载 PyTorch 格式）
-    import sys
-    from contextlib import redirect_stderr
-
-    from modelscope import snapshot_download
-
-    # 抑制下载进度条（否则会通过 stdio 污染 MCP 协议）
-    with redirect_stderr(None):
-        saved_stdout = sys.stdout
-        sys.stdout = open(os.devnull, "w")
-        try:
-            model_dir = snapshot_download(
-                "sentence-transformers/all-MiniLM-L6-v2",
-                cache_dir=str(EMBEDDING_MODEL_CACHE_DIR),
-                ignore_file_pattern=[
-                    "*/onnx/*",
-                    "*/openvino/*",
-                    "*.h5",
-                    "*.ot",
-                    "pytorch_model.bin",
-                ],
-            )
-        finally:
-            sys.stdout.close()
-            sys.stdout = saved_stdout
-    embed_model = SentenceTransformer(model_dir)
-
-# ── ChromaDB 初始化 ──
-KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-
-chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-collection = chroma_client.get_or_create_collection(name="terminal_knowledge")
+# ════════════════ 工具 1：查询知识（自学习闭环的读端） ════════════════
 
 
-def seed_knowledge_base():
-    """扫描 knowledge/ 文件夹（含子目录），把所有 .txt/.md 文件灌入 ChromaDB
-    - 新文件 → 直接导入
-    - 旧文件但 mtime 变了 → 删除旧记录，重新导入
-    - 旧文件 mtime 没变 → 跳过
-    - doc_id 用相对路径（如 real_knowledge/python_best_practices），避免子目录同名冲突
-    """
-    files = list(KNOWLEDGE_DIR.rglob("*.txt")) + list(KNOWLEDGE_DIR.rglob("*.md"))
-    files = [f for f in files if "__pycache__" not in str(f)]
-    if not files:
-        _log("[ChromaDB] knowledge/ 文件夹为空，跳过导入")
-        return
-
-    # 从 ChromaDB 拉出现有数据：{id: 上次的 mtime}
-    existing = collection.get()
-    existing_mtimes = {}
-    for doc_id, meta in zip(existing["ids"], existing["metadatas"], strict=True):
-        existing_mtimes[doc_id] = (meta or {}).get("mtime", 0)
-
-    new_ids, new_docs, new_embeddings, new_metadatas = [], [], [], []
-    delete_ids = []
-    updated_count = 0
-
-    for filepath in files:
-        # 用相对路径做 ID：real_knowledge/xxx 或 distractors/xxx
-        doc_id = filepath.relative_to(KNOWLEDGE_DIR).with_suffix("").as_posix()
-        current_mtime = filepath.stat().st_mtime
-
-        if doc_id in existing_mtimes:
-            if current_mtime == existing_mtimes[doc_id]:
-                continue  # 没变，跳过
-            # mtime 变了 → 先删旧，再导入
-            delete_ids.append(doc_id)
-            updated_count += 1
-
-        text = filepath.read_text(encoding="utf-8")
-        if not text.strip():
-            continue
-        new_ids.append(doc_id)
-        new_docs.append(text)
-        new_embeddings.append(embed_model.encode(text).tolist())
-        new_metadatas.append({"mtime": current_mtime})
-
-    # 批量删除旧记录
-    if delete_ids:
-        collection.delete(ids=delete_ids)
-
-    # 批量导入新/更新记录
-    if new_ids:
-        collection.add(
-            documents=new_docs,
-            embeddings=new_embeddings,
-            metadatas=new_metadatas,
-            ids=new_ids,
-        )
-        new_only = len(new_ids) - updated_count
-        parts = []
-        if new_only > 0:
-            parts.append(f"{new_only} 篇新增")
-        if updated_count > 0:
-            parts.append(f"{updated_count} 篇更新")
-        _log(f"[ChromaDB] {', '.join(parts)}: {new_ids}")
-    else:
-        _log(f"[ChromaDB] 知识无变化（共 {len(existing_mtimes)} 篇）")
-
-
-seed_knowledge_base()
-
-
-@mcp.tool(name="query_rag", description="查询本地知识库（ChromaDB + Embedding）")
+@mcp.tool(name="query_rag", description="查询本地知识库（ChromaDB 分块检索 + CrossEncoder 精排）")
 def query_rag_from_local(
     query: Annotated[
         str,
         Field(description="访问知识库查询的内容", examples=["终端的操作规范"]),
     ] = "",
 ) -> str:
-    query_embedding = embed_model.encode(query).tolist()
-    results = collection.query(query_embeddings=[query_embedding], n_results=3)
-
-    if results["documents"] and results["documents"][0]:
-        result = "\n    ---\n".join(results["documents"][0])
-    else:
-        result = "知识库中未找到相关内容"
+    results = store.search_knowledge(query)
+    result = store.format_results(results)
 
     _log("-" * 60)
     _log(f"[ChromaDB RAG] query: {query}")
+    for it in results:
+        score = it.get("rerank_score")
+        score_text = f" rerank={score:.3f}" if score is not None else ""
+        _log(f"  · {it['id']} (dist={it['distance']:.3f}{score_text})")
     _log(result)
     _log("-" * 60)
 
@@ -164,7 +66,7 @@ def query_rag_from_local(
 
 @mcp.tool(
     name="save_knowledge",
-    description="将学到的知识保存到本地知识库。写入 knowledge/ 文件夹并立即向量化入库，无需等待重启。",
+    description="将学到的知识保存到本地知识库。写入 knowledge/ 文件夹并立即分块向量化入库，无需等待重启。",
 )
 def save_knowledge(
     title: Annotated[
@@ -182,21 +84,9 @@ def save_knowledge(
         ),
     ],
 ) -> str:
-    safe_title = title.replace("/", "_").replace("\\", "_")
-    filepath = KNOWLEDGE_DIR / f"{safe_title}.txt"
-    filepath.write_text(content, encoding="utf-8")
-    mtime = filepath.stat().st_mtime
-
-    embedding = embed_model.encode(content).tolist()
-    collection.upsert(
-        documents=[content],
-        embeddings=[embedding],
-        metadatas=[{"mtime": mtime}],
-        ids=[safe_title],
-    )
-
-    _log(f"[save_knowledge] 已保存: {safe_title} ({len(content)} 字符)")
-    return f"知识 '{safe_title}' 已保存到知识库，共 {len(content)} 字符"
+    source, chunks = store.save_document(title, content)
+    _log(f"[save_knowledge] 已保存: {source} ({len(content)} 字符 / {chunks} 块)")
+    return f"知识 '{source}' 已保存到知识库，共 {len(content)} 字符（{chunks} 块）"
 
 
 # ════════════════ 工具 3：删除知识 ════════════════
@@ -204,7 +94,7 @@ def save_knowledge(
 
 @mcp.tool(
     name="delete_knowledge",
-    description="从知识库中删除指定知识。同时删除 knowledge/ 文件和 ChromaDB 向量。",
+    description="从知识库中删除指定知识。同时删除 knowledge/ 文件和它的全部向量块。",
 )
 def delete_knowledge(
     title: Annotated[
@@ -212,20 +102,8 @@ def delete_knowledge(
         Field(description="要删除的知识标题（不需要加 .txt 后缀）", examples=["Vue项目创建规范"]),
     ],
 ) -> str:
-    safe_title = title.replace("/", "_").replace("\\", "_")
-    filepath = KNOWLEDGE_DIR / f"{safe_title}.txt"
-
-    deleted_file = False
-    if filepath.exists():
-        filepath.unlink()
-        deleted_file = True
-
-    # 从 ChromaDB 删除（即使文件不存在也清理向量残留）
-    try:
-        collection.delete(ids=[safe_title])
-        deleted_vector = True
-    except Exception:
-        deleted_vector = False
+    deleted_file, deleted_vector = store.delete_document(title)
+    safe_title = store.safe_title(title)
 
     if deleted_file or deleted_vector:
         _log(
@@ -248,27 +126,12 @@ def update_knowledge(
         ),
     ],
 ) -> str:
-    safe_title = title.replace("/", "_").replace("\\", "_")
-    filepath = KNOWLEDGE_DIR / f"{safe_title}.txt"
+    if not store.document_exists(title):
+        return f"知识 '{store.safe_title(title)}' 不存在，请先用 save_knowledge 创建"
 
-    if not filepath.exists():
-        return f"知识 '{safe_title}' 不存在，请先用 save_knowledge 创建"
-
-    # 覆盖文件
-    filepath.write_text(content, encoding="utf-8")
-    mtime = filepath.stat().st_mtime
-
-    # 更新 ChromaDB 向量
-    embedding = embed_model.encode(content).tolist()
-    collection.upsert(
-        documents=[content],
-        embeddings=[embedding],
-        metadatas=[{"mtime": mtime}],
-        ids=[safe_title],
-    )
-
-    _log(f"[update_knowledge] 已更新: {safe_title} ({len(content)} 字符)")
-    return f"知识 '{safe_title}' 已更新，新内容共 {len(content)} 字符"
+    source, chunks = store.save_document(title, content)
+    _log(f"[update_knowledge] 已更新: {source} ({len(content)} 字符 / {chunks} 块)")
+    return f"知识 '{source}' 已更新，新内容共 {len(content)} 字符（{chunks} 块）"
 
 
 if __name__ == "__main__":

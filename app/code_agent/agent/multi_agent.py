@@ -10,21 +10,44 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Annotated, Any, Literal, TypedDict
 
-from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+)
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
+from app.code_agent.agent.context import (
+    compact_history,
+    estimate_messages_tokens,
+    over_task_budget,
+    prune_messages,
+)
+from app.code_agent.agent.memory import inject_relevant_knowledge, maybe_deposit_knowledge
 from app.code_agent.agent.prompts import (
     EXECUTOR_PLAN_PROMPT,
     PROMPT_CONTEXT,
     SYSTEM_PROMPT_TEMPLATE,
 )
-from app.code_agent.config import CHECKPOINT_DB
+from app.code_agent.config import (
+    CHECKPOINT_DB,
+    COMPACT_THRESHOLD_TOKENS,
+    NODE_TOKEN_BUDGET,
+    RAG_AUTO_DEPOSIT,
+    RAG_AUTO_INJECT,
+    TASK_TOKEN_BUDGET,
+)
 from app.code_agent.model.llm import get_llm, invoke_with_fallback, registry, with_fallback
+
+logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════
 # Verifier 只读工具白名单（代码级强制：不在名单内的工具绝不会挂载给 Verifier）
@@ -72,6 +95,10 @@ class AgentState(TypedDict):
     verifier_messages: list  # Verifier 消息流
     step_count: int  # Executor 执行步数（近似原单 Agent 步数）
     route: str  # auto 模式的路由结论："simple" / "complex"（由 route_node 写入）
+    # ── 阶段 4：上下文工程 ──
+    knowledge: str  # 任务开始时自动注入的相关经验（T4.4 ②；空串=没注入）
+    budget_exceeded: bool  # 任务级 token 预算是否已击穿（T4.3）
+    pruned_messages: int  # 节点级剪枝砍掉的消息条数（T4.3，用于留证据）
     # ── 跨轮记忆（唯一的会话通道）──
     # ⚠️ 必须带 `add_messages` reducer：没 reducer 的通道是"新值覆盖旧值"，
     #    那样即使接了 checkpointer，按 thread_id 也恢复不出对话。
@@ -212,12 +239,41 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
 
     （若改成在 verifier 里自增，第 1 次 FAIL 就会被当成"已打回 1 次"，
     实际只会有 1 次重跑，与「最多打回 2 轮」不符。）
+
+    **阶段 4 在这里加了三个上下文工程动作**（都只是"改喂给模型的 prompt"，
+    不动 checkpoint 里的完整历史）：
+      - T4.4 ②：把任务开始时检索到的相关经验拼在【任务】前面；
+      - T4.3 节点级：进模型前按 NODE_TOKEN_BUDGET 剪枝（先砍最老的工具结果）；
+      - T4.3 任务级：累计 token 已击穿 TASK_TOKEN_BUDGET → **直接终止并报告**。
     """
+    tokens_used = state.get("token_usage", 0)
+    if over_task_budget(tokens_used, TASK_TOKEN_BUDGET):
+        logger.warning(
+            "任务级 token 预算击穿：已用 %d / 上限 %d，主动终止", tokens_used, TASK_TOKEN_BUDGET
+        )
+        return {
+            "executor_result": (
+                f"【已终止】本次任务累计消耗 {tokens_used} token，"
+                f"达到上限 {TASK_TOKEN_BUDGET}（CODE_AGENT_TASK_TOKEN_BUDGET）。\n"
+                "为避免继续消耗，已主动停止执行。已完成的部分见上方工具调用轨迹；"
+                "如需继续，请缩小任务范围后重试。"
+            ),
+            "budget_exceeded": True,
+            "executor_trace": _trace_to_text(state.get("executor_trace_list") or []),
+            "executor_trace_list": state.get("executor_trace_list") or [],
+            "executor_messages": [],
+            "step_count": state.get("step_count", 0),
+        }
+
     plan_steps = _plan_to_text(state.get("plan", ""))
     prev_verdict = str(state.get("verdict") or "")
     is_retry = "FAIL" in prev_verdict.upper()  # 上一轮验收失败 → 本次是重跑
+    # 自动注入的知识（T4.4 ②）：只在任务语义上拼一次，重跑时也保留
+    knowledge = str(state.get("knowledge") or "")
+    knowledge_prefix = f"{knowledge}\n\n" if knowledge else ""
     if is_retry:
         user_msg = (
+            f"{knowledge_prefix}"
             f"【任务】{state['user_input']}\n"
             f"【执行计划】\n{plan_steps}\n"
             f"【注意】上一轮执行未通过验收，验收意见：{prev_verdict}\n"
@@ -225,6 +281,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         )
     else:
         user_msg = (
+            f"{knowledge_prefix}"
             f"【任务】{state['user_input']}\n【执行计划】\n{plan_steps}\n请按计划执行并完成任务。"
         )
 
@@ -235,7 +292,16 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     step_count = 0
     # 跨轮记忆来自 state["messages"]（checkpointer 按 thread_id 恢复，add_messages 负责累积）
     prior_turns = list(state.get("messages") or [])
-    input_messages = [*prior_turns, HumanMessage(content=user_msg)]
+    raw_input = [*prior_turns, HumanMessage(content=user_msg)]
+    input_messages = prune_messages(raw_input, NODE_TOKEN_BUDGET)
+    pruned = len(raw_input) - len(input_messages)
+    if pruned:
+        logger.info(
+            "节点级剪枝：prompt 估算 %d token 超过预算 %d，砍掉 %d 条最老消息",
+            estimate_messages_tokens(raw_input),
+            NODE_TOKEN_BUDGET,
+            pruned,
+        )
     async for chunk in executor_agent.astream(
         {"messages": input_messages}, config={"recursion_limit": 100}
     ):
@@ -261,6 +327,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         "step_count": step_count,
         "retry_count": state.get("retry_count", 0) + (1 if is_retry else 0),
         "token_usage": state.get("token_usage", 0) + tokens,
+        "pruned_messages": state.get("pruned_messages", 0) + pruned,
     }
 
 
@@ -304,7 +371,14 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
 
 
 def decide_after_verify(state: AgentState) -> Literal["executor", "end"]:
-    """条件边：PASS → 结束；FAIL 且未超限 → 打回 Executor；超限 → 结束。"""
+    """条件边：PASS → 结束；FAIL 且未超限 → 打回 Executor；超限 → 结束。
+
+    另外两条**必须先判**的终止条件：
+      - 任务级 token 预算击穿（T4.3）→ 直接结束，别再打回重跑烧 token；
+      - 击穿过一次之后同样直接结束。
+    """
+    if state.get("budget_exceeded"):
+        return "end"
     parsed = _extract_json(state["verdict"])
     verdict = (parsed or {}).get("verdict", "")
     if str(verdict).upper() == "PASS":
@@ -367,7 +441,13 @@ def _route_decide(state: AgentState) -> Literal["simple", "complex"]:
 
 
 def after_executor(state: AgentState) -> Literal["verifier", "end"]:
-    """auto 模式下 Executor 的收尾：simple 路径直接结束，complex 路径去验收。"""
+    """auto 模式下 Executor 的收尾：simple 路径直接结束，complex 路径去验收。
+
+    预算击穿（T4.3）必须先结束 —— 击穿时 Executor 根本没执行，
+    再去跑 Verifier 只是白花一次模型调用。
+    """
+    if state.get("budget_exceeded"):
+        return "end"
     return "end" if state.get("route") == "simple" else "verifier"
 
 
@@ -491,6 +571,8 @@ async def run_multi_agent(
     verifier_agent: Any | None = None,
     thread_id: str = "default",
     mode: str = "auto",
+    auto_inject: bool | None = None,
+    auto_deposit: bool | None = None,
 ) -> dict:
     """执行单次多 Agent 任务。
 
@@ -500,21 +582,67 @@ async def run_multi_agent(
     `mode`: single / multi / auto（见 build_graph）。执行模式与路由结论都会出现在返回值里，
     供 evals 统计"多少题走了哪条路径"。
 
-    返回: {plan, executor_result, executor_trace, verdict, retry_count,
-           token_usage, final_response, mode, route}
+    `auto_inject` / `auto_deposit`（T4.4）：默认跟随配置；评估侧**必须**显式关掉沉淀
+    （否则评测过程会改写知识库，后续题目不可比）。
+
+    返回: {plan, executor_result, executor_trace, verdict, retry_count, token_usage,
+           final_response, mode, route, knowledge_injected, compacted, budget_exceeded,
+           pruned_messages, deposited}
     """
     if executor_agent is None:
         executor_agent = build_executor_agent(all_tools, mode=mode)
     if verifier_agent is None:
         verifier_agent = build_verifier_agent(all_tools)
 
+    # ── T4.4 ②：任务开始时自动检索一次相关知识（不走 MCP，见 memory.py 的说明）──
+    inject_enabled = RAG_AUTO_INJECT if auto_inject is None else auto_inject
+    knowledge_text, injected_items = ("", [])
+    if inject_enabled:
+        knowledge_text, injected_items = inject_relevant_knowledge(user_input)
+
     CHECKPOINT_DB.parent.mkdir(parents=True, exist_ok=True)
     async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_DB)) as saver:
         app = build_graph(executor_agent, verifier_agent, checkpointer=saver, mode=mode)
         config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
+
+        # ── T4.2：先把过长的历史压实，再进图 ──
+        # 只在**确实超阈值**时才去构造模型链（否则每轮都白建一次 LLM 对象）
+        compacted = False
+        snapshot = await app.aget_state(config)
+        prior = list((snapshot.values or {}).get("messages") or [])
+        if prior and estimate_messages_tokens(prior) > COMPACT_THRESHOLD_TOKENS:
+            new_history, compacted = await compact_history(prior, registry.chain("executor"))
+            if compacted:
+                logger.info(
+                    "对话压实：%d 条历史（估算 %d token）→ 摘要 + 最近 %d 条",
+                    len(prior),
+                    estimate_messages_tokens(prior),
+                    len(new_history) - 1,
+                )
+                # 用 RemoveMessage 清掉旧消息，再把「摘要 + 最近若干条」写回 —— 结果列表正好是后者。
+                # 摘要**同时被持久化**：下一轮不用重复摘要（重复摘要等于每轮多烧一次模型调用）。
+                await app.aupdate_state(
+                    config,
+                    {
+                        "messages": [
+                            RemoveMessage(id=m.id)
+                            for m in prior
+                            if getattr(m, "id", None) is not None
+                        ]
+                        + new_history
+                    },
+                )
+
         state = await app.ainvoke(
             # 只传增量：历史在 checkpoint 里，靠 messages 的 add_messages reducer 累积
-            {"user_input": user_input, "retry_count": 0, "token_usage": 0},
+            {
+                "user_input": user_input,
+                "retry_count": 0,
+                "token_usage": 0,
+                "knowledge": knowledge_text,
+                "budget_exceeded": False,
+                "pruned_messages": 0,
+            },
             config=config,
         )
 
@@ -540,6 +668,22 @@ async def run_multi_agent(
             },
         )
 
+    # ── T4.4 ③：任务成功后判断要不要把经验沉淀进知识库 ──
+    # 只记成功经验（失败的多半是环境问题，存进去就是噪音）
+    deposited: list[dict] = []
+    succeeded = "FAIL" not in str(state.get("verdict", "")).upper() and not state.get(
+        "budget_exceeded"
+    )
+    if succeeded:
+        save_tool = next((t for t in all_tools if getattr(t, "name", "") == "save_knowledge"), None)
+        deposited = await maybe_deposit_knowledge(
+            user_input,
+            final_response,
+            chain=registry.chain("executor"),
+            save_tool=save_tool,
+            enabled=RAG_AUTO_DEPOSIT if auto_deposit is None else auto_deposit,
+        )
+
     return {
         # single 模式没有 planner / verifier → 用 .get 兜底，不要 KeyError
         "plan": state.get("plan", ""),
@@ -556,4 +700,10 @@ async def run_multi_agent(
         "verifier_messages": state.get("verifier_messages", []),
         "step_count": state.get("step_count", 0),
         "final_response": final_response,
+        # ── 阶段 4 的证据字段（供 evals / 汇报引用）──
+        "knowledge_injected": [it["id"] for it in injected_items],
+        "compacted": compacted,
+        "budget_exceeded": bool(state.get("budget_exceeded")),
+        "pruned_messages": state.get("pruned_messages", 0),
+        "deposited": deposited,
     }

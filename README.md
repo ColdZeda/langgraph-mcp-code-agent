@@ -29,13 +29,14 @@ main.py (CLI REPL)                app/web/server.py (FastAPI + Vue3 Web UI, 端�
    │        模型**按角色配**（Planner / Executor / Verifier / Router），注册表 `config/models.json`
    ├── Memory：SqliteSaver（`runtime/checkpoints.db`，按 thread_id 恢复跨轮对话，
    │            进程重启后仍记得；Web UI 的"历史会话"就是读它）
+   ├── 上下文工程：长工具结果外置 / 历史压实 / token 预算（见「上下文工程与分层记忆」）
    └── Tools：6 个自建 MCP Server（stdio 子进程）+ FileManagementToolkit
        ├── powershell_tools.py   Windows 命令执行（危险命令黑名单）
        ├── browser_tools.py      搜索（SearXNG JSON API；文件名是历史遗留）
        ├── mysql_tools.py        MySQL 增删改查（参数化 + 标识符转义）
        ├── vm.py                 WSL2 桥接（危险命令拦截 + 超时）
        ├── code_tools.py         AST 解析 / diff / 项目结构扫描 / 文件片段读取
-       └── rag/rag.py            ChromaDB 知识库（CRUD 闭环 + 本地 embedding）
+       └── rag/rag.py            ChromaDB 知识库（分块索引 + CrossEncoder 精排 + 本地 embedding）
 ```
 
 ## 快速开始
@@ -159,6 +160,36 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 > 若将来要做「**操作真实网页**」（Computer Use / Browser Agent：点击、填表、截图），
 > 应另建 Playwright 工具 —— 那与「搜索取数」是两件事。
 
+## 上下文工程与分层记忆
+
+长任务最容易失控的不是"模型不够聪明"，而是**上下文管理**：一次任务读 20 个文件、
+每步都要把全部历史重发一遍，token 随步数平方增长。这个项目做了四件事：
+
+| 机制 | 做什么 | 关键参数（`.env` 可调） |
+|---|---|---|
+| **工具结果外置** | 过程性长输出落盘到 `runtime/tool_results/`，上下文里只留预览 + 路径 | `CODE_AGENT_EXTERNALIZE_THRESHOLD=6000`（字符）/ 150 行 |
+| **对话压实** | 历史超阈值 → 最老的一段压成「目标 / 约束 / 已完成 / 未决」四段式摘要 | `CODE_AGENT_COMPACT_THRESHOLD=6000`（估算 token） |
+| **token 预算** | 节点级超预算先剪枝（砍最老的工具结果）；任务级超限**主动终止并报告** | `*_NODE_TOKEN_BUDGET=30000` / `*_TASK_TOKEN_BUDGET=200000` |
+| **分层记忆** | 语义记忆 = ChromaDB 知识库：**按语义块**建索引 + CrossEncoder 精排；任务开始时**自动注入**相关经验，任务成功后**自动沉淀**新经验 | `CODE_AGENT_RAG_*` |
+
+> ⚠️ **`read_file_range` / `read_file` 故意不参与外置**：实测把"读全文"的结果藏起来，
+> 模型会改用分段读绕过去 —— 同一道题的 token 反而从 17,361 涨到 127,071（7.3 倍）。
+> 外置只用于**过程性输出**（命令输出 / 目录清单 / 搜索结果）。
+> ⚠️ **自动沉淀在跑评估时关闭**（`run_single_task` 强制关）：否则评测过程产生的经验会写进知识库，
+> 让后续题目的检索结果改变、同一批数据前后不可比。
+
+**RAG 改造前 vs 改造后**（`uv run python evals/rag_bench.py`，同一批 10 个查询、同一套口径）：
+
+| 指标 | 改造前（整篇一个向量） | 改造后（分块 + 精排） |
+|---|---|---|
+| top-1 命中（文件粒度，同口径） | 0.6 | **0.9** |
+| top-3 命中（文件粒度，同口径） | 1.0 | **1.0** |
+| Python 主题召回 | 0.4 | **1.0** |
+| 稳态查询延迟 | 13.2ms | **81ms**（精排 10 对约占 71ms） |
+
+> 另外单列两个更严的指标（关键词命中分不清「推荐 f-string」和「别用 f-string」这类**故意写错的干扰项**）：
+> top-1 来自正解文件 **0.6**、top-1 落在干扰项 **0.4** —— 测试集很小（35 块），这是**已知局限**。
+
 ## 评估体系
 
 **30 题端到端评估**（`evals/`），覆盖 6 个能力维度：
@@ -209,8 +240,10 @@ uv run python evals/rag_bench.py
 - **MCP 适配**：langchain-mcp-adapters + FastMCP（stdio 子进程）
 - **LLM**：ChatOpenAI → DeepSeek（可切换任意 OpenAI 兼容接口）；
   **按角色可配**（`config/models.json`）+ 降级链 + 超时
-- **向量数据库**：ChromaDB（本地持久化）
+- **向量数据库**：ChromaDB（本地持久化，按语义块索引）
 - **Embedding**：sentence-transformers（all-MiniLM-L6-v2，本地运行）
+- **Rerank**：sentence-transformers 的 CrossEncoder（ms-marco-MiniLM-L-6-v2，**本地路径加载，缺失则降级**）
+- **缓存**：Redis（只读工具结果缓存，挂了自动降级）
 - **搜索**：SearXNG（JSON API，经 httpx 调用，不经过浏览器）
 - **数据库**：PyMySQL
 - **Web**：FastAPI + WebSocket；前端 Vue 3 + Vite
@@ -224,25 +257,27 @@ uv run python evals/rag_bench.py
 │   ├── code_agent/
 │   │   ├── agent/
 │   │   │   ├── multi_agent.py     # ★ 状态图（route_node / planner / executor / verifier + 条件边）
+│   │   │   ├── context.py         # 上下文工程：结果外置 / 历史压实 / token 预算
+│   │   │   ├── memory.py          # 分层记忆：自动注入 + 自动沉淀
 │   │   │   ├── code_agent.py      # REPL 循环 + evals 非交互接口 run_single_task
 │   │   │   └── prompts.py         # System / Planner / Verifier / Executor（计划版）提示词
 │   │   ├── model/llm.py           # LLMRegistry：get_llm(role) / chain / invoke_with_fallback
 │   │   ├── config.py              # 所有配置（从 .env 读）+ setup_logging（stderr）
 │   │   ├── mcp_servers/           # 6 个 MCP Server（powershell / 搜索 / mysql / vm / code_tools）
 │   │   │                          #   └ browser_tools.py = 搜索（JSON API）；文件名是历史遗留
-│   │   ├── rag/rag.py             # RAG MCP Server（ChromaDB）
+│   │   ├── rag/                   # rag.py（MCP 薄壳）/ store.py（分块+精排）/ chunking.py（纯函数）
 │   │   ├── tools/
 │   │   │   └── file_tools.py      # FileManagementToolkit（限定在 workspace）
-│   │   └── utils/mcp.py           # MCP 工具加载工厂
+│   │   └── utils/                 # mcp.py（工具加载）/ tool_wrap.py（外置+缓存）/ tool_cache.py
 │   └── web/
 │       ├── server.py              # FastAPI（WS + REST + 静态托管）
 │       └── frontend/              # Vue3 + Vite（dist 已入库）
 ├── config/models.json             # 模型注册表 + 角色分配 + 降级链（进版本控制）
 ├── data/knowledge/                # 知识库源文件：35 条（7 个文件 × 每文件 5 条）
 ├── scripts/                       # start-deps.ps1 / stop-deps.ps1 / mysql-init/*.sql
-├── runtime/                       # ⚠️ gitignore：checkpoints.db + checkpoint / chroma_db / workspace / runs
+├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
 ├── evals/                         # 评估：任务的题集 / 评分器 / runner / RAG 基准
-├── tests/                         # 80 个测试（单元 + 工具级）
+├── tests/                         # 154 个测试（单元 + 工具级）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 与 archive/ 的内容已移出仓库）
 ├── AGENTS.md                      # AI 助手约定与已知坑
@@ -254,12 +289,13 @@ uv run python evals/rag_bench.py
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 80 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 154 | `uv run python -m pytest tests/ -q` |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
-| 知识库条目 | 35（7 文件 × 5 条） | `Get-ChildItem data/knowledge -Recurse -File` |
+| 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
-| 测试覆盖率 | **66%**（819 语句 / 278 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`） |
-| 评估指标 | 见上表（均为**改造前旧口径**） | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
+| 测试覆盖率 | **68%**（1430 语句 / 461 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`） |
+| RAG 检索指标 | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
+| 评估指标（改造前旧口径） | 见上表 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 
 ## License
 
