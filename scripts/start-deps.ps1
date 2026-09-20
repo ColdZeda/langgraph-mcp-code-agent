@@ -12,7 +12,20 @@ docker compose up -d
 Pop-Location
 
 Write-Host "[2/2] 启动 nginx（走 WSL）..." -ForegroundColor Cyan
-wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"
+# ⚠️ ~/nginx/ 只存在于 WSL，仓库里没有副本（干净 clone 下来必然没有）→
+#    先探一次，缺了就打印明确提示并跳过，而不是甩一段难懂的 WSL 报错。
+#    细节见 AGENTS.md 的「环境与工具链」——那里还记着「WSL compose 别用单文件挂载」的坑。
+#    注意：探测失败时 wsl 会把错误信息写进 **stdout**（不是 stderr），所以只认「整串等于 yes」，
+#    其余一律当"没有"处理（Out-String + Trim 兜住换行与多余空白）。
+$nginxExists = (
+    wsl -d Ubuntu -- bash -lc 'test -d ~/nginx && echo yes || echo no' 2>$null | Out-String
+).Trim()
+if ($nginxExists -eq "yes") {
+    wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"
+} else {
+    Write-Host "  [跳过] WSL 里没有 ~/nginx 目录。" -ForegroundColor Yellow
+    Write-Host "         它只存在于 WSL，仓库里没有副本；需要 nginx 时请先在 WSL 里准备好 compose + conf。" -ForegroundColor Yellow
+}
 
 Write-Host "`n完成。当前容器：" -ForegroundColor Green
 docker ps --format "table {{.Names}}`t{{.Status}}`t{{.Ports}}"

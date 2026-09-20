@@ -40,6 +40,8 @@ from app.code_agent.config import (
 from app.code_agent.model.llm import ROLE_NAMES, build_llm, registry, set_llm
 from app.code_agent.tools.file_tools import file_tools
 from app.code_agent.utils.mcp import load_mcp_tools
+from app.code_agent.utils.tool_cache import ToolCache
+from app.code_agent.utils.tool_wrap import wrap_tools
 
 logger = setup_logging("code_agent.web")
 
@@ -63,6 +65,8 @@ class AgentRuntime:
         self.tools: list = []
         self.executor_agent = None
         self.verifier_agent = None
+        # 阶段 4：工具包装层用的缓存（进程级作用域，见 load() 的说明）
+        self.tool_cache = ToolCache(scope="web")
 
     async def load(self) -> None:
         results = await asyncio.gather(
@@ -70,9 +74,17 @@ class AgentRuntime:
         )
         tools = [t for tool_set in results for t in tool_set]
         tools.extend(file_tools)
-        self.tools = tools
+        # 阶段 4：与 CLI（run_agent）/ evals（run_single_task）**一致地**包一层
+        # 「工具结果外置 + 只读结果缓存」。
+        # ⚠️ 两个易错点：
+        #   1) 必须接返回值 —— 只有同步 `_run` 的文件工具会被换成代理对象，不是原地改；
+        #   2) 工具在进程里**只加载一次、跨会话共用**，所以缓存作用域是进程级的；
+        #      正确性由「任何写操作执行后清空本作用域缓存」保证（见 utils/tool_cache.py）。
+        #      （阶段 4 收尾时补的漏：此前只有 CLI 与 evals 两条入口接了包装，Web 没接，
+        #      导致 Web 端既不做结果外置、也不走缓存。）
+        self.tools = wrap_tools(tools, self.tool_cache)
         self.rebuild_agents()
-        logger.info(f"Web 服务加载 {len(tools)} 个工具，Executor/Verifier 构建完成")
+        logger.info(f"Web 服务加载 {len(tools)} 个工具（已包装），Executor/Verifier 构建完成")
 
     def rebuild_agents(self) -> None:
         self.executor_agent = build_executor_agent(self.tools)

@@ -350,3 +350,63 @@ async def test_wrapper_without_cache_still_externalizes(externalize_into):
     tool = tw.wrap_tool(_Tool("list_project_structure", coroutine=call_tool), None)
     out = await tool.coroutine()
     assert "[工具结果已外置]" in out[0]
+
+
+# ── 三条入口都要接上包装层（阶段 4 收尾补漏）──
+
+
+async def test_web_runtime_wraps_tools(externalize_into, monkeypatch):
+    """**Web 入口也必须包装工具**。
+
+    阶段 4 主体只给 CLI（`run_agent`）与 evals（`run_single_task`）接了包装层，
+    Web（`app/web/server.py` 的 `AgentRuntime`）漏了 —— 结果是 Web 端既不做结果外置、
+    也不走 Redis 缓存，于是"包装层一次覆盖全部工具"这句话在 Web 路径上并不成立。
+    """
+    from app.web import server as web_server
+
+    async def fake_loader(*, client_id, server_path):
+        async def call_tool(**kwargs):
+            return ("内容\n" * 3000, None)
+
+        return [
+            _Tool(
+                "list_project_structure",
+                coroutine=call_tool,
+                response_format="content_and_artifact",
+            )
+        ]
+
+    monkeypatch.setattr(web_server, "load_mcp_tools", fake_loader)
+    monkeypatch.setattr(web_server, "file_tools", [])
+    monkeypatch.setattr(web_server, "build_executor_agent", lambda tools, **kw: None)
+    monkeypatch.setattr(web_server, "build_verifier_agent", lambda tools: None)
+
+    runtime = web_server.AgentRuntime()
+    await runtime.load()
+
+    assert runtime.tools, "应该加载到工具"
+    text, artifact = await runtime.tools[0].coroutine(path="x")
+    assert artifact is None
+    assert "[工具结果已外置]" in text, "Web 入口的长结果也必须被外置"
+
+
+async def test_web_runtime_wraps_sync_file_tools(externalize_into, monkeypatch):
+    """Web 入口同样要处理「只有同步 `_run`」的文件工具（会被换成代理对象）。"""
+    from app.web import server as web_server
+
+    async def fake_loader(*, client_id, server_path):
+        return []
+
+    sync_tool = _Tool("read_file", run=lambda file_path: "内容:" + file_path)
+
+    monkeypatch.setattr(web_server, "load_mcp_tools", fake_loader)
+    monkeypatch.setattr(web_server, "file_tools", [sync_tool])
+    monkeypatch.setattr(web_server, "build_executor_agent", lambda tools, **kw: None)
+    monkeypatch.setattr(web_server, "build_verifier_agent", lambda tools: None)
+
+    runtime = web_server.AgentRuntime()
+    await runtime.load()
+
+    assert runtime.tools[0] is not sync_tool, "同步工具应被换成代理对象"
+    assert runtime.tools[0].name == "read_file"
+    assert await runtime.tools[0].coroutine(file_path="a.py") == "内容:a.py"

@@ -52,7 +52,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 指定会话 | `uv run python main.py --thread-id x` |
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（154 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（156 个） |
 | 全量评估（30 题） | `uv run python evals/run_e2e.py --all --run-id <name>` |
 | 单题评估 | `uv run python evals/run_e2e.py --task E011 --run-id <name>` |
 | RAG 基准（含分块/精排指标） | `uv run python evals/rag_bench.py` |
@@ -87,7 +87,7 @@ app/code_agent/
 config/models.json               模型注册表 + 角色分配 + 降级链（**进版本控制**，不要放 runtime/）
 app/web/server.py                FastAPI：WS /ws/chat + REST（sessions/settings/models）+ 静态托管 dist
 evals/                           tasks.py(30 题) / verifiers.py(评分器) / run_e2e.py(脚本) / rag_bench.py / compare.py
-tests/                           154 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           156 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking）
 ```
@@ -126,6 +126,18 @@ tests/                           154 个测试（config / prompts / mysql_safe_i
     被手动 stop 过的除外，那时用一键脚本；
   - MySQL 数据在**命名卷** `mysql-data`；首次初始化会执行 `scripts/mysql-init/*.sql`
     （里面建只读账号 `agent_readonly`）。
+- ⚠️ **WSL 那份 nginx compose 里不要用「单文件挂载」**（2026-09-19 实测踩坑）：
+  `./conf/nginx.conf:/etc/nginx/nginx.conf` 这类**单文件跨发行版挂载**在 Docker Desktop 上会以
+  `error mounting ".../docker-desktop-bind-mounts/Ubuntu/<hash>" ... not a directory:
+  Are you trying to mount a directory onto a file (or vice-versa)?` 失败，容器起不来。
+  **故障还会固化**：暂存位按源路径 hash 命名，失败一次就会在虚拟机里留下一个目录占位，
+  之后每次启动都复用它（**重启 Docker、重启容器都没用**）→ 必须
+  `docker compose up -d --force-recreate` 重建容器才能绕开。
+  **解法：只挂目录**；自定义配置写进 `conf/conf.d/*.conf`
+  （镜像自带的 `nginx.conf` 里本来就有 `include /etc/nginx/conf.d/*.conf;`）。
+  实测：改完 `my-nginx` 正常 Up、`curl -I http://localhost/` 返回 200。
+- **`scripts/start-deps.ps1` 会先探一次 `~/nginx`**：不存在就**打印明确提示并跳过** nginx 那步
+  （而不是抛一段 WSL 报错）—— 因为 `~/nginx/` 只存在于 WSL，仓库里没有副本。
 - **搜索已不依赖浏览器**（阶段 2）：`browser_tools.py` 只调 SearXNG 的 JSON API，
   文件名是历史遗留；**Selenium / Edge / msedgedriver / 调试端口都不再需要**。
 
@@ -158,8 +170,15 @@ tests/                           154 个测试（config / prompts / mysql_safe_i
   否则检索更差）；id 是 `f"{source}#{块序号}"`，元数据 `{source, chunk, mtime}`，增量按 `where={"source":…}` 删旧。
   reranker 从**本地路径**加载（`CODE_AGENT_RERANKER_PATH`），**路径不存在就降级为纯向量召回，不联网**。
   实测：top-1（文件粒度）0.6 → **0.9**、recall 0.4 → **1.0**、稳态延迟 13.2ms → **81ms**。
+  ⚠️ **这些是阶段 4 自测的临时数字**：正式三指标 / 归档 / 前后对比表归**阶段 6**（订正 #23）。
   ⚠️ **本机的 reranker 是从 hf-mirror 下的**（HuggingFace 直连超时、ModelScope 没有这个模型），
   位置 `../embedding-model/cross-encoder/ms-marco-MiniLM-L-6-v2`，**在仓库外、不进版本控制**。
+- **RAG 的定位（别加戏）**：它是**语义记忆** —— 记录**使用过程中积累的经验/习惯**（自学习闭环的存储端），
+  **不是企业知识库问答**。不要为了"指标好看"去扩知识库或换模型（用户已记进 `与定位冲突的事.md` 第 9 条）。
+- **三条入口都要接工具包装层**（阶段 4 收尾补漏）：CLI（`code_agent.run_agent`）、
+  evals（`run_single_task`）、**Web（`app/web/server.py` 的 `AgentRuntime.load()`）**。
+  漏掉任何一条，那条入口就既不做结果外置、也不走缓存 —— 阶段 5 的 HITL/权限层同理。
+  测试守着：`tests/test_tool_wrap.py` 的 `test_web_runtime_wraps_tools`。
 - **自动注入 / 自动沉淀**（`agent/memory.py`）：在 **Agent 进程内**直接调 `rag/store.py`，**不走 MCP** ——
   MCP 工具每次调用都要新起 python 子进程重新 import chromadb + torch，延迟从毫秒级变秒级。
   ⚠️ **评估时 `run_single_task` 强制关掉自动沉淀**（`auto_deposit=False`），
@@ -230,11 +249,11 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 154 | `uv run python -m pytest tests/ -q` |
-| 测试覆盖率 | 68%（1430 语句 / 461 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`） |
+| 测试数 | 156 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 68%（1451 语句 / 458 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`） |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
-| RAG 检索指标 | top1(文件粒度) **0.9** / top3 1.0 / recall **1.0** / 稳态 **81ms** | `uv run python evals/rag_bench.py` |
+| RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py` |
 | 评估指标（改造前旧口径） | 见 README 表格 | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 1ea2687^:docs/evidence/<file>` |
 | 跟踪文件数 | `git ls-files` 计数 | `git ls-files \| Measure-Object` |

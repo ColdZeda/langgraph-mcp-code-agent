@@ -162,6 +162,10 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 
 ## 上下文工程与分层记忆
 
+> **定位先说清楚**：这一层里的 RAG 是**语义记忆** —— 记录**使用过程中积累的经验/习惯**
+> （Agent 自学习闭环的存储端），**不是企业知识库问答**。所以它只预置了 35 条知识，
+> 也不追求"大而全"的检索指标：**够用即可**。
+
 长任务最容易失控的不是"模型不够聪明"，而是**上下文管理**：一次任务读 20 个文件、
 每步都要把全部历史重发一遍，token 随步数平方增长。这个项目做了四件事：
 
@@ -179,6 +183,9 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 > 让后续题目的检索结果改变、同一批数据前后不可比。
 
 **RAG 改造前 vs 改造后**（`uv run python evals/rag_bench.py`，同一批 10 个查询、同一套口径）：
+
+> ⚠️ **下表是阶段 4 自测的临时数字，阶段 6 会用新口径重测**（评分器与题集都在阶段 6 重做），
+> 所以请把它当作"改造方向对不对"的旁证，**不要当成正式结论**。
 
 | 指标 | 改造前（整篇一个向量） | 改造后（分块 + 精排） |
 |---|---|---|
@@ -277,7 +284,7 @@ uv run python evals/rag_bench.py
 ├── scripts/                       # start-deps.ps1 / stop-deps.ps1 / mysql-init/*.sql
 ├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
 ├── evals/                         # 评估：任务的题集 / 评分器 / runner / RAG 基准
-├── tests/                         # 154 个测试（单元 + 工具级）
+├── tests/                         # 156 个测试（单元 + 工具级）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 与 archive/ 的内容已移出仓库）
 ├── AGENTS.md                      # AI 助手约定与已知坑
@@ -289,12 +296,12 @@ uv run python evals/rag_bench.py
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 154 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 156 | `uv run python -m pytest tests/ -q` |
 | 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
-| 测试覆盖率 | **68%**（1430 语句 / 461 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`） |
-| RAG 检索指标 | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
+| 测试覆盖率 | **68%**（1451 语句 / 458 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`） |
+| RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径） | 见上表 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 
 ## License
