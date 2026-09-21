@@ -106,7 +106,7 @@ def test_role_models_are_independent(tmp_path):
 
 
 def test_override_from_spec_parses_role_models(tmp_path):
-    """--role-models "planner=x,executor=y" 形式的临时覆盖。"""
+    """`planner=x,executor=y` 形式的 spec 临时覆盖。"""
     reg = LLMRegistry(_write_cfg(tmp_path))
     applied = reg.override_from_spec("planner=m-cheap, executor=m-backup ,坏格式,router=")
     assert applied == {"planner": "m-cheap", "executor": "m-backup"}

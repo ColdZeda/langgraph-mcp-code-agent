@@ -62,7 +62,7 @@ class LLMRegistry:
 
     - `roles`：角色 → 模型键（默认全用同一个模型）
     - `fallback`：角色 → 备用模型键列表（可空；非空时主力失败会自动降级）
-    - 运行期可覆盖：`set_role_models()`（Web UI 下拉框）/ `override_from_spec()`（evals --role-models）
+    - 运行期可覆盖：`set_role_models()`（Web UI 下拉框）/ `override_from_spec()`（"planner=x,executor=y" 形式的 spec）
     """
 
     def __init__(self, config_path: Path | str = MODELS_CONFIG_PATH) -> None:
@@ -152,7 +152,7 @@ class LLMRegistry:
         self._cache.clear()
 
     def set_role_models(self, mapping: dict[str, str]) -> None:
-        """按角色设置模型键（Web UI 下拉框 / evals --role-models）。空值表示恢复配置默认。"""
+        """按角色设置模型键（Web UI 下拉框 / `override_from_spec`）。空值表示恢复配置默认。"""
         for role, key in (mapping or {}).items():
             if role not in ROLE_NAMES:
                 continue
@@ -167,11 +167,11 @@ class LLMRegistry:
         self.set_role_models(dict.fromkeys(ROLE_NAMES, model_key or ""))
 
     def role_models(self) -> dict[str, str]:
-        """当前四个角色各用什么模型键（写进 evals 结果 JSON）。"""
+        """当前四个角色各用什么模型键（写进运行结果）。"""
         return {role: self.model_key(role) for role in ROLE_NAMES}
 
     def override_from_spec(self, spec: str | None) -> dict[str, str]:
-        """解析 `--role-models "planner=x,executor=y"` 形式的临时覆盖。返回生效的映射。"""
+        """解析 `"planner=x,executor=y"` 形式的临时覆盖。返回生效的映射。"""
         if not spec:
             return {}
         mapping: dict[str, str] = {}

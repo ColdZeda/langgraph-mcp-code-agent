@@ -77,9 +77,7 @@ MODEL_API_KEY=你的API密钥
 "fallback": { "executor": [] }   // 填备用模型即启用"主力报错/超时自动降级"
 ```
 
-- 默认四个角色同一个模型（行为可预期）；可在 **Web UI 的模型设置面板**里分别选，改完热生效；
-- 跑评估时可临时覆盖而不改配置：`--role-models "planner=x,executor=y"`；
-- 每次运行的结果 JSON 会记录 `role_models`（哪个角色用了哪个模型）。
+- 默认四个角色同一个模型（行为可预期）；可在 **Web UI 的模型设置面板**里分别选，改完热生效。
 
 ### 运行（命令行）
 
@@ -199,14 +197,30 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 
 ## 评估体系
 
-**30 题端到端评估**（`evals/`），覆盖 6 个能力维度：
-`tool_selection`（工具选择）/ `task_completion`（任务完成）/ `multi_step`（多步推理）/
-`cross_tool`（跨工具协作）/ `error_recovery`（错误恢复）/ `safety`（安全）。
+> ⚠️ **旧的 30 题端到端题集（`evals/tasks.py` / `verifiers.py` / `run_e2e.py` / `compare.py`）
+> 已于阶段 5 从仓库删除。** 它是**改造前**那把尺子，问题不是"分数低"而是"量不准"：
+>
+> - 实测 **14/30 题没有任何"产物级"断言**，只查关键词或工具名 → 分不清「做完了」和「说了要做」；
+> - 部分安全题的判定器**事实上空转**：`no_dangerous_tool_called` 检查的工具名
+>   `run_vm_shell_command` 根本不是 MCP 工具（`vm.py` 里它是普通函数，没挂 `@mcp.tool`）
+>   → 走 WSL 的路径它永远看不见，**恒定给满分**。
+>
+> 留着一把坏尺子，只会让后续开发（包括 AI 助手）继续拿它量东西 —— 所以删掉，而不是标注。
+> **题集与评分器由阶段 6 重做**；在那之前，本项目**不报告任何端到端通过率**。
+> 备份：`E:\agentstart\work\backup\1new\backup\evals\`（6 个文件，与删除前逐字节一致）；
+> 也能从 git 历史取回，如 `git show 8d0ab78:evals/tasks.py`。
 
-> ⚠️ **下表是「改造前」的存档，文件现在已不在仓库里** —— `docs/evidence/` 的内容已移出仓库
-> （备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`，也能用
-> `git show 1ea2687^:docs/evidence/<文件名>` 从历史取回）。
-> 留着它们是为了说明"改造前长什么样"；**当前架构的成绩，要等评估体系重做（阶段 6）之后才有效**。
+**当前 `evals/` 只保留 RAG 检索基准**（`rag_bench.py`，阶段 4 新写、与题集无关）：
+
+```bash
+uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.json
+```
+
+### 改造前的存档数字（**仅供说明「改造前长什么样」**）
+
+> 存档文件已移出仓库（备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`，
+> 也能用 `git show 1ea2687^:docs/evidence/<文件名>` 从历史取回）。
+> **下表不是当前架构的成绩**，阶段 6 会用新评分器重跑并归档。
 
 | 阶段 | 存档文件（已移出仓库） | overall | pass_rate | total_tokens | 平均延迟 |
 |---|---|---|---|---|---|
@@ -215,31 +229,12 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 | 多 Agent（改造前那版） | `evals-multiagent-merged.json` | **0.967** | 0.967 | 1,257,397 | 53.4s |
 | RAG 基准（独立基准） | `rag-bench-baseline.json` | top1 **0.6** / top3 1.0 / recall **0.4** | — | — | 13.4ms |
 
-**⚠️ 读这些数字前必看的口径说明**（细节见存档里的 `README.md` 与 `evals-baseline-report.md`）：
+**⚠️ 读这些数字前必看的口径说明**：
 
 1. 全部基于 `deepseek-v4-flash` 跑出，**换模型后不可比**；
-2. 当时的评分器里**弱断言占比不小**（实测 **14/30 题没有任何"产物级"断言**），
-   所以这些分数应理解为「**回归通过率**」，不是「**通用任务成功率**」；
-3. `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 的**部分分** → 偏乐观；
-4. 项目正在做一轮系统性改造（见 `docs/handover.md`），**阶段 6 会重做评分器与题集，并归档新口径的结果**。
-
-```bash
-# 跑全量（30 题）
-uv run python evals/run_e2e.py --all --run-id baseline
-
-# 跑单题（用新 run-id，避免覆盖）
-uv run python evals/run_e2e.py --task E001 --run-id single-test
-
-# 指定执行模式（默认 auto）与临时角色模型
-uv run python evals/run_e2e.py --all --mode multi --role-models "planner=ds-v41-flash"
-
-# RAG 基准
-uv run python evals/rag_bench.py
-```
-
-特性：每题含**明文对话存档**（失败可定位到具体一步）、token 用量统计、按 run-id 断点续跑。
-结果先写 `runtime/runs/`（gitignore）；正式结果才复制到 `docs/evidence/` 纳入版本控制
-（该目录当前为空，阶段 6 重做评估后会重新写入）。
+2. 当时的评分器里**弱断言占比不小**，所以这些分数应理解为「**回归通过率**」，
+   不是「**通用任务成功率**」；
+3. `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 的**部分分** → 偏乐观。
 
 ## 技术栈
 
@@ -266,7 +261,7 @@ uv run python evals/rag_bench.py
 │   │   │   ├── multi_agent.py     # ★ 状态图（route_node / planner / executor / verifier + 条件边）
 │   │   │   ├── context.py         # 上下文工程：结果外置 / 历史压实 / token 预算
 │   │   │   ├── memory.py          # 分层记忆：自动注入 + 自动沉淀
-│   │   │   ├── code_agent.py      # REPL 循环 + evals 非交互接口 run_single_task
+│   │   │   ├── code_agent.py      # REPL 循环 + 非交互接口 run_single_task（供阶段 6 重建的评估脚本用）
 │   │   │   └── prompts.py         # System / Planner / Verifier / Executor（计划版）提示词
 │   │   ├── model/llm.py           # LLMRegistry：get_llm(role) / chain / invoke_with_fallback
 │   │   ├── config.py              # 所有配置（从 .env 读）+ setup_logging（stderr）
@@ -283,7 +278,7 @@ uv run python evals/rag_bench.py
 ├── data/knowledge/                # 知识库源文件：35 条（7 个文件 × 每文件 5 条）
 ├── scripts/                       # start-deps.ps1 / stop-deps.ps1 / mysql-init/*.sql
 ├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
-├── evals/                         # 评估：任务的题集 / 评分器 / runner / RAG 基准
+├── evals/                         # 只剩 RAG 检索基准 rag_bench.py（旧 30 题集已于阶段 5 删除，阶段 6 重建）
 ├── tests/                         # 156 个测试（单元 + 工具级）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 与 archive/ 的内容已移出仓库）
@@ -297,12 +292,11 @@ uv run python evals/rag_bench.py
 | 数字 | 值 | 复核命令 |
 |---|---|---|
 | 测试数 | 156 | `uv run python -m pytest tests/ -q` |
-| 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | 测试覆盖率 | **68%**（1451 语句 / 458 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`） |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
-| 评估指标（改造前旧口径） | 见上表 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
+| 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 
 ## License
 

@@ -8,7 +8,8 @@
 
 Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner → Executor → Verifier）
 + 6 个自建 MCP Server（stdio 子进程，25 个工具）+ FileManagementToolkit（7 个文件工具），
-双入口（CLI `main.py` / Web UI `app/web/server.py`），配套 30 题评估体系。
+双入口（CLI `main.py` / Web UI `app/web/server.py`）。
+⚠️ 旧的 30 题评估体系已于**阶段 5 删除**（口径不可用），阶段 6 重建 —— 见下方「评估相关」。
 
 ## 必须遵守的约定
 
@@ -53,12 +54,11 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（156 个） |
-| 全量评估（30 题） | `uv run python evals/run_e2e.py --all --run-id <name>` |
-| 单题评估 | `uv run python evals/run_e2e.py --task E011 --run-id <name>` |
 | RAG 基准（含分块/精排指标） | `uv run python evals/rag_bench.py` |
 | 重建前端 | `cd app/web/frontend && npm run build` |
 
-> ⚠️ `pytest` **不能**跑评估（不认 `--task`）；评估一律用 `evals/run_e2e.py`。
+> ⚠️ **端到端评估（旧 30 题）已于阶段 5 删除** —— 阶段 6 重建题集与评分器之前，
+> `evals/` 里只剩 `rag_bench.py`（RAG 检索基准）。别再去 `git grep run_e2e` 找命令，它已经不在了。
 > ⚠️ CI（`.gitee.yml`）从阶段 2 起跑三步：`ruff check .` → `ruff format --check .` → `pytest tests/ -v`。
 
 ## 代码地图（精简）
@@ -71,7 +71,7 @@ app/code_agent/
 │                                  + READONLY_TOOL_NAMES（Verifier 只读白名单）+ build_graph(mode=…)
 ├── agent/context.py             上下文工程：工具结果外置(T4.1) / 对话压实(T4.2) / token 预算(T4.3)
 ├── agent/memory.py              分层记忆读写：自动注入(T4.4②) / 自动沉淀(T4.4③)
-├── agent/code_agent.py          REPL 循环 run_agent() + evals 入口 run_single_task()
+├── agent/code_agent.py          REPL 循环 run_agent() + 非交互入口 run_single_task()（阶段 6 重建的评估脚本会用）
 ├── agent/prompts.py             SYSTEM_PROMPT_TEMPLATE（Plan→Execute→Verify 三步法）+ PROMPT_CONTEXT
 ├── model/llm.py                 LLMRegistry：get_llm(role) / chain(role) / invoke_with_fallback
 │                                  + build_llm / set_llm（热切换后需重建 agent）
@@ -86,7 +86,7 @@ app/code_agent/
 └── utils/tool_wrap.py           工具包装：结果外置 + 结果缓存（MCP 就地改 / 同步工具换代理）
 config/models.json               模型注册表 + 角色分配 + 降级链（**进版本控制**，不要放 runtime/）
 app/web/server.py                FastAPI：WS /ws/chat + REST（sessions/settings/models）+ 静态托管 dist
-evals/                           tasks.py(30 题) / verifiers.py(评分器) / run_e2e.py(脚本) / rag_bench.py / compare.py
+evals/                           rag_bench.py（RAG 检索基准）—— 旧 30 题集已于阶段 5 删除，阶段 6 重建
 tests/                           156 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking）
@@ -99,12 +99,12 @@ tests/                           156 个测试（config / prompts / mysql_safe_i
 | 项 | 现状 |
 |---|---|
 | **跨轮记忆** | ✅ 已接线：`SqliteSaver`（`AsyncSqliteSaver`）+ `runtime/checkpoints.db`；`AgentState.messages` 用 `add_messages` reducer 累积；每轮由 `run_multi_agent` 在图跑完后追加一对 (任务, 回复) |
-| **thread_id** | 三条路径**都必须传**：CLI（`run_agent`）、Web（`server.py`）、evals（`run_single_task` ← `run_e2e.py` 的 `eval-<id>`）。漏传会直接报错 |
+| **thread_id** | 三条路径**都必须传**：CLI（`run_agent`）、Web（`server.py`）、非交互入口（`run_single_task`）。漏传会直接报错 |
 | CLI 会话 ID | 默认取 `.env` 的 `CODE_AGENT_THREAD_ID`（默认 `default`）→ 关掉再打开会续上次对话；`--new-session` 开新会话 |
 | **Verifier 打回** | ✅ 已修：`retry_count` 在 `executor_node` 里「是重跑才 +1」→ 最多打回 `MAX_RETRY`(2) 次，Executor 共跑 `MAX_RETRY+1` 次 |
 | `file_saver.py` | ✅ **已删除**（连同 `tests/test_file_saver.py`）；它曾是全仓唯一非法 UTF-8 的 `.py` |
-| **执行模式** | `single` / `multi` / `auto`：`auto` 先由 `route_node` 判复杂度（写进 `state["route"]`），simple 只跑 Executor、complex 走完整三阶段；CLI `--mode`、evals `--mode`、Web UI 下拉框都能选 |
-| **模型按角色配** | 注册表在 `config/models.json`（roles + fallback）；`get_llm(role)`，默认 executor；`--role-models "executor=x"` 可临时覆盖；结果 JSON 记录 `role_models`。⚠️ **测试里必须同时 patch `ma.get_llm` 与 `ma.registry`**，否则 planner 会真的调模型（实测让 pytest 从 8s 变 104s） |
+| **执行模式** | `single` / `multi` / `auto`：`auto` 先由 `route_node` 判复杂度（写进 `state["route"]`），simple 只跑 Executor、complex 走完整三阶段；CLI `--mode` 与 Web UI 下拉框都能选 |
+| **模型按角色配** | 注册表在 `config/models.json`（roles + fallback）；`get_llm(role)`，默认 executor；运行期改法有两个：Web UI 设置面板（`set_role_models`）与 `registry.override_from_spec()`（原 `evals --role-models`，那个 CLI 参数随旧评估脚本一起删了）。⚠️ **测试里必须同时 patch `ma.get_llm` 与 `ma.registry`**，否则 planner 会真的调模型（实测让 pytest 从 8s 变 104s） |
 
 ### 环境与工具链
 
@@ -186,19 +186,29 @@ tests/                           156 个测试（config / prompts / mysql_safe_i
 - **`import app.code_agent.rag.store` 不加载模型**（全懒加载）：单测里碰它不会去 load torch。
   测试环境由 `tests/conftest.py` 统一关掉自动注入 / 自动沉淀 / 工具缓存。
 
-### evals 相关
+### 评估相关（⚠️ 2026-09-21 起：**旧 30 题集已删除，阶段 6 重建**）
 
-- **重跑前必须清残留**：`runtime/checkpoints.db`（阶段 1 起的 SQLite 记忆）、`runtime/chroma_db/`、`data/knowledge/` **根目录**
+- **`evals/` 现在只剩 `rag_bench.py`**（RAG 检索基准，与题集无关）。
+  旧的 `tasks.py` / `verifiers.py` / `run_e2e.py` / `compare.py` 已在**阶段 5 删除**：
+  它是**改造前**那把尺子，问题不是"分数低"而是"量不准" ——
+  实测 **14/30 题没有任何产物级断言**；且 `no_dangerous_tool_called` 检查的工具名
+  `run_vm_shell_command` **根本不是 MCP 工具**（`vm.py` 里它是普通函数，没挂 `@mcp.tool`）
+  → 那两条安全题**恒定满分**（判定器空转）。
+  备份 `E:\agentstart\work\backup\1new\backup\evals\`；git 历史可取回（`git show 8d0ab78:evals/tasks.py`）。
+  → **在这套题集重建之前，不要用任何旧分数评判当前代码。**
+- **跑 RAG 基准前必须清残留**：`runtime/chroma_db/`、`data/knowledge/` **根目录**
   （Agent 自学习写入的）、MySQL `agent_test` 表、WSL uploads（保留 `.gitkeep`）；
   知识库预置是 **35 条（7 个文件 × 每文件 5 条）**，`real_knowledge/` 4 个 + `distractors/` 3 个。
-- 单题重跑用**新 run-id**（避免覆盖），并先删对应的 checkpoint。
 - `runtime/runs/` 被 gitignore；**正式结果才复制到 `docs/evidence/`** 纳入版本控制。
   ⚠️ 2026-09 用户把**改造前**那批旧存档（旧模型 + 软口径）**移出了仓库**，`docs/evidence/` 现在是空的；
   备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`（13 个文件），
   git 历史里也有（如 `git show 1ea2687^:docs/evidence/baseline-final.json` —— `1ea2687` 是**删除**这批存档的提交，
   所以要用它的父提交 `^`；拿删除之后的提交去 show 只会得到 `path ... does not exist in ...`）。
   阶段 6 会产出新口径的结果。
-- 计分口径偏软：`pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分。
+- **旧口径的两个坑（阶段 6 重做时要避开，别原样照抄）**：
+  ① `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分 → 偏乐观；
+  ② 安全题的判定器要按 **MCP 工具名 + 真实参数名**写（`make_dir_in_vm` 的参数叫 `dir_path`，
+  没有 `command`）—— 否则判定器看不见东西还恒给满分。
 - **MCP 工具没有"需要关闭的 client"**（实测，langchain-mcp-adapters 0.1.1）：
   `MultiServerMCPClient.get_tools()` 的 docstring 明写
   *"a new session will be created for each tool call"* → 每次工具调用**自建并自关**一个会话
@@ -238,7 +248,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 **已知遗留**：
 
-1. **评估体系待重做**（口径偏软：14/30 题没有产物级断言）→ 阶段 6。
+1. **评估体系待重建**：旧 30 题集已在阶段 5 删除（口径不可用，见「评估相关」）→ 阶段 6 重建题集 + 评分器 + 归档。
 2. **前端构建产物**：`app/web/frontend/dist/` 必须入库；⚠️ 根 `.gitignore` 曾有裸 `dist/`
    会把新构建的哈希资源一并吞掉（已改为 `/dist/`）。改前端后必须 `npm run build` 并提交
    **新增与删除**的资源文件。
@@ -259,9 +269,9 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 |---|---|---|
 | 测试数 | 156 | `uv run python -m pytest tests/ -q` |
 | 测试覆盖率 | 68%（1451 语句 / 458 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`） |
-| 评估题数 | 30 | `uv run python -c "from evals.tasks import TASKS; print(len(TASKS))"` |
+| 评估题数 | **0**（旧 30 题集已于阶段 5 删除，阶段 6 重建） | `Get-ChildItem evals -File`（现在只有 `rag_bench.py`） |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py` |
-| 评估指标（改造前旧口径） | 见 README 表格 | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 1ea2687^:docs/evidence/<file>` |
+| 评估指标（改造前旧口径，**当前不适用**） | 见 README「评估体系」一节 | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 1ea2687^:docs/evidence/<file>` |
 | 跟踪文件数 | `git ls-files` 计数 | `git ls-files \| Measure-Object` |
