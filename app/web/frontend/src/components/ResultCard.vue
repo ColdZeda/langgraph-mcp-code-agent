@@ -19,6 +19,12 @@ const verdictObj = (() => {
   }
 })()
 
+// ⚠️ 阶段 5 修：「验收未通过」以前是**误报** ——
+//    判定写的是 `passed = verdict === 'PASS'`，于是**根本没有验收环节**的情况
+//    （single 模式只跑 Executor；auto 模式走 simple 路由时也直接结束）
+//    会因为 verdict 是空串而被显示成"✗ 验收未通过"。
+//    后端是对的（run_multi_agent 只在 verdict 含 FAIL 时才当失败），错的是这个标签。
+const hasVerdict = Boolean(verdictObj?.verdict)
 const passed = verdictObj?.verdict?.toUpperCase() === 'PASS'
 const showTrace = ref(false)
 </script>
@@ -51,9 +57,10 @@ const showTrace = ref(false)
     </div>
 
     <div class="card footer-row">
-      <span class="badge" :class="passed ? 'pass' : 'fail'">
+      <span v-if="hasVerdict" class="badge" :class="passed ? 'pass' : 'fail'">
         {{ passed ? '✓ 验收通过' : '✗ 验收未通过' }}
       </span>
+      <span v-else class="badge none">— 本轮未验收（{{ result.mode === 'single' ? 'single' : '简单任务直通' }}）</span>
       <span v-if="verdictObj?.reason && !passed" class="reason">{{ verdictObj.reason }}</span>
       <span class="meta">打回 {{ result.retryCount }} 次 · 步数 {{ result.stepCount }} · token {{ result.tokenUsage }} · 耗时 {{ result.elapsedSec }}s</span>
     </div>
@@ -76,6 +83,7 @@ const showTrace = ref(false)
 .badge { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 .badge.pass { background: #14532d; color: #86efac; }
 .badge.fail { background: #450a0a; color: #fca5a5; }
+.badge.none { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
 .reason { font-size: 12px; color: #fca5a5; }
 .meta { margin-left: auto; font-size: 12px; color: #64748b; }
 </style>

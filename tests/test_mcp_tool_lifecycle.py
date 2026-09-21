@@ -72,3 +72,34 @@ async def test_run_single_task_does_not_need_client_cleanup(monkeypatch):
     assert not response.startswith("[ERROR]"), f"不应因清理/适配器问题失败：{response}"
     assert tokens == 7
     assert steps == 1
+
+
+def test_rag_server_imports_native_extensions_at_module_level():
+    """**阶段 5 订正 #27 的回归守卫**：`rag.py` 必须在 **import 阶段**就把重库导进来。
+
+    背景（实测，不是推测）：如果等到**工具被调用时**才惰性加载 `sentence_transformers`
+    （→ sklearn → scipy 的扩展模块），会卡在 **Windows DLL 加载**上死锁；
+    表现是"`query_rag` 永远不返回、**但副作用已经发生**（文件和向量都写好了）"——
+    Claude 那边看到的是"前端一直转圈、且不烧 token"。
+
+    ⚠️ 为什么用**源码检查**而不是 `import app.code_agent.rag.rag`：
+    后者会真的把 torch 拉起来（8 秒上下），给整套单测平白加一大截耗时。
+    这里只要守住"这一行还在模块顶层"——有人把它当"冗余 import"删掉时，这条会红。
+    """
+    import ast
+
+    source = (Path(__file__).resolve().parents[1] / "app/code_agent/rag/rag.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(source)
+    module_level = {
+        alias.name
+        for node in tree.body  # 只看模块顶层语句
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+
+    assert "sentence_transformers" in module_level, (
+        "rag.py 顶层少了 `import sentence_transformers` —— 别删它，"
+        "删了 RAG 工具会在 MCP 子进程里死锁（见订正 #27 与 rag.py 里的注释）"
+    )

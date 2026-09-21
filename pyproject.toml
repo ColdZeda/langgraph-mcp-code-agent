@@ -51,7 +51,3 @@ select = ["E", "F", "I", "UP", "B"]
 #   E501 行太长 -> 交给 formatter（ruff format）处理
 #   B008 函数调用作为默认值 -> FastMCP/Pydantic 的 Field(...) 就是这么用的
 ignore = ["E501", "B008"]
-
-[tool.ruff.lint.per-file-ignores]
-# evals/ 的题集与评分器是"数据 + 断言"性质，长字符串多，不参与风格检查
-"evals/tasks.py" = ["E"]

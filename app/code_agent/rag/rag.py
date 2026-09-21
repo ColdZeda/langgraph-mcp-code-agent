@@ -16,10 +16,29 @@ import logging
 import sys
 from typing import Annotated
 
-from mcp.server.fastmcp import FastMCP
-from pydantic import Field
+# ⚠️⚠️ **阶段 5 订正 #27（真因）—— 这一行 import 是修 bug 用的，别当冗余删掉！**
+#
+# 症状：`query_rag` / `save_knowledge`（凡是要向量化的工具）从这个 MCP server 调，
+#       **永远不返回**；而 `delete_knowledge` 里"知识不存在"那种早返回路径 0.2 秒就回。
+#       调用方看到的是"卡死"，但**副作用其实已经发生**（文件与向量都写好了）——
+#       所以那一轮对话"转圈 + 不烧 token"，最难查的一类症状。
+#
+# 实测定位（`faulthandler` 打线程栈）：
+#       `store.get_embed_model()` → `from sentence_transformers import ...`
+#       → sklearn → **scipy.special 的扩展模块 `create_module`（Windows DLL 加载）卡死**。
+#       同一句 import 放在**事件循环启动之前**则完全正常 ——
+#       也就是说：**在 `mcp.run()` 之后（anyio 已起工作线程）才首次加载这些原生扩展会死锁**
+#       （DLL 的 `DllMain` 与 GIL / 加载器锁互等）。
+#
+# 修法：在**模块 import 阶段**（= `mcp.run()` 之前）就把这些库导进来，让 DLL 先加载完。
+#       **不预热模型** —— 模型仍然在第一次用到时惰性实例化（实测那样已经不卡了）。
+#       代价为 0：这些 import 本来就要付，只是从"第一次工具调用时"挪到"进程启动时"。
+#       `store.py` **保持全懒加载不变**：Agent 进程与单测 import 它仍然不会 load torch。
+import sentence_transformers  # noqa: F401  —— 见上面的订正说明
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+from pydantic import Field  # noqa: E402
 
-from app.code_agent.rag import store
+from app.code_agent.rag import store  # noqa: E402
 
 # 抑制 ModelScope 下载进度条污染 MCP stdio 协议
 logging.getLogger("modelscope").setLevel(logging.WARNING)

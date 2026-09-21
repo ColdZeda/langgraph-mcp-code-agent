@@ -35,6 +35,17 @@ if __name__ == "__main__":
             "single=只用 Executor（快，适合查询类）；multi=完整 Planner→Executor→Verifier"
         ),
     )
+    parser.add_argument(
+        "--permission",
+        choices=["readonly", "confirm", "open"],
+        default=None,
+        help=(
+            "权限模式（阶段 5）：readonly=只读（写/执行类工具直接拒绝，不弹框）；"
+            "confirm=需确认（默认，写/执行类先问你，高危的显示影响面）；"
+            "open=放开（不再逐次确认，但**危险命令黑名单仍然生效**）。"
+            "默认取 .env 的 CODE_AGENT_PERMISSION_MODE（不设就是 confirm）"
+        ),
+    )
     args = parser.parse_args()
 
     thread_id = str(uuid.uuid4())[:8] if args.new_session else args.thread_id
@@ -43,4 +54,9 @@ if __name__ == "__main__":
         print(f"下次回到该会话：uv run python main.py --thread-id {thread_id}")
 
     print(f"执行模式：{args.mode}")
-    run_agent_main(thread_id=thread_id, debug=args.debug, mode=args.mode)
+    run_agent_main(
+        thread_id=thread_id,
+        debug=args.debug,
+        mode=args.mode,
+        permission=args.permission,
+    )

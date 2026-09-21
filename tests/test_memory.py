@@ -15,16 +15,22 @@ from app.code_agent.agent import memory as mem  # noqa: E402
 from app.code_agent.rag import store  # noqa: E402
 
 
-class _FakeSaveTool:
+class _FakeSaver:
+    """替身"写库函数"。
+
+    ⚠️ 阶段 5（订正 #28）：自动沉淀**不再走 MCP 工具**（原来是 `save_tool.ainvoke(...)`），
+    改成进程内直调 `store.save_document` —— 所以这里也从一个"假工具"换成"假保存函数"。
+    """
+
     def __init__(self, boom: bool = False):
         self.saved: list[dict] = []
         self.boom = boom
 
-    async def ainvoke(self, payload):
+    def __call__(self, title: str, content: str):
         if self.boom:
             raise RuntimeError("写库失败")
-        self.saved.append(payload)
-        return f"已保存 {payload['title']}"
+        self.saved.append({"title": title, "content": content})
+        return f"{title}.txt", 1
 
 
 def _patch_search(monkeypatch, items, boom=False):
@@ -104,10 +110,10 @@ def _patch_llm(monkeypatch, content):
 
 
 async def test_deposit_disabled_does_nothing(monkeypatch):
-    tool = _FakeSaveTool()
+    tool = _FakeSaver()
     _patch_llm(monkeypatch, '{"save": true, "items": [{"title": "t", "content": "c"}]}')
 
-    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=tool, enabled=False)
+    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=tool, enabled=False)
 
     assert out == [] and tool.saved == []
 
@@ -115,45 +121,54 @@ async def test_deposit_disabled_does_nothing(monkeypatch):
 async def test_deposit_defaults_to_config_switch(monkeypatch):
     """不显式传 enabled 时跟随配置（conftest 把测试环境关掉了）。"""
     monkeypatch.setattr(mem, "RAG_AUTO_DEPOSIT", False)
-    tool = _FakeSaveTool()
+    tool = _FakeSaver()
     _patch_llm(monkeypatch, '{"save": true, "items": [{"title": "t", "content": "c"}]}')
 
-    assert await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=tool) == []
+    assert await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=tool) == []
     assert tool.saved == []
 
 
-async def test_deposit_without_save_tool_skips(monkeypatch):
+async def test_deposit_skipped_in_readonly_mode(monkeypatch):
+    """**阶段 5（决策 B）**：只读档下**不写**知识库 —— "只读"就是"什么都不改"。
+
+    注意自动沉淀**不再走三档权限的弹框确认**（它是应用自己的记账，不是模型的自主动作），
+    所以这条约束必须在这里显式守住，不能指望权限层兜。
+    """
+    from app.code_agent.security import permissions as perm
+
+    saver = _FakeSaver()
     _patch_llm(monkeypatch, '{"save": true, "items": [{"title": "t", "content": "c"}]}')
-    assert (
-        await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=None, enabled=True)
-        == []
-    )
+
+    with perm.bind_session(perm.Session(mode=perm.MODE_READONLY, scope="pytest-readonly")):
+        out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=saver, enabled=True)
+
+    assert out == [] and saver.saved == [], "只读档绝不能写知识库"
 
 
 async def test_deposit_no_experience_writes_nothing(monkeypatch):
-    tool = _FakeSaveTool()
+    tool = _FakeSaver()
     _patch_llm(monkeypatch, '{"save": false, "items": []}')
 
-    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=tool, enabled=True)
+    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=tool, enabled=True)
 
     assert out == [] and tool.saved == [], "模型说没经验就不该写任何东西"
 
 
 async def test_deposit_saves_items(monkeypatch):
-    tool = _FakeSaveTool()
+    tool = _FakeSaver()
     _patch_llm(
         monkeypatch,
         '{"save": true, "items": [{"title": "MySQL 端口", "content": "本项目 MySQL 在 3307"}]}',
     )
 
-    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=tool, enabled=True)
+    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=tool, enabled=True)
 
     assert len(out) == 1
     assert tool.saved == [{"title": "MySQL 端口", "content": "本项目 MySQL 在 3307"}]
 
 
 async def test_deposit_caps_at_two_items(monkeypatch):
-    tool = _FakeSaveTool()
+    tool = _FakeSaver()
     _patch_llm(
         monkeypatch,
         '{"save": true, "items": ['
@@ -161,28 +176,28 @@ async def test_deposit_caps_at_two_items(monkeypatch):
         '{"title": "c", "content": "3"}]}',
     )
 
-    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=tool, enabled=True)
+    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=tool, enabled=True)
 
     assert len(out) == 2, "最多存 2 条，避免把知识库刷屏"
 
 
 async def test_deposit_skips_incomplete_items(monkeypatch):
-    tool = _FakeSaveTool()
+    tool = _FakeSaver()
     _patch_llm(
         monkeypatch,
         '{"save": true, "items": [{"title": "", "content": "x"}, {"title": "t", "content": "y"}]}',
     )
 
-    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=tool, enabled=True)
+    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=tool, enabled=True)
 
     assert len(out) == 1 and tool.saved[0]["title"] == "t"
 
 
 async def test_deposit_bad_json_is_ignored(monkeypatch):
-    tool = _FakeSaveTool()
+    tool = _FakeSaver()
     _patch_llm(monkeypatch, "模型今天不想输出 JSON")
 
-    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=tool, enabled=True)
+    out = await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=tool, enabled=True)
 
     assert out == [] and tool.saved == []
 
@@ -194,23 +209,21 @@ async def test_deposit_llm_failure_degrades(monkeypatch):
         raise RuntimeError("模型挂了")
 
     monkeypatch.setattr(llm_mod, "invoke_with_fallback", boom, raising=False)
-    tool = _FakeSaveTool()
+    tool = _FakeSaver()
 
     assert (
-        await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=tool, enabled=True)
-        == []
+        await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=tool, enabled=True) == []
     )
     assert tool.saved == []
 
 
 async def test_deposit_write_failure_degrades(monkeypatch):
     """单条写失败不该把整个任务搞崩，也不该记进返回列表。"""
-    tool = _FakeSaveTool(boom=True)
+    tool = _FakeSaver(boom=True)
     _patch_llm(monkeypatch, '{"save": true, "items": [{"title": "t", "content": "c"}]}')
 
     assert (
-        await mem.maybe_deposit_knowledge("任务", "结果", chain=[], save_tool=tool, enabled=True)
-        == []
+        await mem.maybe_deposit_knowledge("任务", "结果", chain=[], saver=tool, enabled=True) == []
     )
 
 

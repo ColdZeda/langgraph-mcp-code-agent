@@ -15,10 +15,22 @@ from app.code_agent.config import (
     BROWSER_SERVER_PATH,
     CODE_TOOLS_SERVER_PATH,
     MYSQL_SERVER_PATH,
+    PERMISSION_MODE,
     POWERSHELL_SERVER_PATH,
     RAG_SERVER_PATH,
     VM_SERVER_PATH,
     setup_logging,
+)
+from app.code_agent.security.permissions import (
+    HEADLESS_PERMISSION_MODE,
+    MODE_OPEN,
+    MODE_READONLY,
+    PermissionRequest,
+    Session,
+    bind_session,
+    grant_always,
+    mode_label,
+    normalize_mode,
 )
 from app.code_agent.tools.file_tools import file_tools
 from app.code_agent.utils.mcp import load_mcp_tools
@@ -45,7 +57,49 @@ def format_debug_output(step_name: str, content: str, is_tool_call: bool = False
         print("-" * 40)
 
 
-async def run_agent(thread_id: str = "default", debug: bool = False, mode: str = "auto"):
+def ask_permission_in_terminal(request: PermissionRequest) -> bool:
+    """**CLI 的确认通道**（阶段 5 · T5.3）：把"要干什么"打印清楚，然后问一句。
+
+    三个选项，第三个就是 B7 那个勾选框的终端版：
+    `y` = 只允许这一次；`a` = **本会话内对该工具总是允许**；其它 = 拒绝。
+
+    ⚠️ **CLI 不做超时**（与 Web 不同，这是有意的）：
+    终端里人就在键盘前，不需要超时；而且**异步超时取消不掉 `input()`** ——
+    超时后那个线程仍卡在 stdin 上，下一次询问就会有两个线程抢同一份输入。
+    所以 CLI 用阻塞式询问，超时机制只作用于 Web（`CODE_AGENT_CONFIRM_TIMEOUT`）。
+    """
+    print()
+    print("─" * 64)
+    high = "（🔴 高危操作）" if request.high_risk else ""
+    print(f"⏸  需要你确认：{request.tool_name}{high}")
+    if request.note:
+        print(f"   影响面：{request.note}")
+    print(f"   参数：{request.args_brief()}")
+    print("─" * 64)
+    try:
+        answer = input("允许执行吗？ [y]允许 / [a]本会话内总是允许 / 其它=拒绝：").strip().lower()
+    except (EOFError, OSError):
+        # 读不到 stdin（管道 / 无人值守）→ 按拒绝处理（fail closed）
+        print("（读不到输入，按拒绝处理）")
+        return False
+    if answer in ("a", "always", "总是"):
+        grant_always(request.tool_name)
+        print(f"已记下：本会话内对 {request.tool_name} 不再询问（切换权限模式 / 换会话后失效）")
+        return True
+    return answer in ("y", "yes", "是", "允许")
+
+
+async def _ask_permission_async(request: PermissionRequest) -> bool:
+    """异步包装：`input()` 是阻塞的，丢到线程里跑，别卡住事件循环。"""
+    return await asyncio.to_thread(ask_permission_in_terminal, request)
+
+
+async def run_agent(
+    thread_id: str = "default",
+    debug: bool = False,
+    mode: str = "auto",
+    permission: str | None = None,
+):
     if debug:
         os.environ["LOG_LEVEL"] = "DEBUG"
     logger = setup_logging()
@@ -71,9 +125,33 @@ async def run_agent(thread_id: str = "default", debug: bool = False, mode: str =
     executor_agent = build_executor_agent(tools, mode=mode)
     verifier_agent = build_verifier_agent(tools)
 
-    logger.info(f"Agent 创建完成（执行模式 {mode}），进入对话循环")
+    # ── 阶段 5：绑定权限会话（CLI 的确认通道 = 终端提问）──
+    permission_mode = normalize_mode(permission or PERMISSION_MODE)
+    session = Session(
+        mode=permission_mode,
+        scope=f"cli-{thread_id}",
+        approver=_ask_permission_async,
+        sync_approver=ask_permission_in_terminal,  # 同步工具路径也能问（不留旁路）
+        timeout=None,  # CLI 不超时，理由见 ask_permission_in_terminal 的 docstring
+    )
+
+    logger.info(f"Agent 创建完成（执行模式 {mode} / 权限模式 {permission_mode}），进入对话循环")
+    print(
+        f"权限模式：{mode_label(permission_mode)}（{'写操作会先问你' if permission_mode == 'confirm' else '见下方说明'}）"
+    )
+    if permission_mode == MODE_READONLY:
+        print("  ⚠️ 只读档：所有写 / 执行类工具会被直接拒绝（不弹确认）。")
+    elif permission_mode == MODE_OPEN:
+        print("  ⚠️ 放开档：写操作不再逐次确认；**危险命令黑名单仍然生效**。")
+    else:
+        print("  写 / 执行类工具会先请你确认（高危的会显示影响面）。")
 
     # 跨轮记忆不再手写：由 checkpointer 按 thread_id 持久化（见 run_multi_agent）
+    with bind_session(session):
+        await _repl_loop(tools, executor_agent, verifier_agent, thread_id, mode)
+
+
+async def _repl_loop(tools, executor_agent, verifier_agent, thread_id, mode) -> None:
     while True:
         user_input = input("用户: ")
 
@@ -110,15 +188,21 @@ async def run_agent(thread_id: str = "default", debug: bool = False, mode: str =
         print()
 
 
-def main(thread_id: str = "default", debug: bool = False, mode: str = "auto"):
+def main(
+    thread_id: str = "default",
+    debug: bool = False,
+    mode: str = "auto",
+    permission: str | None = None,
+):
     """CLI 入口。
 
-    ⚠️ `mode` 必须在这里收下并转给 `run_agent` ——
+    ⚠️ 参数必须在这里**逐个收下并转给 `run_agent`** ——
     阶段 3 的 `main.py` 已经在传 `mode=args.mode`，但这个函数当时没加参数，
     导致 `uv run python main.py` **直接 TypeError 崩掉**（阶段 4 发现并修复）。
+    阶段 5 加 `permission` 时特意把这条注释留下，别再踩。
     """
     try:
-        asyncio.run(run_agent(thread_id=thread_id, debug=debug, mode=mode))
+        asyncio.run(run_agent(thread_id=thread_id, debug=debug, mode=mode, permission=permission))
     except KeyboardInterrupt:
         print("\n再见！")
     except Exception:
@@ -174,17 +258,27 @@ async def run_single_task(
         executor_agent = build_executor_agent(tools, mode=mode)
         verifier_agent = build_verifier_agent(tools)
 
-        result = await run_multi_agent(
-            task_prompt,
-            tools,
-            executor_agent=executor_agent,
-            verifier_agent=verifier_agent,
-            thread_id=thread_id,
-            mode=mode,
-            # ⚠️ 评估必须关掉「自动沉淀」：否则评测过程产生的临时经验会写进知识库，
-            #    从而改变后续题目的检索结果（同一批数据前后不可比）。
-            auto_deposit=False,
+        # ── 阶段 5：无人值守入口**必须显式指定权限档位** ──
+        # 不显式指定就会落到默认的「需确认」，而这里**没有人可以问** ——
+        # 按 B2「无人应答 → 自动拒绝」，每个写工具都会被自动拒掉，任务全线失败。
+        # 具体档位与它的过渡性质见 `permissions.HEADLESS_PERMISSION_MODE`。
+        permission = Session(
+            mode=HEADLESS_PERMISSION_MODE,
+            scope=f"eval-{thread_id}",
+            timeout=None,  # 无人值守 → 不走"等确认"这条路径
         )
+        with bind_session(permission):
+            result = await run_multi_agent(
+                task_prompt,
+                tools,
+                executor_agent=executor_agent,
+                verifier_agent=verifier_agent,
+                thread_id=thread_id,
+                mode=mode,
+                # ⚠️ 评估必须关掉「自动沉淀」：否则评测过程产生的临时经验会写进知识库，
+                #    从而改变后续题目的检索结果（同一批数据前后不可比）。
+                auto_deposit=False,
+            )
         await cache.aclose()
     except asyncio.CancelledError:
         raise

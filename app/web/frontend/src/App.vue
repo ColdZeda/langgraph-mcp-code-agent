@@ -1,8 +1,9 @@
 <script setup>
 import ChatView from './components/ChatView.vue'
+import PermissionDialog from './components/PermissionDialog.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import { onMounted } from 'vue'
-import { connectWs, loadSession, refreshSessions, store } from './store'
+import { connectWs, loadSession, refreshSessions, setPermissionMode, store } from './store'
 
 onMounted(() => {
   connectWs()
@@ -14,6 +15,17 @@ function switchSession(threadId) {
   if (threadId === store.threadId) return
   loadSession(threadId)
 }
+
+// 权限模式下拉框的说明文字（档位集合由后端给，措辞在前端 —— 见 store.permissionModes）
+const PERMISSION_HINTS = {
+  readonly: '只读（写操作直接拒绝）',
+  confirm: '需确认（默认，写操作弹框）',
+  open: '放开（不弹框，黑名单仍生效）',
+}
+
+function onPermissionChange(event) {
+  setPermissionMode(event.target.value)
+}
 </script>
 
 <template>
@@ -21,7 +33,7 @@ function switchSession(threadId) {
     <aside class="sidebar">
       <div class="brand">
         <span class="brand-dot" :class="store.wsStatus"></span>
-        <span class="brand-name">Code Agent</span>
+        <span class="brand-name">Code Agent-novi</span>
       </div>
       <button class="btn-new" @click="$refs.chat?.newSession()">＋ 新会话</button>
       <label class="mode-row">
@@ -30,6 +42,21 @@ function switchSession(threadId) {
           <option value="auto">auto（按复杂度自动）</option>
           <option value="single">single（单 Agent，快）</option>
           <option value="multi">multi（完整三阶段）</option>
+        </select>
+      </label>
+      <!-- 阶段 5：与「执行模式」并排的第二条轴。两个名字不能都叫"模式"。 -->
+      <label class="mode-row">
+        <span class="session-title">权限模式</span>
+        <select
+          class="mode-select"
+          :class="{ danger: store.permissionMode === 'open' }"
+          :value="store.permissionMode"
+          :disabled="store.sending"
+          @change="onPermissionChange"
+        >
+          <option v-for="m in store.permissionModes" :key="m.value" :value="m.value">
+            {{ PERMISSION_HINTS[m.value] || m.label }}
+          </option>
         </select>
       </label>
       <div class="session-title">历史会话（checkpoint）</div>
@@ -54,6 +81,7 @@ function switchSession(threadId) {
       <ChatView ref="chat" />
     </main>
     <SettingsPanel v-if="store.showSettings" @close="store.showSettings = false" />
+    <PermissionDialog />
   </div>
 </template>
 
@@ -74,6 +102,7 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f17
 .mode-row { display: flex; flex-direction: column; gap: 4px; }
 .mode-select { padding: 6px 8px; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 8px; font-size: 12px; }
 .mode-select:disabled { opacity: 0.6; }
+.mode-select.danger { border-color: #ef4444; color: #fca5a5; }
 .session-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .session-item { padding: 8px 10px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
 .session-item:hover { border-color: #3b82f6; }

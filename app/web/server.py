@@ -1,10 +1,12 @@
 """Code Agent 本地 Web 服务 — FastAPI + WebSocket。
 
-启动：uv run uvicorn app.web.server:app --port 8000
+启动：`uv run uvicorn app.web.server:app --port 8000`
 - 启动时并行加载 6 个 MCP server 工具 + 文件工具，构建 Executor/Verifier
-- WS /ws/chat：每个连接绑定 thread_id 与跨轮 history；同一时刻只跑一个任务
-- REST：会话列表 / 模型设置（热切换，改后自动重建 agent）/ 连接测试
-- 前端构建产物（app/web/frontend/dist）存在时自动托管
+- WS `/ws/chat`：每个连接绑定 thread_id；**同一会话串行、不同会话可并发**（阶段 5 · B3）
+- WS 上还会跑**人工确认**：后端发 `permission_request` → 前端弹框 → 前端回 `permission_response`
+  （超时 / 没人应答 → 自动拒绝，见 `security/permissions.py`）
+- REST：会话列表 / 模型设置（热切换）/ 连接测试 / 权限模式持久化
+- 前端构建产物（`app/web/frontend/dist`）存在时自动托管
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from app.code_agent.agent.events import bind_sink as bind_event_sink
 from app.code_agent.agent.multi_agent import (
     build_executor_agent,
     build_verifier_agent,
@@ -30,6 +33,7 @@ from app.code_agent.config import (
     BROWSER_SERVER_PATH,
     CHECKPOINT_DB,
     CODE_TOOLS_SERVER_PATH,
+    CONFIRM_TIMEOUT,
     MYSQL_SERVER_PATH,
     POWERSHELL_SERVER_PATH,
     RAG_SERVER_PATH,
@@ -38,6 +42,17 @@ from app.code_agent.config import (
     setup_logging,
 )
 from app.code_agent.model.llm import ROLE_NAMES, build_llm, registry, set_llm
+from app.code_agent.security.permissions import (
+    DEFAULT_MODE,
+    MODE_LABELS,
+    MODE_OPEN,
+    PermissionRequest,
+    Session,
+    bind_session,
+    grant_always,
+    mode_label,
+    normalize_mode,
+)
 from app.code_agent.tools.file_tools import file_tools
 from app.code_agent.utils.mcp import load_mcp_tools
 from app.code_agent.utils.tool_cache import ToolCache
@@ -92,7 +107,29 @@ class AgentRuntime:
 
 
 runtime = AgentRuntime()
-task_lock = asyncio.Lock()  # Agent 依赖本机环境（Edge/WSL/MySQL），同一时刻只跑一个任务
+
+# ── 会话锁（阶段 5 · B3）──
+# 改造前这里是一把**全局串行锁**（`task_lock = asyncio.Lock()`，`async with task_lock:` 包住整次
+# `run_multi_agent`）→ 只要有一个会话在等人工确认，**整个 Web 端所有会话都排队卡死**。
+# 现在改成**按会话（thread_id）一把锁**：不同会话可并发，同一会话仍然串行
+# （同一 thread_id 的 checkpoint 顺序不能乱）。
+#
+# ⚠️ 已知代价（有意接受，已记进 AGENTS.md 的「已知坑」）：并发之后多个会话会**同时写**
+#    同一个 `runtime/checkpoints.db`（SQLite）。SQLite 默认有 5 秒 busy timeout，
+#    本地单用户场景够用；真出现 `database is locked` 再给 saver 加 WAL / busy_timeout。
+#
+# 锁对象**不回收**：一条连接断掉后那个空 Lock 会留在字典里。数量 = 进程内出现过的 thread_id 数，
+# 本地单用户可忽略；回收反而要处理"有人正在排队"的竞态，得不偿失。
+_session_locks: dict[str, asyncio.Lock] = {}
+_session_locks_guard = asyncio.Lock()
+
+
+async def get_session_lock(thread_id: str) -> asyncio.Lock:
+    async with _session_locks_guard:
+        lock = _session_locks.get(thread_id)
+        if lock is None:
+            lock = _session_locks[thread_id] = asyncio.Lock()
+        return lock
 
 
 # ── 设置持久化（runtime/ 已被 gitignore，key 只落本地）──
@@ -112,6 +149,38 @@ def save_settings(settings: dict) -> None:
     SETTINGS_PATH.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_permission_mode() -> str:
+    """读持久化的权限模式（**D4「③ 混合」**）。
+
+    规则（定案，别放宽）：
+      · 只把「**只读 / 需确认**」当持久值 —— 常用档位设一次就够；
+      · 「**放开**」**永不持久化**：新会话一律回落「需确认」；
+        即使有人手改配置文件塞了 `"open"`，加载时也当「需确认」处理
+        （"我上次设过、这次忘了"是最容易埋雷的地方）；
+      · 认不出来的值同样回落「需确认」。
+    """
+    raw = load_settings().get("permission_mode")
+    mode = normalize_mode(raw, default=DEFAULT_MODE)
+    if raw is not None and mode == MODE_OPEN:
+        logger.warning("web-settings.json 里的权限模式是「放开」，按 D4 忽略并以「需确认」加载")
+        return DEFAULT_MODE
+    return mode
+
+
+def persist_permission_mode(mode: str) -> str:
+    """持久化权限模式并返回**实际生效**的档位（「放开」只生效不落盘）。"""
+    mode = normalize_mode(mode, default=DEFAULT_MODE)
+    settings = load_settings()
+    if mode == MODE_OPEN:
+        # 「放开」不落盘，且**要把旧值也删掉** —— 否则新会话会读回上一次的「只读」，
+        # 与 D4 要求的"新会话回落「需确认」"不符。
+        settings.pop("permission_mode", None)
+    else:
+        settings["permission_mode"] = mode
+    save_settings(settings)
+    return mode
+
+
 def masked_settings(settings: dict) -> dict:
     key = settings.get("api_key") or ""
     return {
@@ -120,6 +189,10 @@ def masked_settings(settings: dict) -> dict:
         "roles": settings.get("roles") or {},
         "api_key_set": bool(key),
         "api_key_tail": key[-4:] if len(key) >= 8 else "",
+        # 权限模式（D4）：这里返回的是**实际生效**的档位，不是文件里的原始值
+        "permissionMode": load_permission_mode(),
+        "permissionModeLabel": mode_label(load_permission_mode()),
+        "permissionModes": [{"value": v, "label": MODE_LABELS[v]} for v in MODE_LABELS],
     }
 
 
@@ -181,12 +254,13 @@ async def list_models():
 
 @app.post("/api/settings")
 async def update_settings(body: dict):
-    """更新模型设置并热切换（只覆盖传入字段；api_key 传空串表示清除为 .env 默认）。
+    """更新设置并热切换（只覆盖传入字段；api_key 传空串表示清除为 .env 默认）。
 
-    支持：旧的三个字段（model / base_url / api_key）+ 新增的 `roles`（按角色的模型键）。
+    支持：模型三件套（model / base_url / api_key）+ `roles`（按角色的模型键）
+    + **`permission_mode`**（阶段 5 · D4：只读 / 需确认落盘，「放开」只生效不落盘）。
     ⚠️ 未知字段会**记日志**而不是静默丢弃（改造前是白名单循环，前端加字段会被无声吞掉）。
     """
-    known = {"model", "base_url", "api_key", "roles"}
+    known = {"model", "base_url", "api_key", "roles", "permission_mode"}
     unknown = [k for k in body if k not in known]
     if unknown:
         logger.warning(f"/api/settings 收到未知字段（已忽略）：{unknown}")
@@ -207,9 +281,18 @@ async def update_settings(body: dict):
         settings["roles"] = {r: v for r, v in merged.items() if v}  # 空值 = 恢复配置默认
 
     save_settings(settings)
-    apply_settings(settings)
-    runtime.rebuild_agents()
-    return {"ok": True, **masked_settings(settings)}
+
+    # 权限模式单独走一条路（它有自己的持久化规则，见 persist_permission_mode）
+    if "permission_mode" in body:
+        persist_permission_mode(str(body.get("permission_mode") or ""))
+
+    # ⚠️ 只有**模型相关**字段变了才重建 agent：权限模式跟模型无关，
+    #    改一次档位就重建 Executor/Verifier 是白费（而且正在跑的任务会看到新旧混用）。
+    if any(f in body for f in ("model", "base_url", "api_key", "roles")):
+        apply_settings(load_settings())
+        runtime.rebuild_agents()
+
+    return {"ok": True, **masked_settings(load_settings())}
 
 
 @app.post("/api/settings/test")
@@ -308,13 +391,158 @@ def _summarize_trace(trace_list: list[dict], limit: int = 30, arg_chars: int = 2
     return out
 
 
+async def _send(ws: WebSocket, state: dict, payload: dict) -> None:
+    """统一的出站发送。
+
+    ⚠️ 必须串行：阶段 5 起「跑任务」在**后台 task** 里（为了让人工确认期间主循环还能收消息），
+    于是主循环与后台 task 可能同时往同一条 WS 写 → 不串行会把两帧交错写坏。
+    """
+    async with state["send_lock"]:
+        await ws.send_text(json.dumps(payload, ensure_ascii=False))
+
+
+class WebApprover:
+    """Web 端的**人工确认通道**（T5.3）。
+
+    流程：`permission_request` 出站 → 前端弹框 → 前端回 `permission_response` → 这里把答案交给闸门。
+    - **超时由 `permissions.enforce` 统一处理**（B2：超时/无人应答 → 自动拒绝），
+      这里只负责"发出去 + 等答案"；`timeoutSec` 也一并告诉前端，好让它自己收起弹框；
+    - **「本会话内总是允许」不在主循环里写**：主循环的运行上下文与跑任务的 task 不是同一个，
+      在那里调 `grant_always()` 会记到另一个会话上 → 所以用 `(allow, always)` 原样带回来，
+      由**跑任务的 task 自己**（上下文正确）去登记。
+    """
+
+    def __init__(self, ws: WebSocket, state: dict) -> None:
+        self._ws = ws
+        self._state = state
+
+    async def __call__(self, request: PermissionRequest) -> bool:
+        request_id = uuid.uuid4().hex[:8]
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._state["pending"][request_id] = future
+        try:
+            await _send(
+                self._ws,
+                self._state,
+                request.to_payload(request_id, self._state["confirm_timeout"]),
+            )
+            answer = await future  # 被 wait_for 取消时这里直接抛 CancelledError
+            if answer.get("allow") and answer.get("always"):
+                grant_always(request.tool_name)
+                logger.info("[权限] 本会话内总是允许：%s", request.tool_name)
+            return bool(answer.get("allow"))
+        finally:
+            self._state["pending"].pop(request_id, None)
+
+
+async def _run_chat(
+    ws: WebSocket,
+    state: dict,
+    user_input: str,
+    exec_mode: str,
+    permission_mode: str,
+) -> None:
+    """跑一次任务（在后台 task 里，所以人工确认期间主循环还能继续收消息）。
+
+    同一 `thread_id` 用**同一把会话锁**串行（B3）；不同会话互不阻塞。
+    """
+    thread_id = state["thread_id"]
+    async with await get_session_lock(thread_id):
+        start = time.time()
+        await _send(
+            ws,
+            state,
+            {
+                "type": "start",
+                "threadId": thread_id,
+                "message": "Planner → Executor → Verifier 协作中...",
+                "permissionMode": permission_mode,
+                "permissionModeLabel": mode_label(permission_mode),
+            },
+        )
+        # 权限会话：模式来自前端下拉框；确认通道是这条 WS；「总是允许」集合跨消息复用（B7）
+        session = Session(
+            mode=permission_mode,
+            scope=thread_id,
+            approver=WebApprover(ws, state),
+            timeout=state["confirm_timeout"],
+            always_allow=state["always_allow"],
+        )
+
+        async def _push_node_event(event: dict) -> None:
+            """T5.6：把节点级进度直接推给前端（用现有 WS，不引 SSE）。"""
+            await _send(ws, state, {**event, "threadId": thread_id})
+
+        try:
+            # 同时绑「权限会话」与「进度事件接收器」（都在当前 task 的上下文里）
+            with bind_session(session), bind_event_sink(_push_node_event):
+                result = await run_multi_agent(
+                    user_input,
+                    runtime.tools,
+                    executor_agent=runtime.executor_agent,
+                    verifier_agent=runtime.verifier_agent,
+                    thread_id=thread_id,
+                    mode=exec_mode,
+                )
+        except Exception as e:
+            logger.exception("任务执行失败")
+            await _send(ws, state, {"type": "error", "message": f"{type(e).__name__}: {e}"})
+            return
+
+        elapsed = round(time.time() - start, 1)
+        # 跨轮记忆由 checkpointer 落库（run_multi_agent 内部完成），这里不再手写 history
+        await _send(
+            ws,
+            state,
+            {
+                "type": "result",
+                "threadId": thread_id,
+                "plan": result["plan"],
+                "verdict": result["verdict"],
+                "finalResponse": result["final_response"],
+                "toolTrace": _summarize_trace(result.get("executor_trace_list")),
+                "tokenUsage": result.get("token_usage", 0),
+                "stepCount": result.get("step_count", 0),
+                "retryCount": result.get("retry_count", 0),
+                "mode": result.get("mode", exec_mode),
+                "route": result.get("route", ""),
+                "elapsedSec": elapsed,
+                "permissionMode": permission_mode,
+                "permissionModeLabel": mode_label(permission_mode),
+            },
+        )
+
+
 @app.websocket("/ws/chat")
 async def ws_chat(ws: WebSocket):
     await ws.accept()
-    state = {"thread_id": str(uuid.uuid4())[:8]}
+    state: dict = {
+        "thread_id": str(uuid.uuid4())[:8],
+        # 权限模式：新会话取持久化值（D4 已保证「放开」不会从文件里被读回来）
+        "permission_mode": load_permission_mode(),
+        "confirm_timeout": CONFIRM_TIMEOUT,
+        # 「本会话内对该工具总是允许」（B7）：换会话即清空；键里带模式，切档自动失效
+        "always_allow": set(),
+        # requestId -> Future[(allow, always)]，由主循环收答案、由跑任务的 task 消费
+        "pending": {},
+        "run_task": None,
+        "send_lock": asyncio.Lock(),
+    }
+
+    async def _session_payload() -> dict:
+        return {
+            "type": "session",
+            "threadId": state["thread_id"],
+            "permissionMode": state["permission_mode"],
+            "permissionModeLabel": mode_label(state["permission_mode"]),
+            "permissionModes": [{"value": v, "label": lbl} for v, lbl in MODE_LABELS.items()],
+            "confirmTimeoutSec": state["confirm_timeout"],
+        }
+
     # 连接建立后**主动**把当前 threadId 推给前端 —— 否则界面一直显示"(连接后自动生成)"，
-    # 而后端其实已经在用这个随机 ID 了（前端之前只在收到 new_session 的回复时才拿到 ID）。
-    await ws.send_text(json.dumps({"type": "session", "threadId": state["thread_id"]}))
+    # 而后端其实已经在用这个随机 ID 了。
+    await _send(ws, state, await _session_payload())
     logger.info(f"WS 连接建立 thread_id={state['thread_id']}")
 
     try:
@@ -323,112 +551,102 @@ async def ws_chat(ws: WebSocket):
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
-                await ws.send_text(json.dumps({"type": "error", "message": "消息不是合法 JSON"}))
+                await _send(ws, state, {"type": "error", "message": "消息不是合法 JSON"})
                 continue
 
             mtype = msg.get("type")
             if mtype == "ping":
-                await ws.send_text(json.dumps({"type": "pong"}))
+                await _send(ws, state, {"type": "pong"})
                 continue
+
+            if mtype == "permission_response":
+                # 人工确认的答案回来了：交给等待中的那个 Future（真正的登记在跑任务的 task 里做）
+                request_id = str(msg.get("requestId") or "")
+                future = state["pending"].get(request_id)
+                if future is None or future.done():
+                    logger.debug("收到已失效的 permission_response：%s", request_id)
+                    continue
+                future.set_result(
+                    {"allow": bool(msg.get("allow")), "always": bool(msg.get("alwaysAllow"))}
+                )
+                continue
+
             if mtype == "new_session":
-                state = {"thread_id": str(uuid.uuid4())[:8]}
-                await ws.send_text(json.dumps({"type": "session", "threadId": state["thread_id"]}))
+                state["thread_id"] = str(uuid.uuid4())[:8]
+                state["always_allow"] = set()  # 换会话 → 授权作废
+                await _send(ws, state, await _session_payload())
                 continue
+
             if mtype == "load_session":
                 # 切换到一个历史会话：只更新 thread_id，历史由前端调
                 # GET /api/sessions/{id}/messages 拉取回放。
                 requested = str(msg.get("threadId") or "").strip()
                 if not requested:
-                    await ws.send_text(
-                        json.dumps({"type": "error", "message": "load_session 缺少 threadId"})
+                    await _send(
+                        ws, state, {"type": "error", "message": "load_session 缺少 threadId"}
                     )
                     continue
                 state["thread_id"] = requested
-                await ws.send_text(json.dumps({"type": "session", "threadId": requested}))
+                state["always_allow"] = set()  # 换会话 → 授权作废
+                await _send(ws, state, await _session_payload())
                 continue
+
+            if mtype == "set_permission_mode":
+                # 前端下拉框改档位：**同时**更新本连接的档位 + 按 D4 持久化
+                state["permission_mode"] = persist_permission_mode(str(msg.get("mode") or ""))
+                await _send(ws, state, await _session_payload())
+                continue
+
             if mtype != "chat":
-                await ws.send_text(
-                    json.dumps({"type": "error", "message": f"未知消息类型 {mtype}"})
-                )
+                await _send(ws, state, {"type": "error", "message": f"未知消息类型 {mtype}"})
                 continue
 
             # 执行模式：由前端下拉框随每条消息带上（白名单校验，非法值回落 auto）
-            mode = str(msg.get("mode") or "auto").strip().lower()
-            if mode not in ("auto", "single", "multi"):
-                mode = "auto"
+            exec_mode = str(msg.get("mode") or "auto").strip().lower()
+            if exec_mode not in ("auto", "single", "multi"):
+                exec_mode = "auto"
+
+            # 权限模式（阶段 5）：前端也随消息带；和「执行模式」一样做白名单校验。
+            # ⚠️ 「放开」只对**本连接**生效，不落盘（D4）。
+            if msg.get("permissionMode"):
+                state["permission_mode"] = normalize_mode(
+                    msg["permissionMode"], default=state["permission_mode"]
+                )
 
             user_input = str(msg.get("message") or "").strip()
             if not user_input:
-                await ws.send_text(json.dumps({"type": "error", "message": "消息不能为空"}))
+                await _send(ws, state, {"type": "error", "message": "消息不能为空"})
                 continue
             if msg.get("threadId"):
                 state["thread_id"] = str(msg["threadId"])
 
-            if task_lock.locked():
-                await ws.send_text(
-                    json.dumps(
-                        {"type": "error", "code": "busy", "message": "有任务正在执行，请等待完成"}
-                    )
+            # 同一连接同时只跑一个任务（并发入口是"不同连接 / 不同会话"）
+            run_task = state.get("run_task")
+            if run_task is not None and not run_task.done():
+                await _send(
+                    ws,
+                    state,
+                    {"type": "error", "code": "busy", "message": "有任务正在执行，请等待完成"},
                 )
                 continue
 
-            async with task_lock:
-                start = time.time()
-                await ws.send_text(
-                    json.dumps(
-                        {
-                            "type": "start",
-                            "threadId": state["thread_id"],
-                            "message": "Planner → Executor → Verifier 协作中...",
-                        }
-                    )
-                )
-                try:
-                    result = await run_multi_agent(
-                        user_input,
-                        runtime.tools,
-                        executor_agent=runtime.executor_agent,
-                        verifier_agent=runtime.verifier_agent,
-                        thread_id=state["thread_id"],
-                        mode=mode,
-                    )
-                except Exception as e:
-                    logger.exception("任务执行失败")
-                    await ws.send_text(
-                        json.dumps({"type": "error", "message": f"{type(e).__name__}: {e}"})
-                    )
-                    continue
+            state["run_task"] = asyncio.create_task(
+                _run_chat(ws, state, user_input, exec_mode, state["permission_mode"])
+            )
 
-                elapsed = round(time.time() - start, 1)
-                # 跨轮记忆由 checkpointer 落库（run_multi_agent 内部完成），这里不再手写 history
-
-                await ws.send_text(
-                    json.dumps(
-                        {
-                            "type": "result",
-                            "threadId": state["thread_id"],
-                            "plan": result["plan"],
-                            "verdict": result["verdict"],
-                            "finalResponse": result["final_response"],
-                            "toolTrace": _summarize_trace(result.get("executor_trace_list")),
-                            "tokenUsage": result.get("token_usage", 0),
-                            "stepCount": result.get("step_count", 0),
-                            "retryCount": result.get("retry_count", 0),
-                            "mode": result.get("mode", mode),
-                            "route": result.get("route", ""),
-                            "elapsedSec": elapsed,
-                        },
-                        ensure_ascii=False,
-                    )
-                )
     except WebSocketDisconnect:
         logger.info(f"WS 连接断开 thread_id={state['thread_id']}")
     except Exception as e:
         logger.exception("WS 异常")
         try:
-            await ws.send_text(json.dumps({"type": "error", "message": f"{type(e).__name__}: {e}"}))
+            await _send(ws, state, {"type": "error", "message": f"{type(e).__name__}: {e}"})
         except Exception:
             pass
+    finally:
+        # 连接没了就把还在跑的任务取消掉（否则它会继续等一个永远不会来的确认）
+        run_task = state.get("run_task")
+        if run_task is not None and not run_task.done():
+            run_task.cancel()
 
 
 # ── 前端静态托管（构建产物存在时）──

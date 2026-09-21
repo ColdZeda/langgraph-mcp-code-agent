@@ -82,11 +82,15 @@ MODEL_API_KEY=你的API密钥
 ### 运行（命令行）
 
 ```bash
-uv run python main.py                        # 默认启动（执行模式 auto）
+uv run python main.py                        # 默认启动（执行模式 auto / 权限模式 需确认）
 uv run python main.py --thread-id my-session # 指定会话 ID
 uv run python main.py --mode single          # 执行模式：auto（默认）/ single / multi
+uv run python main.py --permission readonly  # 权限模式：readonly / confirm（默认）/ open
 uv run python main.py --debug                # 调试模式（详细日志）
 ```
+
+> 「**执行模式**」和「**权限模式**」是**两条独立的轴**，可以任意组合（例如 `multi + readonly`）：
+> 前者决定"谁来干"（要不要 Planner / Verifier），后者决定"允不允许动手"。详见[安全设计](#安全设计)。
 
 退出：`exit` / `quit` / `q` / `退出` / `bye`
 
@@ -100,11 +104,20 @@ uv run uvicorn app.web.server:app --port 8000
 # 浏览器打开 http://localhost:8000
 ```
 
-- 聊天界面：任务完成后一次性推送结构化结果——Planner 计划、工具调用轨迹（可折叠）、
-  Verifier 验收徽章、token / 耗时统计；**顶部有执行模式下拉框**（auto / single / multi）
+- 聊天界面：**执行过程实时可见**（阶段 5）—— 任务跑起来后逐行显示
+  `路由 → Planner 规划 → Executor 第 N 步调用了哪个工具 → Verifier 验收`，
+  而不是干等一个转圈；结束时给结构化结果——Planner 计划、工具调用轨迹（可折叠）、
+  Verifier 验收徽章、token / 耗时统计；**侧栏有执行模式与权限模式两个下拉框**
+- **人工确认（阶段 5）**：「需确认」档下，Agent 要动写 / 执行类工具时前端会**弹确认框**——
+  显示工具名、关键参数、风险等级（高危的附影响面说明），可以点「允许执行」或「拒绝」，
+  也可以勾「**本会话内对该工具总是允许**」（**默认不勾**，切档位或换会话即失效）；
+  **没人应答会倒计时自动拒绝**
 - 模型设置：界面内热切换模型 / API 地址 / Key，**四个角色（Planner / Executor / Verifier / Router）
   分别选模型**（数据源是 `config/models.json`）；设置只存本机 `runtime/web-settings.json`，不进仓库
 - 会话列表：读 `runtime/checkpoints.db`；**点击任一会话即可切换并回放历史**，之后的对话在原会话上续聊
+
+> 权限模式的持久化是**有取舍的**：只把「只读 / 需确认」落盘，**「放开」永不持久化** ——
+> 新会话一律回落「需确认」。理由见[安全设计](#安全设计)（"我上次设过、这次忘了"是最容易埋雷的地方）。
 
 > 前端（Vue 3 + Vite）源码在 `app/web/frontend/`，构建产物 `dist/` 已入库——不装 Node 也能直接运行；
 > 改前端后 `cd app/web/frontend && npm install && npm run build` 重新构建。
@@ -195,6 +208,100 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 > 另外单列两个更严的指标（关键词命中分不清「推荐 f-string」和「别用 f-string」这类**故意写错的干扰项**）：
 > top-1 来自正解文件 **0.6**、top-1 落在干扰项 **0.4** —— 测试集很小（35 块），这是**已知局限**。
 
+## 安全设计
+
+> **一句话**：这是个**本地单用户**工具，安全设计的目标**不是"防外人"，而是"防 Agent 自己
+> （或我的误操作）把本机搞坏"**。所以边界画在**应用层**，而不是假装有 OS 级沙箱。
+
+### 三层防线（判据不同，**故意不合并**）
+
+| 层 | 在哪 | 管什么 | 随权限模式变吗 |
+|---|---|---|---|
+| ① **工具级档位表**（主防线） | `app/code_agent/security/permissions.py` | 这个工具在当前档位下**该不该**执行 | ✅ 就是它 |
+| ② **内容级危险命令黑名单** | `mcp_servers/vm.py` / `powershell_tools.py` | 同一个工具，**这次参数**危不危险 | ❌ 不变（选「放开」也照样拦） |
+| ③ MySQL 语句白名单 + 只读账号 | `mysql_tools.py` / `scripts/mysql-init/*.sql` | 只读工具被拿来写数据 | ❌ 不变 |
+
+> 为什么 ① 和 ② 不合并：**判据不同** —— 档位表问"有没有副作用"，黑名单问"这次参数危不危险"。
+> 同理它和工具缓存名单（`CACHEABLE_TOOL_NAMES`）也是两张表，后者问"结果会不会变"。
+
+### 三档权限模式（默认「需确认」）
+
+32 个工具被分成 A 类**只读 14 个** / B 类**写·执行 18 个**（其中 6 个标 🔴 高危）：
+
+| 档位 | A 类只读工具 | B 类写 / 执行工具 |
+|---|---|---|
+| **只读** | ✅ 放行 | 🚫 **直接拒绝**（不弹框，直接告诉模型"为什么不行 + 怎么改"） |
+| **需确认**（默认） | ✅ 放行 | ⏸ **弹确认框**（高危的显示影响面） |
+| **放开** | ✅ 放行 | ✅ 直接执行（**危险命令黑名单仍然生效**；高危操作**仍然强制留痕**） |
+
+**三类工具之外的（未归类）在任何档位都拒绝** —— 白名单语义：
+以后新增工具忘了归类，是"默认拒绝"而不是"默认放行"（有一条测试盯着"32 个工具一个不多一个不少"）。
+
+**⚠️ 粒度是「工具级」不是「参数级」**：只要是 B 类工具，参数再无害也会弹
+（用 `write_file` 写一个 `hello.py` 也弹）。代价是"同一工具内不同参数的危险差异"被抹平了，
+好处是规则简单、可预测、不会因为参数解析出错而漏放。
+
+### 四个实现细节（都是踩出来的）
+
+1. **权限判定在缓存查询之前** —— 否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果；
+2. **被拒绝 / 被否决的调用绝不写缓存**（缓存里只能是真实执行结果）；
+3. **拒绝用独立异常类型** —— 不会被"写失败 → 清缓存"那条分支误当成执行失败；
+4. **拒绝信息必须带"原因 + 出路"**（例：`当前权限模式为「只读」，工具 write_file 被拒绝；
+   如需写入请把权限模式切到「需确认」`），否则模型会反复重试同一件事，白烧 token。
+
+这四条各有测试守着，不是靠注释：`tests/test_permissions.py`。
+
+### 权限模式的持久化（有意的取舍）
+
+- **「只读 / 需确认」落盘**（`runtime/web-settings.json`）—— 常用档位设一次就够；
+- **「放开」永不持久化**，新会话一律回落「需确认」；
+  即使有人手改配置文件塞了 `"open"`，加载时也当「需确认」处理。
+  理由：**"我上次设过、这次忘了"是最容易埋雷的地方**。
+- CLI 默认「需确认」；无人值守入口（无头脚本）必须显式指定档位 ——
+  否则按"没人应答 → 自动拒绝"的规则，每个写工具都会被拒，等于入口不可用。
+
+### 留痕（`runtime/permissions.log`）
+
+每一条**确认决定**（允许 / 拒绝 / 超时 / 无人值守被拒）和**放开档下的高危操作**都追加一行 JSON：
+
+```json
+{"ts":"2026-09-21T13:03:27","scope":"manual-test","tool":"write_file_to_vm","mode":"readonly",
+ "tier":"write","high_risk":true,"decision":"deny_mode","args":"{\"file_path\": \"/tmp/x\", ...}"}
+```
+
+该文件在 `runtime/` 下（**gitignore**），审计写入失败**只记日志、绝不影响工具调用**。
+
+### ⚠️ 我不把 WSL 当"安全沙箱"（这条是想清楚之后才写的）
+
+WSL2 常被当成"沙箱"，但**它不是安全边界**：
+
+- 它**默认把 Windows 盘挂在 `/mnt/c`、`/mnt/e`…**，而这个项目的 `vm.py` 还**主动在用这条通道**
+  （`windows_path_to_wsl_path()` 就是把 `E:\...` 转成 `/mnt/e/...` 去读写 Windows 文件）；
+- 命令以**当前用户身份**运行，没有内核级隔离；
+- 内容级黑名单是**字符串匹配，本质上列不全**：`& (Get-Command Remove-Item) -Recurse -Force C:\`
+  这类动态写法绕得过去。
+
+所以对外一律说「**WSL2 隔离执行环境**（命令黑名单 + 应用层三档权限）」，
+**不说"WSL 安全沙箱"**。真正的边界要用 OS 级机制（Linux 的 Landlock + seccomp、
+macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次性容器 / VM）——
+本项目**明确不做**（平台相关的重活，对作品集边际收益低），方案已登记在候选池里。
+
+> 💡 **这条本身就是设计的一部分**：能说清"我的方案边界在哪、为什么"，比号称"安全沙箱"可信。
+
+### 走查一条真实链路（阶段 5 实测，不是示意图）
+
+```
+[只读档] list_files_in_vm('/tmp')   → 放行（真跑，返回 677 字符）
+[只读档] make_dir_in_vm             → ✅ 拒绝 decision=deny_mode（未执行、未缓存）
+[只读档] write_file_to_vm           → ✅ 拒绝（high_risk=true 已写审计）
+[放开档] make_dir_in_vm             → 放行（真实执行；非高危 → 不记审计，避免刷屏）
+[需确认档] write_file              → ⏸ 前端弹框 → 点允许 → 执行；点拒绝 / 超时 → 不执行
+```
+
+内容级黑名单那层另有 87 条测试，包括**正反两向**：漏拦清单里的写法全部拦住、
+正常操作（`rm -rf ./build`、`Remove-Item ./temp.txt`…）**不被误拦**，
+并且用"打桩 `subprocess`"断言**危险命令根本走不到启动子进程那一步**（`tests/test_dangerous_commands.py`）。
+
 ## 评估体系
 
 > ⚠️ **旧的 30 题端到端题集（`evals/tasks.py` / `verifiers.py` / `run_e2e.py` / `compare.py`）
@@ -260,9 +367,12 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 │   │   ├── agent/
 │   │   │   ├── multi_agent.py     # ★ 状态图（route_node / planner / executor / verifier + 条件边）
 │   │   │   ├── context.py         # 上下文工程：结果外置 / 历史压实 / token 预算
-│   │   │   ├── memory.py          # 分层记忆：自动注入 + 自动沉淀
+│   │   │   ├── memory.py          # 分层记忆：自动注入 + 自动沉淀（**进程内直调 store**）
+│   │   │   ├── events.py          # 节点级进度事件（ContextVar sink；没绑就静默跳过）
 │   │   │   ├── code_agent.py      # REPL 循环 + 非交互接口 run_single_task（供阶段 6 重建的评估脚本用）
 │   │   │   └── prompts.py         # System / Planner / Verifier / Executor（计划版）提示词
+│   │   ├── security/
+│   │   │   └── permissions.py     # ★ 三档权限档位表（32 工具）+ 判定 + 人工确认闸门 + 审计
 │   │   ├── model/llm.py           # LLMRegistry：get_llm(role) / chain / invoke_with_fallback
 │   │   ├── config.py              # 所有配置（从 .env 读）+ setup_logging（stderr）
 │   │   ├── mcp_servers/           # 6 个 MCP Server（powershell / 搜索 / mysql / vm / code_tools）
@@ -270,16 +380,17 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 │   │   ├── rag/                   # rag.py（MCP 薄壳）/ store.py（分块+精排）/ chunking.py（纯函数）
 │   │   ├── tools/
 │   │   │   └── file_tools.py      # FileManagementToolkit（限定在 workspace）
-│   │   └── utils/                 # mcp.py（工具加载）/ tool_wrap.py（外置+缓存）/ tool_cache.py
+│   │   └── utils/                 # mcp.py（工具加载）/ tool_wrap.py（权限+外置+缓存）/ tool_cache.py
 │   └── web/
-│       ├── server.py              # FastAPI（WS + REST + 静态托管）
-│       └── frontend/              # Vue3 + Vite（dist 已入库）
+│       ├── server.py              # FastAPI（WS + 权限确认协议 + REST + 静态托管）
+│       └── frontend/              # Vue3 + Vite（dist 已入库）；含 PermissionDialog（人工确认弹框）
 ├── config/models.json             # 模型注册表 + 角色分配 + 降级链（进版本控制）
 ├── data/knowledge/                # 知识库源文件：35 条（7 个文件 × 每文件 5 条）
 ├── scripts/                       # start-deps.ps1 / stop-deps.ps1 / mysql-init/*.sql
+│                                  #   + probe_mcp_server.py（手工发 JSON-RPC 探 MCP server 回没回）
 ├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
 ├── evals/                         # 只剩 RAG 检索基准 rag_bench.py（旧 30 题集已于阶段 5 删除，阶段 6 重建）
-├── tests/                         # 156 个测试（单元 + 工具级）
+├── tests/                         # 308 个测试（单元 + 工具级）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 与 archive/ 的内容已移出仓库）
 ├── AGENTS.md                      # AI 助手约定与已知坑
@@ -291,10 +402,10 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 156 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 308 | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
-| 测试覆盖率 | **68%**（1451 语句 / 458 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`） |
+| 测试覆盖率 | **68%**（1936 语句 / 613 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。未覆盖的 601+ 条里 **84% 集中在 6 个模块**，共同点是"要真环境才能跑到"（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 

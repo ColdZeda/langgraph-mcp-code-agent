@@ -51,9 +51,11 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 装依赖 | `uv sync` |
 | 跑 Agent（REPL） | `uv run python main.py` |
 | 指定会话 | `uv run python main.py --thread-id x` |
+| 指定权限模式 | `uv run python main.py --permission readonly`（readonly / confirm（默认）/ open） |
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（156 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（308 个） |
+| MCP server 探针（排查"工具调不通"） | `uv run python scripts/probe_mcp_server.py rag query_rag --args '{"query":"MCP"}'` |
 | RAG 基准（含分块/精排指标） | `uv run python evals/rag_bench.py` |
 | 重建前端 | `cd app/web/frontend && npm run build` |
 
@@ -70,26 +72,33 @@ app/code_agent/
 │                                  + _route_decide / after_executor / decide_after_verify
 │                                  + READONLY_TOOL_NAMES（Verifier 只读白名单）+ build_graph(mode=…)
 ├── agent/context.py             上下文工程：工具结果外置(T4.1) / 对话压实(T4.2) / token 预算(T4.3)
-├── agent/memory.py              分层记忆读写：自动注入(T4.4②) / 自动沉淀(T4.4③)
+├── agent/memory.py              分层记忆读写：自动注入(T4.4②) / 自动沉淀(T4.4③，**进程内直调**)
+├── agent/events.py              ★ 阶段 5：节点级进度事件（ContextVar sink；没绑就静默跳过）
 ├── agent/code_agent.py          REPL 循环 run_agent() + 非交互入口 run_single_task()（阶段 6 重建的评估脚本会用）
 ├── agent/prompts.py             SYSTEM_PROMPT_TEMPLATE（Plan→Execute→Verify 三步法）+ PROMPT_CONTEXT
 ├── model/llm.py                 LLMRegistry：get_llm(role) / chain(role) / invoke_with_fallback
 │                                  + build_llm / set_llm（热切换后需重建 agent）
 ├── config.py                    所有配置 + setup_logging（stderr）
 ├── mcp_servers/                 powershell(2) / browser(1) / mysql(10) / vm(4) / code_tools(4)
-├── rag/rag.py                   RAG MCP Server（4 个工具，**薄壳**）
-├── rag/store.py                 知识库核心：分块索引 / 粗召回 / CrossEncoder 精排（全懒加载）
+├── rag/rag.py                   RAG MCP Server（4 个工具，**薄壳**；⚠️ 顶层那句 import 是修死锁的，别删）
+├── rag/store.py                 知识库核心：分块索引 / 粗召回 / CrossEncoder 精排（**全懒加载**）
 ├── rag/chunking.py              纯分块函数（不 import torch，单测毫秒级）
 ├── tools/file_tools.py          FileManagementToolkit(root_dir=WORKSPACE_DIR) → 7 个工具
+├── security/permissions.py      ★ 阶段 5：三档权限档位表（32 工具）+ 判定 + 人工确认闸门 + 审计
 ├── utils/mcp.py                 load_mcp_tools（工厂；client 无需关闭，见「已知坑」）
 ├── utils/tool_cache.py          只读工具结果缓存（Redis；挂了自动降级）
-└── utils/tool_wrap.py           工具包装：结果外置 + 结果缓存（MCP 就地改 / 同步工具换代理）
+└── utils/tool_wrap.py           工具包装：**权限判定(第一句)** + 结果外置 + 结果缓存
 config/models.json               模型注册表 + 角色分配 + 降级链（**进版本控制**，不要放 runtime/）
-app/web/server.py                FastAPI：WS /ws/chat + REST（sessions/settings/models）+ 静态托管 dist
+app/web/server.py                FastAPI：WS /ws/chat（含权限确认协议）+ REST + 静态托管 dist
+app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框）+ store.js + components/
+                                 （ChatView / ResultCard / SettingsPanel / **PermissionDialog**〔阶段 5〕）
 evals/                           rag_bench.py（RAG 检索基准）—— 旧 30 题集已于阶段 5 删除，阶段 6 重建
-tests/                           156 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+scripts/                         start-deps.ps1 / stop-deps.ps1 / mysql-init/*.sql
+                                 + **probe_mcp_server.py**（手工发 JSON-RPC 探某个 MCP server 到底回没回）
+tests/                           308 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
-                                 tool_level / context / memory / tool_cache / tool_wrap / rag_chunking）
+                                 tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
+                                 permissions / dangerous_commands / web_permission〔后三个是阶段 5 的〕）
 ```
 
 ## 已知坑（务必先看）
@@ -218,6 +227,57 @@ tests/                           156 个测试（config / prompts / mysql_safe_i
   现已删除；`utils/mcp.py` 的 `load_mcp_tools_managed` 也一并删除（它的前提是错的）。
   回归测试：`tests/test_mcp_tool_lifecycle.py`。
 
+### 安全与权限（阶段 5，**主防线在应用层**）
+
+- **三档权限模式**（只读 / **需确认（默认）** / 放开）与 32 个工具的档位表在
+  `app/code_agent/security/permissions.py`；判定入口 `permissions.enforce()` 由
+  `utils/tool_wrap.py` 的 `_process` 在**第一句**调用 —— **必须在缓存查询之前**，
+  否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果。
+  `tests/test_permissions.py` 守着"32 个工具一个不多一个不少"+ 四条实现约束（顺序 / 不写缓存 /
+  独立异常类型 / 拒绝文案含出路）。
+  ⚠️ **不要把它和 `utils/tool_cache.py` 的 `CACHEABLE_TOOL_NAMES` 合并**：
+  缓存问"结果会不会变"，权限问"有没有副作用"，判据不同。
+- **WSL 不是安全边界**（讨论订正过，别再按老印象理解）：它默认把 Windows 盘挂在 `/mnt/c`，
+  而 `vm.py` 的 `windows_path_to_wsl_path()` 还主动在用这条通道。对外只说
+  「**WSL2 隔离执行环境**（命令黑名单 + 应用层三档权限）」，**别说"安全沙箱"**。
+- ⚠️ **内容级黑名单曾经有形同虚设的漏口（阶段 5 订正 #24，已修）**：
+  `vm.py` 旧模式 `\brm\s+-rf\s+/\s` 要求 `/` 后面**还得有一个空白字符**，于是最经典的
+  **`rm -rf /`（`/` 在结尾）直接放行**；`sudo rm -rf /`、`rm -fr /`、`rm -r -f /`、`chmod -R 777 /`
+  同样漏。PowerShell 那份另有毛病：要求 `-Recurse` 必须写在 `-Force` **前面**，且不认
+  `rm` / `del` / `rd` / `ri` 这些 **Remove-Item 的别名**。现在两侧都改成"flag 用后瞻匹配、顺序无关"。
+  ⚠️ **别指望命令自带的开关**：GNU rm 的 `--preserve-root`（默认开）**只管"参数就是 `/` 自身"**，
+  `rm -rf /*`、`rm -rf /mnt/c/...` 它都不管，`--no-preserve-root` 更是主动关掉它；
+  `chmod` / `chown` / `chgrp` 递归操作 `/` **默认根本不保护**。
+  回归测试 `tests/test_dangerous_commands.py`：**打桩 `subprocess`，断言危险命令走不到"启动子进程"那一步**。
+  ⚠️ **别再真打这些命令去"验证"** —— 阶段 5 实测踩过：`rm -rf /` 当时真的进了 WSL，
+  全靠 GNU rm 自己的 failsafe 才没出事。
+- **可达性**：`execute_powershell_command` 是**唯一能把原始命令透传下去**的入口；
+  VM 四个工具都 `shlex.quote` 过参数（透传不了原始命令）→ 那边属纵深防御。
+
+### RAG 与 MCP（阶段 5 订正 #27 / #28，**都是血泪**）
+
+- **⚠️ `rag.py` 顶层那句 `import sentence_transformers` 不是冗余，删了会死锁**（订正 #27）：
+  症状是"**`query_rag` / `save_knowledge` 永远不返回，但副作用已经发生**（文件与向量都写好了）"，
+  表现成前端一直转圈、**且不烧 token**。根因：`sentence_transformers → sklearn → scipy` 的扩展模块
+  在**事件循环跑起来之后**（`mcp.run()` 之后 anyio 已起工作线程）才首次加载 → 卡在
+  **Windows DLL 加载**上（`faulthandler` 打栈停在 `create_module`）。放在**模块 import 阶段**就正常。
+  回归守卫：`tests/test_mcp_tool_lifecycle.py::test_rag_server_imports_native_extensions_at_module_level`
+  （源码级检查，避免为此在单测里真的 import torch）。
+  ⚠️ **代价要说清**：这么改之后**每个 RAG 工具调用都要付 ≈8 秒的子进程启动**
+  （原来 `delete_knowledge` 这类早返回只要 0.2s，现在也要 9s）—— 总工作量没变，只是从"用的时候"挪到"开机的时候"。
+  实测：`rag` 的 `initialize` 8.0~10.6s，而 `code_tools` 只有 0.9s（差额就是那几个重库）。
+  → **改进方向**已登记进候选池（把 `query_rag` 改成**本地工具**、绕开子进程；或 MCP 改 Streamable HTTP 让 server 常驻）。
+- **自动沉淀走 `store.save_document`（进程内），不走 MCP 工具**（订正 #28）：
+  原来 `memory.py` 的 docstring 写着"两个都不走 MCP"，但代码里**沉淀走的是 `save_tool.ainvoke`** ——
+  文档与代码不符（自动注入确实没走，只有沉淀走了）。现已改成进程内直调，与 docstring 一致，
+  也顺带绕开了订正 #27 那条死锁路径。
+- **自动沉淀不走三档权限的弹框**（用户 2026-09-21 决策 B）：它是**应用自己的记账**，不是模型的自主动作
+  （模型碰不到它的时机与内容）→ 交给 `RAG_AUTO_DEPOSIT` 一个开关管；
+  但**「只读」档下仍然不写**（`maybe_deposit_knowledge` 里显式判 `MODE_READONLY`，有测试守着）。
+  模型**自己**调 `save_knowledge` 工具时照旧弹框。
+- **排查工具**：`scripts/probe_mcp_server.py` —— 从 Agent 那侧看，"服务端不回"和"客户端读不到"是**同一种症状**，
+  只有手工发 JSON-RPC 才能分清。用它看 stdout 上有没有响应、stderr 上执行到哪一步。
+
 ### 仓库整理
 
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 → **做全仓扫描类操作必须排除**（否则扫到生成物）。
@@ -238,13 +298,28 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 阶段 3（执行模式与模型配置）、**阶段 4（上下文工程与分层记忆）**已完成；
 后续阶段按顺序执行，**每阶段做完停下汇报 + 提交推送**。
 
-> 🚦 **下一步是阶段 5（HITL 与安全加固）—— 开工先读这三份，别凭记忆上手**：
-> 1. `program-fix第八版\阶段5_开工包.md` ← **唯一入口**（子任务 / 硬约束 / 代码锚点 / 验收清单）
-> 2. `program-fix第八版\阶段5_权限档位候选表.md`（32 个工具的档位归类，**已审核通过**）
-> 3. `program-fix第八版\讨论结论汇总.md` 的 **§11.3**（B1–B7 / C1 / C2 / D1–D4 决策与理由）
+> 🚦 **阶段 5（HITL 与安全加固）进行中** —— 开工依据：`program-fix第八版\阶段5_开工包.md`（唯一入口）
+> + `阶段5_权限档位候选表.md`（32 个工具的档位，已审核）+ `讨论结论汇总.md` 的 **§11.3**（B1–B7/C1/C2/D1–D4）。
 >
-> 设计决策**已全部定完**（含 **D4**：权限模式默认值用「③ 混合」——「放开」档不持久化，
-> 新会话回落「需确认」）—— **开工不需要再问任何问题**。
+> | 子任务 | 状态 |
+> |---|---|
+> | 前置：删除旧口径 30 题集 | ✅ 已提交推送（`2552c10`） |
+> | 前置：修内容级黑名单漏拦（订正 #24） | ✅ `vm.py` / `powershell_tools.py` 模式字符串 + `tests/test_dangerous_commands.py`（87 条） |
+> | **T5.1** 三档权限档位表 | ✅ `app/code_agent/security/permissions.py`（32 工具：只读 14 / 写执行 18 / 高危 6） |
+> | **T5.2** `tool_wrap._process` 拦截（**必须在缓存查询之前**） | ✅ + `tests/test_permissions.py`（44 条） |
+> | **T5.3** 人工确认（CLI `input()` / Web 弹框 / 超时自动拒绝 / 本会话总是允许） | ✅ CLI `--permission` + `ask_permission_in_terminal`；Web `WebApprover` + `PermissionDialog.vue` + `tests/test_web_permission.py`（17 条） |
+> | **B3** `task_lock` 改按会话锁 | ✅ `server.py::get_session_lock`（并发回归测试：两会话同时在跑 → `max == 2`） |
+> | **T5.4** 审计留痕 `runtime/permissions.log` | ✅ 判定层写入（确认决定 + 放开档高危操作）；**没做**展示页（原方案没要求） |
+> | **T5.5** 安全设计进 README | ✅ README 新增「安全设计」整节（措辞：WSL2 隔离执行环境，**不说安全沙箱**） |
+> | **T5.6** Web 节点级实时推送（现有 WS，**不引 SSE**） | ✅ `agent/events.py`（ContextVar sink）+ 四个节点 `emit()` + 前端逐行进度；`tests/test_web_permission.py` 里 3 条协议级测试 |
+> | 前端：权限下拉框 + 确认弹框 + 节点进度 + `npm run build` | ✅ 全部构建进 `dist/` |
+> | **额外修的 3 个 bug**（跑通 Web 时暴露的，见订正 #27/#28） | ✅ RAG 工具在 MCP 里**死锁**（一行 import 修好）/ 历史会话不显示回复 / single 模式误报"验收未通过" |
+> | **额外改的 4 处**（用户 2026-09-21 决策） | ✅ 助手改名 `novi` + 界面 `Code Agent-novi` + 真实模型名进提示词；沉淀判据收窄；沉淀**豁免权限层**（只读档仍不写）；确认弹框队列化 |
+>
+> 🆕 **阶段 5 新增模块**：`app/code_agent/security/permissions.py`（档位表 + 判定 + 人工确认闸门 + 审计）。
+> 新增配置：`CODE_AGENT_PERMISSION_MODE` / `CODE_AGENT_CONFIRM_TIMEOUT` / `CODE_AGENT_PERMISSIONS_LOG`。
+> Web 端确认协议：出站 `permission_request`（含 `requestId` / `tool` / `args` / `highRisk` / `note` / `timeoutSec`），
+> 入站 `permission_response`（`requestId` / `allow` / `alwaysAllow`）+ `set_permission_mode`。
 
 **已知遗留**：
 
@@ -252,7 +327,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 2. **前端构建产物**：`app/web/frontend/dist/` 必须入库；⚠️ 根 `.gitignore` 曾有裸 `dist/`
    会把新构建的哈希资源一并吞掉（已改为 `/dist/`）。改前端后必须 `npm run build` 并提交
    **新增与删除**的资源文件。
-3. **Web 端节点级实时推送**（现在只在任务完成后一次性推送）→ 阶段 5 的 T5.6（用现有 WS，不引 SSE）。
+3. ~~**Web 端节点级实时推送**~~ → ✅ **已完成（阶段 5 · T5.6）**：`agent/events.py` + 四个节点 `emit()`，
+   前端逐行显示 Planner/Executor 每步/Verifier；**用的是现有 WebSocket，没有引 SSE**。
 4. **RAG 检索会把干扰项排到第一**：实测 10 道题里有 **4 道**的 top-1 落在 `distractors/`（故意写错的知识），
    正解来源 top-1 只有 0.6。测试集本身很小（35 块）+ CrossEncoder 偏词汇匹配，属于**已知局限**；
    阶段 6 重做评估时应把它作为"检索质量"的真实指标之一（别只看关键词命中）。
@@ -267,8 +343,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 156 | `uv run python -m pytest tests/ -q` |
-| 测试覆盖率 | 68%（1451 语句 / 458 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`） |
+| 测试数 | 308 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 68%（1936 语句 / 613 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **与阶段 4 的 68% 不可直接比**：阶段 5 的测试第一次 import 了 `mcp_servers/vm.py` 与 `powershell_tools.py`，统计分母多了 192 条语句（覆盖住的语句数其实是 993 → 1323）|
 | 评估题数 | **0**（旧 30 题集已于阶段 5 删除，阶段 6 重建） | `Get-ChildItem evals -File`（现在只有 `rag_bench.py`） |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |

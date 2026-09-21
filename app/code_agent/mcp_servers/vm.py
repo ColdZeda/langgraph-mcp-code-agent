@@ -19,15 +19,39 @@ VM_UPLOADS_DIR = os.environ.get("CODE_AGENT_VM_UPLOADS_DIR", "/home/leprite/ngin
 # 沙箱超时（秒），防止死循环命令卡住 Agent
 VM_COMMAND_TIMEOUT = int(os.environ.get("CODE_AGENT_VM_TIMEOUT", "60"))
 
-# 危险命令黑名单
+# 危险命令黑名单（**内容级**防线：同一个工具、这次参数危不危险 —— 不随三档权限模式变化）
+#
+# ⚠️ **阶段 5 订正 #24**：原版把最经典的写法漏了。旧模式是 `\brm\s+-rf\s+/\s` ——
+#    它要求 `/` 后面**还得有一个空白字符**，而 `rm -rf /` 的 `/` 正好在结尾 →
+#    **匹配不上、直接放行**。同样漏的还有 `sudo rm -rf /`、`rm -fr /`（flag 顺序不同）、
+#    `rm -r -f /`（flag 分开写）、`chmod -R 777 /`（一模一样的毛病）。
+#
+#    当时没出事**只是因为** GNU rm 自带 `--preserve-root`（默认开）会拒绝"参数就是 `/` 自身"这一种，
+#    而官方手册明写它**只管这一种**：`rm -rf /*`（shell 展开后每个参数都不是 `/`）、
+#    `rm -rf /mnt/c/...` 它都不管，`--no-preserve-root` 更是主动把保护关掉；
+#    `chmod` / `chown` / `chgrp` 递归操作 `/` 则**默认就不保护**。
+#    → 结论：能不能删根**必须我们自己的黑名单说了算**，不能指望命令自带的开关。
+#
+#    ⚠️ 顺带记一个**可达性事实**（免得误判风险面）：VM 的四个工具
+#    （`make_dir_in_vm` / `list_files_in_vm` / `write_file_to_vm` / `upload_directory_to_vm`）
+#    **都把参数 `shlex.quote` 过**，没有任何工具能透传原始命令 → 这份黑名单在 VM 侧属于**纵深防御**；
+#    真正能跑任意命令的入口是 `execute_powershell_command`（见 powershell_tools.py 的对应订正）。
+#
+#    回归测试：`tests/test_dangerous_commands.py`（打桩 `subprocess.run`，
+#    断言危险命令**根本走不到启动子进程那一步** —— 这才是"拦住"的机械证明）。
 _DANGEROUS_PATTERNS = [
-    r"\brm\s+-rf\s+/\s",  # rm -rf / (仅匹配根目录，不误拦 /home/...)
-    r"\brm\s+-rf\s+/\*",  # rm -rf /*
+    # rm 递归删除根目录：两个 flag 用后瞻匹配（**顺序无关**），`/` 后面允许是空白 / 结尾 / 通配符。
+    # 覆盖 `rm -rf /`、`sudo rm -rf /`、`rm -fr /`、`rm -r -f /`、`rm -R /`、`rm -rf /*`、
+    # `rm -rf / --no-preserve-root`；**不**误拦 `rm -rf ./build`、`rm -rf /tmp/foo`、`rm -rf build/`。
+    r"\brm\b(?=[^|;&]*\s--?[a-z]*r)[^|;&]*\s+/(?:\s|$|\*)",
+    # chmod / chown / chgrp 递归作用在根目录上（这三种命令**默认没有** --preserve-root 保护）
+    r"\bch(?:mod|own|grp)\b(?=[^|;&]*\s--?[a-z]*r)[^|;&]*\s+/(?:\s|$|\*)",
+    # 把根目录权限放开（非递归也一样是灾难）
+    r"\bch(?:mod|own|grp)\b[^|;&]*\b777\b[^|;&]*\s+/(?:\s|$|\*)",
     r"\bdd\s+if=",  # dd 磁盘操作
     r"\bmkfs\b",  # 格式化
     r"fork\s*bomb",  # fork 炸弹
     r":\(\)\s*\{",  # shell fork bomb
-    r"chmod\s+.*777\s+/\s",  # chmod 777 / (仅匹配根目录)
     r">\s*/dev/sda",  # 写入磁盘设备
     r"\bshutdown\b",  # 关机/重启
     r"\breboot\b",

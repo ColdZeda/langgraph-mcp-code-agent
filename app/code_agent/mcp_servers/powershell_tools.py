@@ -15,10 +15,22 @@ from app.code_agent.config import PROJECT_ROOT
 mcp = FastMCP()
 
 # ── 危险命令检测 ──
-
+#
+# ⚠️ **阶段 5 订正 #24**：这里是内容级防线里**最要紧的一份** ——
+#    `execute_powershell_command` 是**唯一能把原始命令透传下去**的入口
+#    （VM 那四个工具都把参数 `shlex.quote` 过，透传不了原始命令）。
+#    原版第二条 `\bRemove-Item\s+.*-Recurse\s+-Force\b` 有两个漏口：
+#      ① 要求 `-Recurse` 必须写在 `-Force` **前面** → `Remove-Item -Force -Recurse C:\` 漏拦；
+#      ② 只认 cmdlet 全名 → `rm C:\ -r -fo` / `del C:\ -r -fo` 漏拦
+#         （`rm` / `del` / `erase` / `rd` / `rmdir` / `ri` 在 PowerShell 里**都是 Remove-Item 的别名**）。
+#    现改为**两个后瞻**：同一段命令里同时出现"递归参数"和"强制参数"即可，顺序不限、允许 PowerShell 的缩写。
+#    注意这**不放松**原有的严格度：合法的 `Remove-Item ./build -Recurse -Force` 原来就被拦，现在还是拦
+#    （要删 workspace 里的东西请走 `file_delete` 工具 —— 它受三档权限管，且只能动 workspace）。
 _DANGEROUS_POWERSHELL_PATTERNS = [
     r"\bRemove-Item\s+-Path\s+/\*",  # Remove-Item 根目录通配
-    r"\bRemove-Item\s+.*-Recurse\s+-Force\b",  # 强制递归删除
+    # 强制递归删除（顺序无关 + 认别名，见上面的订正说明）
+    r"\b(?:Remove-Item|ri|rm|del|erase|rd|rmdir)\b"
+    r"(?=[^|;&]*\s-(?:r|rec\w*)\b)(?=[^|;&]*\s-(?:fo|for\w*)\b)",
     r"\bFormat-\w+",  # Format-Volume / Format-HardDisk
     r"\bdel\s+/[fsq]",  # del /f /s /q
     r"\brd\s+/[sq]\b",  # rd /s /q

@@ -36,7 +36,7 @@ defineExpose({ newSession: newSessionAndClear })
 
     <div class="list" ref="listEl">
       <div v-if="!store.messages.length" class="empty">
-        <h2>编程智能体</h2>
+        <h2>Code Agent-novi</h2>
         <p>Planner → Executor → Verifier 三阶段协作</p>
         <p class="tip">试试：读取当前目录结构 / 查询 MySQL 数据库列表 / 在知识库中搜索 MCP 协议要点</p>
       </div>
@@ -47,10 +47,22 @@ defineExpose({ newSession: newSessionAndClear })
         </div>
         <div v-else class="row assistant">
           <div v-if="m.phase === 'running'" class="bubble running-bubble">
-            <span class="spinner"></span>{{ m.text }}
+            <div class="running-head"><span class="spinner"></span>{{ m.text }}</div>
+            <!-- 阶段 5（T5.6）：节点级进度，任务进行中就看得见走到哪一步 -->
+            <ol v-if="store.progress.length" class="progress">
+              <li v-for="p in store.progress" :key="p.id">{{ p.text }}</li>
+            </ol>
           </div>
           <div v-else-if="m.phase === 'error'" class="bubble error-bubble">{{ m.text }}</div>
           <ResultCard v-else-if="m.result" :result="m.result" />
+          <!-- ⚠️ 阶段 5 修：**历史会话回放**走的就是这一支。
+               loadSession 造出来的消息是 {role, phase:'done', text}，**没有 result 字段**，
+               而上面三条分支分别要求 running / error / result →
+               以前这里什么都不渲染，表现成"点历史会话只看到自己发的消息"。
+               补一条纯文本回退分支即可。 -->
+          <div v-else-if="m.text" class="bubble assistant-bubble">
+            <span v-if="m.fromHistory" class="history-tag">历史</span>{{ m.text }}
+          </div>
         </div>
       </template>
     </div>
@@ -86,6 +98,11 @@ defineExpose({ newSession: newSessionAndClear })
 .bubble { max-width: 72%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
 .user-bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
 .running-bubble { background: #1e293b; border: 1px solid #334155; color: #94a3b8; font-style: italic; }
+.running-head { display: flex; align-items: center; }
+.progress { margin: 8px 0 0 20px; padding: 0; list-style: none; font-style: normal; font-size: 12px; line-height: 1.9; color: #93c5fd; max-height: 220px; overflow-y: auto; }
+.progress li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.assistant-bubble { background: #1e293b; border: 1px solid #334155; }
+.history-tag { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px; background: #334155; color: #94a3b8; font-size: 11px; vertical-align: 1px; }
 .error-bubble { background: #450a0a; border: 1px solid #b91c1c; color: #fca5a5; }
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #64748b; border-top-color: #93c5fd; border-radius: 50%; margin-right: 8px; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }

@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from collections.abc import Callable
 
 from app.code_agent.config import RAG_AUTO_DEPOSIT, RAG_AUTO_INJECT, RAG_TOP_K
+from app.code_agent.security.permissions import MODE_READONLY, current_session
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +83,23 @@ DEPOSIT_PROMPT = """判断下面这次任务里，有没有**值得长期记住�
 执行结果：
 {result}
 
-判断标准（**宁缺毋滥**，知识库被噪音污染后检索质量会下降）：
-- 值得存：环境事实（端口 / 路径 / 账号约定）、踩过的坑与规避方法、
-  项目特有的规范或流程（例如"跑评估前必须先清 checkpoint 残留"）。
-- 不值得存：闲聊、用户个人信息（名字 / 偏好）、本次任务的具体产物内容、
-  一次性数据、复述任务本身。
+判断标准（**宁缺毋滥** —— 存错一条的代价比漏存一条大得多：知识库被噪音污染后检索质量会下降，
+而这些经验还会被**自动注入**到以后的任务里）：
+
+✅ **值得存**（必须属于下面某一类，且**脱离本次任务仍然成立**）：
+- 环境事实：端口 / 路径 / 账号约定 / 服务名；
+- 踩过的坑与规避方法（"XX 会报 YY，改成 ZZ 才行"）；
+- 项目特有的规范或流程（例如"跑评估前必须先清 checkpoint 残留"）；
+- 用户明确表达过的偏好或要求。
+
+❌ **不值得存**（命中任何一条 → save 必须是 false）：
+- **闲聊 / 打招呼 / 询问身份或能力**（"你是谁" / "你是什么模型" / "你能做什么"）；
+- **模型对自己的介绍、自我描述、能力说明**；
+- 复述任务本身、复述用了哪个工具、复述执行步骤；
+- 用户个人信息（名字 / 联系方式）；
+- 本次任务的具体产物内容、一次性数据、临时路径。
+
+⚠️ **不确定就不存**（save=false）。先问自己一句：这条经验换个任务还用得上吗？用不上就别存。
 
 只输出严格 JSON，不要其他内容：
 {{"save": true 或 false, "items": [{{"title": "简短标题（用作文件名）", "content": "经验正文"}}]}}
@@ -110,12 +123,28 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+def save_knowledge_in_process(title: str, content: str) -> tuple[str, int]:
+    """**进程内**写入知识库（**不走 MCP 工具**）。
+
+    ⚠️ 阶段 5 订正 #28：原实现是 `await save_tool.ainvoke(...)` —— 即**走 MCP 工具**，
+    与本模块 docstring 写的"两个都在 Agent 进程内直接调 `rag/store.py`，不走 MCP"**不符**
+    （自动注入确实没走 MCP，**只有自动沉淀走了**）。走 MCP 的代价有两层：
+      1. 每写一条就新起一个 python 子进程重新 import chromadb + torch → 秒级延迟；
+      2. 正好踩上订正 #27 那个坑 ——「**事件循环跑起来之后**才首次加载原生扩展会死锁」，
+         表现是"知识写进去了、但工具调用永远不返回"，整轮任务卡死。
+    → 改回进程内直调 `store.save_document`，与 docstring 一致，也不再受 MCP 那条路影响。
+    """
+    from app.code_agent.rag import store
+
+    return store.save_document(title, content)
+
+
 async def maybe_deposit_knowledge(
     user_input: str,
     result: str,
     *,
     chain: list,
-    save_tool: Any | None = None,
+    saver: Callable[[str, str], tuple[str, int]] | None = None,
     enabled: bool | None = None,
 ) -> list[dict]:
     """任务成功后判断并沉淀经验。
@@ -123,14 +152,22 @@ async def maybe_deposit_knowledge(
     ⚠️ **可关闭**（`CODE_AGENT_RAG_AUTO_DEPOSIT=0` 或显式传 `enabled=False`）：
     评估时必须关掉 —— 否则评测过程产生的临时经验会改写知识库，
     进而改变后续题目的检索结果（同一批数据前后不可比）。
+
+    ⚠️ **阶段 5：不再走三档权限的人工确认**（用户 2026-09-21 决策 B）——
+    自动沉淀是**应用自己的记账**，不是模型的自主动作（模型碰不到它的时机与内容），
+    所以它由 `RAG_AUTO_DEPOSIT` 这一个开关管；
+    但**「只读」档下仍然不写**（"什么都不改"要彻底）。
+    模型自己主动调 `save_knowledge` 工具时，照旧走权限层（该弹框还是弹框）。
     """
     if enabled is None:
         enabled = RAG_AUTO_DEPOSIT
     if not enabled:
         return []
-    if save_tool is None:
-        logger.debug("没有 save_knowledge 工具，跳过自动沉淀")
+    if current_session().mode == MODE_READONLY:
+        logger.info("权限模式为只读，跳过自动沉淀（只读档不写任何持久状态）")
         return []
+
+    save = saver or save_knowledge_in_process
 
     from langchain_core.messages import HumanMessage
 
@@ -156,7 +193,9 @@ async def maybe_deposit_knowledge(
         if not title or not body:
             continue
         try:
-            await save_tool.ainvoke({"title": title, "content": body})
+            # 同步直调（与 inject_relevant_knowledge 一致）：模型此时已经加载好，
+            # 耗时在毫秒~百毫秒级，没必要为了它引入线程（线程里首次加载原生扩展反而有风险）。
+            save(title, body)
         except Exception as exc:  # noqa: BLE001
             logger.warning("自动沉淀写入失败（%s）：%s: %s", title, type(exc).__name__, exc)
             continue
@@ -172,4 +211,5 @@ __all__ = [
     "inject_relevant_knowledge",
     "is_worth_searching",
     "maybe_deposit_knowledge",
+    "save_knowledge_in_process",
 ]

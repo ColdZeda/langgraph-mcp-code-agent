@@ -1,8 +1,12 @@
-"""工具包装层：T4.1 结果外置 + T4.5 结果缓存（阶段 4）。
+"""工具包装层：**T5.2 权限判定**（阶段 5）+ T4.1 结果外置 + T4.5 结果缓存（阶段 4）。
 
 为什么要在**工具层**做，而不是在节点里做：
 `create_react_agent` 内部自己执行工具、自己把结果回填成 ToolMessage，外部插不进手；
-所以在工具被交给 agent **之前**统一包一层，是最集中的做法。
+所以在工具被交给 agent **之前**统一包一层，是最集中的做法
+（也因此这是工具调用的**唯一收口** —— 权限层放这里不用改 6 个 MCP server）。
+
+⚠️ **权限判定必须是 `_process` 的第一句（缓存查询之前）**，理由见该函数里的注释：
+不然"曾经允许过"的缓存值会让已被拒绝的调用照样返回结果。
 
 ⚠️ **接口形状是实测确认的，两条路径都要处理**（照抄第六版示例会炸）：
 
@@ -37,6 +41,7 @@ from typing import Any
 
 from app.code_agent.agent.context import externalize_tool_result
 from app.code_agent.config import TOOL_RESULTS_DIR
+from app.code_agent.security.permissions import enforce, enforce_sync
 from app.code_agent.utils.tool_cache import CACHEABLE_TOOL_NAMES, ToolCache
 
 
@@ -102,6 +107,14 @@ def wrap_tool(tool: Any, cache: ToolCache | None = None) -> Any:
     async def _process(args: tuple, kwargs: dict, call) -> Any:
         key_args = _args_key(args, kwargs)
 
+        # ⚠️⚠️ **权限判定必须在缓存查询之前**（阶段 5 · B1+ 约束 1）：
+        #     否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果 ——
+        #     这比"拒绝结果被缓存"更隐蔽，因为它看起来一切正常。
+        #   同理它也必须在下面 `try/except BaseException` 的**外面**：
+        #   `PermissionDenied` 是独立异常类型，绝不是"执行失败"，
+        #   不能走"写失败 → 清缓存"那条分支（约束 3）。
+        await enforce(name, key_args)
+
         if cacheable:
             hit = await cache.get(name, key_args)  # type: ignore[union-attr]
             if hit is not None:
@@ -159,6 +172,9 @@ def _proxy_sync_tool(tool: Any, make_coroutine) -> Any:
     sync_coroutine = make_coroutine(lambda *a, **k: asyncio.to_thread(original_run, *a, **k))
 
     def _sync(*args: Any, **kwargs: Any) -> Any:
+        # 同步路径同样要过权限层（不能因为"路径不同"就绕过人工确认）——
+        # 同步路径没法 await，用 `enforce_sync`；没有同步确认通道时它**拒绝**。
+        enforce_sync(name, _args_key(args, kwargs))
         text, artifact, is_pair = split_tool_output(original_run(*args, **kwargs))
         text = externalize_tool_result(name, text)
         return (text, artifact) if is_pair else text

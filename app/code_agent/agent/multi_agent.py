@@ -31,6 +31,7 @@ from app.code_agent.agent.context import (
     over_task_budget,
     prune_messages,
 )
+from app.code_agent.agent.events import emit
 from app.code_agent.agent.memory import inject_relevant_knowledge, maybe_deposit_knowledge
 from app.code_agent.agent.prompts import (
     EXECUTOR_PLAN_PROMPT,
@@ -208,6 +209,7 @@ async def planner_node(state: AgentState) -> dict:
             f"{state['verdict']}\n）"
         )
     prompt = PLANNER_PROMPT.format(user_input=state["user_input"], retry_context=retry_context)
+    await emit({"type": "node", "node": "planner", "status": "start"})
     # 走 planner 角色的降级链（模型报错/超时会自动换下一个）
     resp = await invoke_with_fallback(
         registry.chain("planner"),
@@ -217,6 +219,14 @@ async def planner_node(state: AgentState) -> dict:
     parsed = _extract_json(plan_text)
     if parsed and parsed.get("steps"):
         plan_text = json.dumps(parsed, ensure_ascii=False, indent=2)
+    await emit(
+        {
+            "type": "node",
+            "node": "planner",
+            "status": "end",
+            "steps": len((parsed or {}).get("steps") or []),
+        }
+    )
     return {"plan": plan_text, "token_usage": state.get("token_usage", 0) + _msg_tokens(resp)}
 
 
@@ -304,10 +314,12 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         )
     budget_hit = False
     spent_before = state.get("token_usage", 0)
+    await emit({"type": "node", "node": "executor", "status": "start", "retry": is_retry})
     async for chunk in executor_agent.astream(
         {"messages": input_messages}, config={"recursion_limit": 100}
     ):
         step_count += 1
+        step_tools: list[str] = []
         for _node, output in chunk.items():
             if "messages" not in output:
                 continue
@@ -321,6 +333,17 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
                         )
                     for tc in getattr(msg, "tool_calls", None) or []:
                         trace.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
+                        step_tools.append(tc.get("name", "?"))
+        # T5.6：每步推一条进度（带本步调了哪些工具），界面上就能看到"正在读哪个文件/查哪张表"
+        await emit(
+            {
+                "type": "node",
+                "node": "executor",
+                "status": "step",
+                "step": step_count,
+                "tools": step_tools,
+            }
+        )
         # ⚠️ 任务级预算**必须在这里也要判**：单个 executor 节点内部的 ReAct 循环
         #    是不经过图节点边界的，只在节点入口判的话，一次"读大文件 + 反复重读"
         #    就能在**一次**节点调用里烧掉十几万 token 而永远不触发上限（实测 127,071）。
@@ -335,6 +358,15 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             break
 
     if budget_hit:
+        await emit(
+            {
+                "type": "node",
+                "node": "executor",
+                "status": "end",
+                "steps": step_count,
+                "budgetExceeded": True,
+            }
+        )
         return {
             "executor_result": (
                 f"【已终止】本次任务累计消耗 {spent_before + tokens} token，"
@@ -353,6 +385,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             "pruned_messages": state.get("pruned_messages", 0) + pruned,
         }
 
+    await emit({"type": "node", "node": "executor", "status": "end", "steps": step_count})
     return {
         "executor_result": last_content or "（Executor 未产出最终回复）",
         "executor_trace": _trace_to_text(trace),
@@ -377,6 +410,7 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
     tokens = 0
     messages: list = []
     trace: list[dict] = []
+    await emit({"type": "node", "node": "verifier", "status": "start"})
     async for chunk in verifier_agent.astream(
         {"messages": [HumanMessage(content=prompt)]}, config={"recursion_limit": 20}
     ):
@@ -396,6 +430,14 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
     parsed = _extract_json(verdict_text)
     if parsed and parsed.get("verdict"):
         verdict_text = json.dumps(parsed, ensure_ascii=False)
+    await emit(
+        {
+            "type": "node",
+            "node": "verifier",
+            "status": "end",
+            "passed": str((parsed or {}).get("verdict", "")).upper() == "PASS",
+        }
+    )
     return {
         "verdict": verdict_text,
         "verifier_trace_list": trace,
@@ -466,7 +508,10 @@ async def route_node(state: AgentState) -> dict:
     只负责"选边"，**返回值不会写进 state** —— 那样 `executor_node` 就无从知道
     自己来自 simple 还是 complex 分支。
     """
-    return {"route": route_task(state)}
+    await emit({"type": "node", "node": "route", "status": "start"})
+    route = route_task(state)
+    await emit({"type": "node", "node": "route", "status": "end", "route": route})
+    return {"route": route}
 
 
 def _route_decide(state: AgentState) -> Literal["simple", "complex"]:
@@ -704,17 +749,18 @@ async def run_multi_agent(
 
     # ── T4.4 ③：任务成功后判断要不要把经验沉淀进知识库 ──
     # 只记成功经验（失败的多半是环境问题，存进去就是噪音）
+    # ⚠️ 阶段 5（订正 #28）：**不再传 save_tool** —— 沉淀改回进程内直调 `store.save_document`，
+    #    不走 MCP 工具（一是对齐 memory.py 的 docstring，二是绕开订正 #27 那个死锁）。
+    #    它也不再走三档权限的人工确认（用户决策 B），但仍受"只读档不写"约束。
     deposited: list[dict] = []
     succeeded = "FAIL" not in str(state.get("verdict", "")).upper() and not state.get(
         "budget_exceeded"
     )
     if succeeded:
-        save_tool = next((t for t in all_tools if getattr(t, "name", "") == "save_knowledge"), None)
         deposited = await maybe_deposit_knowledge(
             user_input,
             final_response,
             chain=registry.chain("executor"),
-            save_tool=save_tool,
             enabled=RAG_AUTO_DEPOSIT if auto_deposit is None else auto_deposit,
         )
 

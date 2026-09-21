@@ -163,6 +163,26 @@ RAG_AUTO_DEPOSIT = os.getenv("CODE_AGENT_RAG_AUTO_DEPOSIT", "1").lower() in (
     "on",
 )
 
+# ═══════════════════════════════════════════════════════════════════
+# 阶段 5 · 三档权限模式（T5.1）+ 人工确认超时（T5.3）+ 审计（T5.4）
+# ═══════════════════════════════════════════════════════════════════
+
+# 权限模式的**兜底默认值**（D4「③ 混合」结论）：
+#   · CLI 默认「需确认」；Web 端把「只读 / 需确认」持久化到 runtime/web-settings.json；
+#   · **「放开」永不持久化** —— 新会话一律回落「需确认」（配置文件被手改成 "open" 也当「需确认」加载，
+#     理由见 security/permissions.py 的 normalize_mode 与 server.py 的 load_permission_mode）；
+#   · 评估等无人值守入口必须**显式**指定档位（不显式指定时，「需确认」没人可问 → 全部自动拒绝）。
+# ⚠️ 合法取值 readonly / confirm / open，档位表在 app/code_agent/security/permissions.py。
+PERMISSION_MODE = os.getenv("CODE_AGENT_PERMISSION_MODE", "confirm").strip().lower()
+
+# 人工确认的超时（秒）：**超时 / 无人应答 → 自动拒绝**（B2，安全侧）。
+# 只作用于 Web（终端里的 CLI 由人当场回答，见 T5.3 的说明）。
+CONFIRM_TIMEOUT = float(os.getenv("CODE_AGENT_CONFIRM_TIMEOUT", "120"))
+
+# 审计留痕：高危操作 + 所有确认决定，一行一条 JSON，追加式。
+# 落在 runtime/ 下 → 已被 gitignore（不进版本控制）。
+PERMISSIONS_LOG = Path(os.getenv("CODE_AGENT_PERMISSIONS_LOG", RUNTIME_DIR / "permissions.log"))
+
 # 日志格式开关：LOG_JSON=1 输出单行 JSON（便于检索/聚合）；默认仍是人类可读文本
 # （开发时看 JSON 很痛苦，所以默认关闭）。
 LOG_JSON = os.getenv("LOG_JSON", "0").lower() in ("1", "true", "yes", "on")
