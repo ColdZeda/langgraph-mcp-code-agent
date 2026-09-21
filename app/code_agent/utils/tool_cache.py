@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 # 可缓存的只读工具。
 # ⚠️ 必须是 multi_agent.READONLY_TOOL_NAMES（Verifier 只读白名单）的子集 ——
 #    tests/test_tool_cache.py 有一条断言守着这个不变式，防止两份名单漂移。
+# ⚠️ **判据是"结果会不会变"，不是"有没有副作用"** —— 所以它和权限档位表（阶段 5）是两张不同的表，
+#    **不要合并**。下面两个"看着只读却不该缓存"的例子说明了原因：
+#      · `mysql_execute_query`：查的是**数据**，数据会被改 → 缓存 10 分钟会拿到过期结果
+#        （evals 里恰好有"先写再查"的题）；
+#      · `search_in_searxng`：**实时搜索**，结果时刻在变；而且第二次搜同一个词，
+#        用户往往就是想看**新的**结果 → 缓存等于把"搜索"变成"查快照"。
+#    （顺带：`search_in_searxng` 也不在 Verifier 只读白名单里 —— 验收用不到搜索。）
 CACHEABLE_TOOL_NAMES: frozenset[str] = frozenset(
     {
         # code_tools（MCP）
