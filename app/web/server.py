@@ -34,6 +34,7 @@ from app.code_agent.config import (
     CHECKPOINT_DB,
     CODE_TOOLS_SERVER_PATH,
     CONFIRM_TIMEOUT,
+    MODEL_NAME,
     MYSQL_SERVER_PATH,
     POWERSHELL_SERVER_PATH,
     RAG_SERVER_PATH,
@@ -181,14 +182,59 @@ def persist_permission_mode(mode: str) -> str:
     return mode
 
 
+def _custom_models_list(settings: dict) -> list[dict]:
+    """读本机的自定义模型列表（**只保留合法条目**，坏数据不该让接口 500）。"""
+    items = settings.get("custom_models") or []
+    out: list[dict] = []
+    for item in items:
+        if isinstance(item, dict) and str(item.get("id") or "").strip():
+            out.append(dict(item))
+    return out
+
+
+def _make_custom_id(model: str, existing: list[dict]) -> str:
+    """给自定义模型生成一个稳定 id（角色下拉框里存的就是它）。"""
+    slug = "".join(ch if ch.isalnum() else "-" for ch in model.lower()).strip("-") or "model"
+    base = f"custom-{slug}"
+    taken = {str(it.get("id")) for it in existing}
+    if base not in taken:
+        return base
+    n = 2
+    while f"{base}-{n}" in taken:
+        n += 1
+    return f"{base}-{n}"
+
+
+def _mask_key(key: str) -> tuple[bool, str]:
+    """只回显"有没有配"和**尾号 4 位** —— 完整密钥永远不回前端。"""
+    key = str(key or "")
+    return bool(key), (key[-4:] if len(key) >= 8 else "")
+
+
 def masked_settings(settings: dict) -> dict:
     key = settings.get("api_key") or ""
+    key_set, key_tail = _mask_key(key)
+    custom = []
+    for item in _custom_models_list(settings):
+        c_set, c_tail = _mask_key(item.get("api_key", ""))
+        custom.append(
+            {
+                "id": str(item.get("id")),
+                "label": str(item.get("label") or item.get("id")),
+                "model": str(item.get("model") or ""),
+                "base_url": str(item.get("base_url") or ""),
+                "api_key_set": c_set,
+                "api_key_tail": c_tail,
+            }
+        )
     return {
         "model": settings.get("model") or "",
         "base_url": settings.get("base_url") or "",
         "roles": settings.get("roles") or {},
-        "api_key_set": bool(key),
-        "api_key_tail": key[-4:] if len(key) >= 8 else "",
+        "api_key_set": key_set,
+        "api_key_tail": key_tail,
+        # 用户自定义模型（**不含完整密钥**）
+        "customModels": custom,
         # 权限模式（D4）：这里返回的是**实际生效**的档位，不是文件里的原始值
         "permissionMode": load_permission_mode(),
         "permissionModeLabel": mode_label(load_permission_mode()),
@@ -208,8 +254,13 @@ def apply_settings(settings: dict) -> None:
         api_key=settings.get("api_key") or None,
     )
     roles = settings.get("roles") or {}
-    if roles:
-        registry.set_role_models(roles)
+    # ⚠️ 这里必须**覆盖全部四个角色**（缺的用空串 = 恢复配置默认），不能只传文件里有的那几个：
+    #    否则"删掉一个自定义模型"这种会让某个角色**从文件里消失**，
+    #    而 `if roles:` 一挡就整个跳过 → 内存里那条旧覆盖留着，
+    #    于是角色拿着一个已经不存在的 id 去请求（被当成模型名直接发出去 → 难懂的 400）。
+    registry.set_role_models({r: str(roles.get(r) or "") for r in ROLE_NAMES})
+    # 用户自定义模型（Web「我的模型」）：**自带凭据**，与上面那组全局凭据互不影响
+    registry.set_custom_models(settings.get("custom_models"))
 
 
 @asynccontextmanager
@@ -236,19 +287,34 @@ async def get_settings():
 
 @app.get("/api/models")
 async def list_models():
-    """模型注册表（给前端下拉框当数据源）。"""
+    """模型清单（给前端下拉框当数据源）= **内置注册表 + 用户自定义模型**。
+
+    每项给两个名字，前端按"不同才显示括号"的规则渲染：
+    - `label`：给用户看的显示名（内置的键就是它的显示名；官方改名时显示名不动）
+    - `model`：**实际发给 API 的模型名**
+
+    ⚠️ **必须剥掉 `api_key`**：`registry.all_models()` 是内部结构、带明文密钥，
+    直接返回等于把用户的 key 发到浏览器（只给"有没有配 + 尾号"就够前端展示了）。
+    """
+    models = []
+    for key, spec in registry.all_models().items():
+        key_set, key_tail = _mask_key(spec.get("api_key", ""))
+        models.append(
+            {
+                "key": key,
+                "label": spec.get("label") or key,
+                "model": spec.get("model") or key,
+                "base_url": spec.get("base_url", ""),
+                "provider": spec.get("provider", "openai-compatible"),
+                "custom": bool(spec.get("custom")),
+                "api_key_set": key_set,
+                "api_key_tail": key_tail,
+            }
+        )
     return {
         "roles": registry.role_models(),
         "roleNames": list(ROLE_NAMES),
-        "models": [
-            {
-                "key": key,
-                "model": spec.get("model", key),
-                "base_url": spec.get("base_url", ""),
-                "provider": spec.get("provider", "openai-compatible"),
-            }
-            for key, spec in registry.models.items()
-        ],
+        "models": models,
     }
 
 
@@ -295,20 +361,109 @@ async def update_settings(body: dict):
     return {"ok": True, **masked_settings(load_settings())}
 
 
+@app.post("/api/settings/custom-model")
+async def upsert_custom_model(body: dict):
+    """新增/更新一个**用户自定义模型**（自带模型名 / 地址 / 密钥）。
+
+    为什么单开一个接口而不是塞进 `/api/settings`：这里的语义是"增删一条记录"，
+    不是"覆盖几个字段"；而且它**不该**让 `api_key` 被清空（用户只改显示名时，
+    留空应当保持原密钥 —— 前端也拿不到原密钥来重填）。
+    """
+    model = str(body.get("model") or "").strip()
+    if not model:
+        return {"ok": False, "error": "模型名（实际调用名）不能为空"}
+    label = str(body.get("label") or "").strip()
+    base_url = str(body.get("base_url") or "").strip()
+    api_key = str(body.get("api_key") or "").strip()
+    mid = str(body.get("id") or "").strip()
+
+    settings = load_settings()
+    items = _custom_models_list(settings)
+    if not mid:
+        mid = _make_custom_id(model, items)
+    prev = next((it for it in items if str(it.get("id")) == mid), None)
+
+    item: dict = {"id": mid, "label": label or model, "model": model, "base_url": base_url}
+    if api_key:
+        item["api_key"] = api_key
+    elif prev and prev.get("api_key"):
+        item["api_key"] = prev["api_key"]  # 留空 = 保持原密钥
+
+    settings["custom_models"] = [it for it in items if str(it.get("id")) != mid] + [item]
+    save_settings(settings)
+    apply_settings(load_settings())
+    runtime.rebuild_agents()
+    return {"ok": True, "id": mid, **masked_settings(load_settings())}
+
+
+@app.delete("/api/settings/custom-model/{model_id}")
+async def delete_custom_model(model_id: str):
+    """删掉一个自定义模型；**顺带清掉角色里指向它的引用**。
+
+    ⚠️ 不清引用的话，角色会拿着一个不存在的 id 去请求 ——
+    代码会把它当成"模型名"直接发给 API（那是另一个合法用法），于是报一个
+    很难懂的 404/400。所以这里必须一起清。
+    """
+    settings = load_settings()
+    items = _custom_models_list(settings)
+    kept = [it for it in items if str(it.get("id")) != model_id]
+    if len(kept) == len(items):
+        return {"ok": False, "error": f"没有这个自定义模型：{model_id}"}
+    settings["custom_models"] = kept
+    settings["roles"] = {
+        r: v for r, v in (settings.get("roles") or {}).items() if str(v) != model_id
+    }
+    save_settings(settings)
+    apply_settings(load_settings())
+    runtime.rebuild_agents()
+    return {"ok": True, **masked_settings(load_settings())}
+
+
 @app.post("/api/settings/test")
 async def test_settings(body: dict):
-    """用给定参数试连一次 LLM（不落盘、不切换当前实例）。"""
+    """试连一次 LLM（不落盘、不切换当前实例）。
+
+    两种用法：
+    - 传 `model` + `base_url` + `api_key`：测**用户刚在表单里填的那一组**（「我的模型」用）；
+    - 只传 `model_id`：测一个**已保存/内置**的模型（从注册表取它的真身与凭据）。
+
+    ⚠️ 改造前它只发 `base_url + api_key`，模型名回落 `.env` 的 `MODEL_NAME` ——
+    于是"测试连接成功"跟下拉框里选的那个模型**没有关系**（假阳性）。现在返回里带
+    `testedModel`，前端会把它显示出来。
+    """
+    model = str(body.get("model") or "").strip()
+    base_url = str(body.get("base_url") or "").strip()
+    api_key = str(body.get("api_key") or "").strip()
+
+    mid = str(body.get("model_id") or "").strip()
+    if mid:
+        spec = registry.all_models().get(mid)
+        if not spec:
+            return {"ok": False, "error": f"没有这个模型：{mid}"}
+        model = model or str(spec.get("model") or mid)
+        base_url = base_url or str(spec.get("base_url") or "")
+        api_key = api_key or str(spec.get("api_key") or "")
+
     try:
         test_llm = build_llm(
-            model=str(body.get("model") or "").strip() or None,
-            base_url=str(body.get("base_url") or "").strip() or None,
-            api_key=str(body.get("api_key") or "").strip() or None,
+            model=model or None,
+            base_url=base_url or None,
+            api_key=api_key or None,
         )
         start = time.time()
         await test_llm.ainvoke("回复两个字：正常")
-        return {"ok": True, "elapsedSec": round(time.time() - start, 1)}
+        return {
+            "ok": True,
+            "elapsedSec": round(time.time() - start, 1),
+            "testedModel": model or MODEL_NAME,
+            "testedBaseUrl": base_url or "(.env 默认)",
+        }
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "testedModel": model or MODEL_NAME,
+        }
 
 
 # ── 会话（读 checkpointer 的 SQLite）──

@@ -1,32 +1,32 @@
 {
   "_readme": [
     "模型注册表 —— 这个文件进版本控制（配置是人写的，不是运行时产物）。",
-    "用法：roles 决定每个角色默认用哪个模型；fallback 决定某角色失败时的降级顺序（可留空）。",
-    "密钥不放这里，放 .env（MODEL_API_KEY）；这里只写模型名与 base_url。",
-    "新增模型：在 models 里加一条，再把 roles/fallback 指过去即可。"
+    "键（key）= 下拉框里给用户看的名字；`model` = 实际发给 API 的模型名。",
+    "⚠️ 两者分开是为了防官方改名/下线：2026-09-10 官方把 V4 Flash 升级为 V4.1 Flash，",
+    "   并把旧名 deepseek-v4-flash「暂时路由」到新模型。内部一律用官方现名，",
+    "   显示名自己控制 —— 官方再改名时只动这一行的 model，不用改代码。",
+    "用法：roles 决定每个角色默认用哪个键；fallback 决定某角色失败时的降级顺序（可留空）。",
+    "密钥不放这里：放 .env（MODEL_API_KEY）或 Web 面板（runtime/web-settings.json）。",
+    "用户自己加的模型**不进这个文件** —— 存在 runtime/web-settings.json 的 custom_models 里。",
+    "新增内置模型：在 models 里加一条，再把 roles/fallback 指过去即可。"
   ],
   "models": {
-    "ds-v4-flash": {
+    "deepseek-v4.1-flash": {
       "provider": "openai-compatible",
-      "model": "deepseek-v4-flash",
+      "model": "deepseek-flash",
       "base_url": "https://api.deepseek.com"
     },
-    "ds-v41-flash": {
+    "deepseek-v4-pro": {
       "provider": "openai-compatible",
-      "model": "deepseek-v4.1-flash",
+      "model": "deepseek-v4-pro",
       "base_url": "https://api.deepseek.com"
-    },
-    "qwen-max": {
-      "provider": "openai-compatible",
-      "model": "qwen-max",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
     }
   },
   "roles": {
-    "planner": "ds-v4-flash",
-    "executor": "ds-v4-flash",
-    "verifier": "ds-v4-flash",
-    "router": "ds-v4-flash"
+    "planner": "deepseek-v4.1-flash",
+    "executor": "deepseek-v4.1-flash",
+    "verifier": "deepseek-v4.1-flash",
+    "router": "deepseek-v4.1-flash"
   },
   "fallback": {
     "planner": [],

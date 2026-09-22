@@ -185,7 +185,8 @@ export async function loadSession(threadId) {
   } catch { /* 服务未就绪时静默 */ }
 }
 
-/** 取模型注册表（config/models.json 的内容），给设置面板的四个角色下拉框当数据源。 */
+/** 取模型清单（内置注册表 + 我的模型），给设置面板的四个角色下拉框当数据源。
+ *  每项 `label` = 显示名、`model` = 实际调用名（不同时面板会补一句"实际调用 xxx"）。 */
 export async function loadModels() {
   try {
     const res = await fetch('/api/models')
@@ -193,6 +194,24 @@ export async function loadModels() {
   } catch {
     return { models: [], roles: {} }
   }
+}
+
+/** 新增/更新一个自定义模型（自带模型名 / 地址 / 密钥）。 */
+export async function addCustomModel(payload) {
+  const res = await fetch('/api/settings/custom-model', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return res.json()
+}
+
+/** 删除一个自定义模型（后端会顺带清掉角色里指向它的引用）。 */
+export async function deleteCustomModel(id) {
+  const res = await fetch(`/api/settings/custom-model/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  })
+  return res.json()
 }
 
 export async function loadSettings() {

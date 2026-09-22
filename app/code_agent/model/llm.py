@@ -73,6 +73,8 @@ class LLMRegistry:
         # 全局覆盖（来自 .env / Web UI 设置）
         self._api_key: str | None = None
         self._base_url: str | None = None
+        # 用户自定义模型（Web 面板「我的模型」）——**自带凭据**，与上面那组全局凭据互不影响
+        self._custom_models: dict[str, dict] = {}
         self._cache: dict[tuple, ChatOpenAI] = {}
 
     # ── 配置读取 ──
@@ -108,6 +110,17 @@ class LLMRegistry:
         return MODEL_NAME
 
     def _build_for_key(self, key: str) -> ChatOpenAI:
+        # ① 用户自定义模型：用它**自带**的 model / base_url / key
+        #    （这样"内置用 .env 的 key、我自己加的用我自己的 key"才能共存）
+        custom = self._custom_models.get(key)
+        if custom:
+            return build_llm(
+                model=custom["model"],
+                base_url=custom.get("base_url") or self._base_url,
+                api_key=custom.get("api_key") or self._api_key,
+                timeout=self.timeout_sec,
+            )
+        # ② 内置注册表：model / base_url 来自 models.json，key 用全局那一个
         spec = self.models.get(key)
         if not spec:  # 不在注册表里 → 当成"模型名"直接用（兼容 .env 单模型写法）
             return build_llm(
@@ -165,6 +178,62 @@ class LLMRegistry:
     def set_all_roles(self, model_key: str | None) -> None:
         """把所有角色设为同一个模型键（兼容旧的"一个模型"设置方式）。"""
         self.set_role_models(dict.fromkeys(ROLE_NAMES, model_key or ""))
+
+    # ── 用户自定义模型（Web 面板「我的模型」）──
+    def set_custom_models(self, entries: list | None) -> None:
+        """登记/替换用户自定义模型。每项：`{id, label, model, base_url, api_key}`。
+
+        ⚠️ **为什么不塞进 models.json**：那个文件进版本控制，用户的私人模型与密钥不该进去。
+        自定义模型**自带凭据**：`_build_for_key` 会优先用它的 key/base_url，
+        所以"内置模型用 .env 的 key、我加的模型用我自己的 key"可以共存 ——
+        这也是它和"全局凭据"（`set_credentials`）的分工。
+
+        缺字段的条目**跳过而不是报错**（配置文件被手改坏时不该让程序起不来）。
+        """
+        cleaned: dict[str, dict] = {}
+        for item in entries or []:
+            if not isinstance(item, dict):
+                continue
+            cid = str(item.get("id") or "").strip()
+            model = str(item.get("model") or "").strip()
+            if not cid or not model:
+                continue
+            cleaned[cid] = {
+                "label": str(item.get("label") or "").strip() or cid,
+                "model": model,
+                "base_url": str(item.get("base_url") or "").strip(),
+                "api_key": str(item.get("api_key") or "").strip(),
+                "provider": "openai-compatible",
+                "custom": True,
+            }
+        self._custom_models = cleaned
+        self._cache.clear()
+
+    @property
+    def custom_models(self) -> dict[str, dict]:
+        return {k: dict(v) for k, v in self._custom_models.items()}
+
+    def all_models(self) -> dict[str, dict]:
+        """内置注册表 + 用户自定义模型（**给下拉框当数据源**）。
+
+        `label` 是显示名、`model` 是实际发给 API 的名字 —— 两者不同时前端会补一句
+        「实际调用 xxx」（内置的 `deepseek-v4.1-flash → deepseek-flash` 就是这种情况）。
+        自定义与内置**同 id 时自定义优先**（用户改过的应该生效）。
+
+        ⚠️ **返回值里含 `api_key`（明文）** —— 这是内部结构。
+        任何要发给前端的接口都必须先剥掉它（见 `app/web/server.py::list_models`）。
+        """
+        merged: dict[str, dict] = {}
+        for key, spec in self.models.items():
+            merged[key] = {
+                "label": key,
+                "model": spec.get("model") or key,
+                "base_url": spec.get("base_url", ""),
+                "provider": spec.get("provider", "openai-compatible"),
+                "custom": False,
+            }
+        merged.update(self._custom_models)
+        return merged
 
     def role_models(self) -> dict[str, str]:
         """当前四个角色各用什么模型键（写进运行结果）。"""

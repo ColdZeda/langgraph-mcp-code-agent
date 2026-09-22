@@ -90,7 +90,8 @@ app/code_agent/
 ├── utils/mcp.py                 load_mcp_tools（工厂；client 无需关闭，见「已知坑」）
 ├── utils/tool_cache.py          只读工具结果缓存（Redis；挂了自动降级）
 └── utils/tool_wrap.py           工具包装：**权限判定(第一句)** + 结果外置 + 结果缓存
-config/models.json               模型注册表 + 角色分配 + 降级链（**进版本控制**，不要放 runtime/）
+config/models.json               内置模型注册表（**显示名 key + 实际调用名 model**）+ 角色分配 + 降级链
+                                 （**进版本控制**，不要放 runtime/；用户自定义模型不在这里，见 web-settings.json）
 app/web/server.py                FastAPI：WS /ws/chat（含权限确认协议）+ REST + 静态托管 dist
 app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框）+ store.js + components/
                                  （ChatView / ResultCard / SettingsPanel / **PermissionDialog**〔阶段 5〕）
@@ -120,6 +121,9 @@ tests/                           308 个测试（config / prompts / mysql_safe_i
 | `file_saver.py` | ✅ **已删除**（连同 `tests/test_file_saver.py`）；它曾是全仓唯一非法 UTF-8 的 `.py` |
 | **执行模式** | `single` / `multi` / `auto`：`auto` 先由 `route_node` 判复杂度（写进 `state["route"]`），simple 只跑 Executor、complex 走完整三阶段；CLI `--mode` 与 Web UI 下拉框都能选 |
 | **模型按角色配** | 注册表在 `config/models.json`（roles + fallback）；`get_llm(role)`，默认 executor；运行期改法有两个：Web UI 设置面板（`set_role_models`）与 `registry.override_from_spec()`（原 `evals --role-models`，那个 CLI 参数随旧评估脚本一起删了）。⚠️ **测试里必须同时 patch `ma.get_llm` 与 `ma.registry`**，否则 planner 会真的调模型（实测让 pytest 从 8s 变 104s） |
+| **三处模型配置的优先级**（2026-09-22 明确，别搞反） | `runtime/web-settings.json`（界面点出来的）**>** `config/models.json`（仓库默认）**>** `.env`（密钥 + 兜底模型名/地址）。⚠️ 两个后果：① 界面上存过一次模型选择后，改 `models.json` 的 `roles` **不生效**；② **evals / CLI 根本不读 `web-settings.json`**（`load_settings`/`apply_settings` 只存在于 `app/web/server.py`）→ 它们只用 models.json 的 roles + `.env` 的 key。**跑评估前必须确认 `.env` 的 key 是有效的**（界面里那个 key 帮不上忙） |
+| **`web-settings.json` 含明文密钥** | 内置凭据 + 每个自定义模型的 key 都是明文写在这个文件里。它已 gitignore，但**不要分享**；界面只回显尾号；`/api/models` 与 `/api/settings` **都必须先剥掉 `api_key`** 再返回（`tests/test_web_model_settings.py` 守着"响应里不出现明文 key"）。⚠️ **改 `.env` 要重启进程才生效**（`load_dotenv` 只在 import 时跑一次），界面改的则热生效 |
+| **显示名 ≠ 调用名** | `models.json` 里键是**给用户看的显示名**，`model` 字段才是**实际发给 API 的名字**。这样官方改名/下线（如 2026-09-10 V4 Flash → V4.1 Flash，旧名"暂时路由"）时只动 `model` 一行。前端只在两者不同时才补一句「实际调用 xxx」 |
 
 ### 环境与工具链
 

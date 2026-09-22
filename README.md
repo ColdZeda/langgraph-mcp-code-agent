@@ -72,12 +72,32 @@ MODEL_API_KEY=你的API密钥
 **模型是按角色配的**（Planner / Executor / Verifier / Router），配置在 **`config/models.json`**（进版本控制）：
 
 ```jsonc
-"roles":    { "planner": "ds-v4-flash", "executor": "ds-v4-flash",
-              "verifier": "ds-v4-flash", "router": "ds-v4-flash" },
+// 键（key）= 下拉框里给用户看的显示名；model = 实际发给 API 的模型名。
+// 两者分开是为了防官方改名/下线：2026-09-10 官方把 V4 Flash 升级成 V4.1 Flash，
+// 并把旧名 deepseek-v4-flash「暂时路由」过去 —— 内部一律用官方现名，显示名自己控制。
+"models":   { "deepseek-v4.1-flash": { "model": "deepseek-flash",
+                                       "base_url": "https://api.deepseek.com" } },
+"roles":    { "planner": "deepseek-v4.1-flash", "executor": "deepseek-v4.1-flash",
+              "verifier": "deepseek-v4.1-flash", "router": "deepseek-v4.1-flash" },
 "fallback": { "executor": [] }   // 填备用模型即启用"主力报错/超时自动降级"
 ```
 
 - 默认四个角色同一个模型（行为可预期）；可在 **Web UI 的模型设置面板**里分别选，改完热生效。
+- **verifier 想单独换模型**要勾上「验收使用异构模型」—— 默认三角色同模型、Verifier 跟随 Executor
+  （同一个模型自己验自己容易有一致的盲区，换一个模型能拿到独立视角）。
+- **用户也能加"自己的模型"**：面板 →「我的模型」填 `显示名 + 模型名 + API 地址 + Key`，
+  存本机 `runtime/web-settings.json`，加完立刻出现在四个角色的下拉框里。
+  **每个自定义模型自带凭据**，与内置模型那组全局凭据互不影响（所以"内置用 .env 的 key、
+  我的 GLM 用我自己的 key"可以共存）。
+
+> ⚠️ **三处配置的优先级**（从高到低），别搞反：
+> `runtime/web-settings.json`（界面点出来的）**>** `config/models.json`（仓库里的默认）
+> **>** `.env`（密钥与兜底的模型名/地址）。
+> 所以**在界面上存过一次模型选择后，改 `models.json` 的 `roles` 是不生效的** —— 要回界面改。
+>
+> - **`web-settings.json` 里含明文密钥**（内置凭据 + 每个自定义模型的 key）。它已 gitignore、
+>   不进仓库，但**不要分享这个文件**；界面只回显尾号 4 位。
+> - **改 `.env` 必须重启服务才生效**（配置在进程启动时读一次）；而界面改的会热生效。
 
 ### 运行（命令行）
 
@@ -125,7 +145,11 @@ uv run uvicorn app.web.server:app --port 8000
   也可以勾「**本会话内对该工具总是允许**」（**默认不勾**，切档位或换会话即失效）；
   **没人应答会倒计时自动拒绝**
 - 模型设置：界面内热切换模型 / API 地址 / Key，**四个角色（Planner / Executor / Verifier / Router）
-  分别选模型**（数据源是 `config/models.json`）；设置只存本机 `runtime/web-settings.json`，不进仓库
+  分别选模型**（数据源 = `config/models.json` 的内置项 +「我的模型」里用户自己加的）；
+  设置只存本机 `runtime/web-settings.json`（**含明文密钥**，已 gitignore、不进仓库）
+- 「我的模型」：填 `显示名 + 模型名 + API 地址 + Key` 就能接任意 OpenAI 兼容服务
+  （中转站、GLM、Qwen…），**每个模型自带密钥**；旁边的「测试连接」测的就是你刚填的这一组
+  （会回显**实际测的是哪个模型名**，避免"测试通过但跟你选的模型无关"）
 - 会话列表：读 `runtime/checkpoints.db`；**点击任一会话即可切换并回放历史**，之后的对话在原会话上续聊
 
 > 权限模式的持久化是**有取舍的**：只把「只读 / 需确认」落盘，**「放开」永不持久化** ——
@@ -350,7 +374,10 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 
 **⚠️ 读这些数字前必看的口径说明**：
 
-1. 全部基于 `deepseek-v4-flash` 跑出，**换模型后不可比**；
+1. 全部基于**当时的** `deepseek-v4-flash` 跑出，**换模型后不可比**。
+   ⚠️ 补充（2026-09-22 核实）：官方已在 2026-09-10 把 V4 Flash 升级为 **V4.1 Flash**，
+   并把旧名 `deepseek-v4-flash`「暂时路由」到新模型 —— 也就是说，
+   **同一个模型名今天背后已经是另一个模型**，这批数字与现在更不可比；
 2. 当时的评分器里**弱断言占比不小**，所以这些分数应理解为「**回归通过率**」，
    不是「**通用任务成功率**」；
 3. `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 的**部分分** → 偏乐观。
@@ -396,7 +423,7 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 │   └── web/
 │       ├── server.py              # FastAPI（WS + 权限确认协议 + REST + 静态托管）
 │       └── frontend/              # Vue3 + Vite（dist 已入库）；含 PermissionDialog（人工确认弹框）
-├── config/models.json             # 模型注册表 + 角色分配 + 降级链（进版本控制）
+├── config/models.json             # 模型注册表（显示名 + 实际调用名）+ 角色分配 + 降级链（进版本控制）
 ├── data/knowledge/                # 知识库源文件：35 条（7 个文件 × 每文件 5 条）
 ├── scripts/                       # probe_mcp_server.py（手工发 JSON-RPC 探 MCP server 回没回）
 │   │                              #   + mysql-init/*.sql（被 docker-compose 当挂载目录用，别挪）
