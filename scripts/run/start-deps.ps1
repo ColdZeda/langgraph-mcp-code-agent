@@ -1,10 +1,12 @@
-﻿# scripts/start-deps.ps1 —— 一键拉起全部依赖服务（4 个容器）
+﻿# scripts/run/start-deps.ps1 —— 一键拉起全部依赖服务（4 个容器）
 #
 # 两边分开管的原因见 docker-compose.yml 顶部注释：
 #   mysql / searxng / redis 由仓库根的 compose 管（Windows 侧）
 #   nginx 由 WSL 里的 ~/nginx/docker-compose.yaml 管（挂载源是 WSL 路径）
 $ErrorActionPreference = "Stop"
-$root = Split-Path -Parent $PSScriptRoot
+# ⚠️ 本脚本在 scripts/run/ 下 → 仓库根要**往上两层**（少一层会变成 scripts\ ，
+#    于是 `docker compose up` 找不到仓库根的 docker-compose.yml）。
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 Write-Host "[1/2] 启动 mysql / searxng / redis ..." -ForegroundColor Cyan
 Push-Location $root

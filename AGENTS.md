@@ -55,6 +55,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 指定权限模式 | `uv run python main.py --permission readonly`（readonly / confirm（默认）/ open） |
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
+| 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
 | 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（308 个） |
 | MCP server 探针（排查"工具调不通"） | `uv run python scripts/probe_mcp_server.py rag query_rag --args '{"query":"MCP"}'` |
 | RAG 基准（含分块/精排指标） | `uv run python evals/rag_bench.py` |
@@ -94,8 +95,12 @@ app/web/server.py                FastAPI：WS /ws/chat（含权限确认协议�
 app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框）+ store.js + components/
                                  （ChatView / ResultCard / SettingsPanel / **PermissionDialog**〔阶段 5〕）
 evals/                           rag_bench.py（RAG 检索基准）—— 旧 30 题集已于阶段 5 删除，阶段 6 重建
-scripts/                         start-deps.ps1 / stop-deps.ps1 / mysql-init/*.sql
-                                 + **probe_mcp_server.py**（手工发 JSON-RPC 探某个 MCP server 到底回没回）
+scripts/                         probe_mcp_server.py（手工发 JSON-RPC 探某个 MCP server 到底回没回）
+                                 + mysql-init/*.sql（被 docker-compose 当**挂载目录**用，别挪）
+scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对照表）：
+                                 start-app.cmd / start-app.ps1（起 Web UI，前台）
+                                 start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
+                                 ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
 tests/                           308 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
@@ -131,7 +136,7 @@ tests/                           308 个测试（config / prompts / mysql_safe_i
   - `agent-mysql` / `searxng` / `redis-stack-server` 由**仓库根的 `docker-compose.yml`** 管理
     （`name: code-agent-deps`）；**`my-nginx` 仍归 WSL 里的 `~/nginx/docker-compose.yaml`**
     （它的挂载源是 WSL 路径，搬到 Windows 侧 compose 会**静默挂空目录**）；
-  - 一键脚本：`./scripts/start-deps.ps1` / `./scripts/stop-deps.ps1`；
+  - 一键脚本：`./scripts/run/start-deps.ps1` / `./scripts/run/stop-deps.ps1`；
   - **4 个容器都是 `restart: unless-stopped`** → 打开 Docker Desktop（= 启动引擎）会自动拉起；
     被手动 stop 过的除外，那时用一键脚本；
   - MySQL 数据在**命名卷** `mysql-data`；首次初始化会执行 `scripts/mysql-init/*.sql`
@@ -146,7 +151,7 @@ tests/                           308 个测试（config / prompts / mysql_safe_i
   **解法：只挂目录**；自定义配置写进 `conf/conf.d/*.conf`
   （镜像自带的 `nginx.conf` 里本来就有 `include /etc/nginx/conf.d/*.conf;`）。
   实测：改完 `my-nginx` 正常 Up、`curl -I http://localhost/` 返回 200。
-- **`scripts/start-deps.ps1` 会先探一次 `~/nginx`**：不存在就**打印明确提示并跳过** nginx 那步
+- **`scripts/run/start-deps.ps1` 会先探一次 `~/nginx`**：不存在就**打印明确提示并跳过** nginx 那步
   （而不是抛一段 WSL 报错）—— 因为 `~/nginx/` 只存在于 WSL，仓库里没有副本。
 - **搜索已不依赖浏览器**（阶段 2）：`browser_tools.py` 只调 SearXNG 的 JSON API，
   文件名是历史遗留；**Selenium / Edge / msedgedriver / 调试端口都不再需要**。

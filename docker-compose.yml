@@ -8,7 +8,7 @@
 #   它的挂载源是 WSL 里的 /home/leprite/nginx/*，而本文件在 Windows 侧执行。
 #   从 Windows 跑 compose 时，Linux 路径会被解析到 docker-desktop 发行版 → 找不到 →
 #   Docker 会【静默挂载空目录】（不报错，最难查）。所以 nginx 继续由 WSL 里的
-#   ~/nginx/docker-compose.yaml 管理；scripts/start-deps.ps1 会把两边都拉起来。
+#   ~/nginx/docker-compose.yaml 管理；scripts/run/start-deps.ps1 会把两边都拉起来。
 name: code-agent-deps
 
 services:

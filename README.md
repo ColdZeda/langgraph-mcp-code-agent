@@ -104,6 +104,18 @@ uv run uvicorn app.web.server:app --port 8000
 # 浏览器打开 http://localhost:8000
 ```
 
+一键脚本（**前台**运行，日志就在这个窗口；Windows 上也可以直接双击 `.cmd`）：
+
+```powershell
+.\scripts\run\start-app.ps1        # 查 uv / 查容器 / 查 dist / 查端口 → 再起服务
+.\scripts\run\start-app.cmd        # 同上，双击入口
+.\scripts\run\start-app.ps1 -Dev   # 另开一个窗口跑 npm run dev（前端热更新，5173）
+```
+
+> 运行期**只有一个进程**：前端 `dist/` 由 FastAPI 用 `app.mount("/", StaticFiles(...))` 直接托管。
+> 只有在改前端源码时才需要第二个窗口跑 `npm run dev`，那时请打开 **http://127.0.0.1:5173**
+> （Vite 把 `/api` 与 `/ws` 转发给 8000）。
+
 - 聊天界面：**执行过程实时可见**（阶段 5）—— 任务跑起来后逐行显示
   `路由 → Planner 规划 → Executor 第 N 步调用了哪个工具 → Verifier 验收`，
   而不是干等一个转圈；结束时给结构化结果——Planner 计划、工具调用轨迹（可折叠）、
@@ -125,8 +137,8 @@ uv run uvicorn app.web.server:app --port 8000
 ### 启动依赖服务
 
 ```powershell
-.\scripts\start-deps.ps1     # 一键起全部 4 个：mysql / searxng / redis / nginx
-.\scripts\stop-deps.ps1      # 停止（保留容器，下次起得更快）
+.\scripts\run\start-deps.ps1     # 一键起全部 4 个：mysql / searxng / redis / nginx
+.\scripts\run\stop-deps.ps1      # 停止（保留容器，下次起得更快）
 ```
 
 或手动分两步：
@@ -152,7 +164,7 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 
 > 4 个容器都带 `restart: unless-stopped` → **打开 Docker Desktop（= 启动 Docker 引擎）时会自动起来**。
 > 例外：如果你**手动 stop** 过某个容器，引擎不会自动起它（这是 `unless-stopped` 的定义），
-> 这时用 `scripts\start-deps.ps1` 即可。
+> 这时用 `scripts\run\start-deps.ps1` 即可。
 
 ## 功能
 
@@ -386,8 +398,10 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 │       └── frontend/              # Vue3 + Vite（dist 已入库）；含 PermissionDialog（人工确认弹框）
 ├── config/models.json             # 模型注册表 + 角色分配 + 降级链（进版本控制）
 ├── data/knowledge/                # 知识库源文件：35 条（7 个文件 × 每文件 5 条）
-├── scripts/                       # start-deps.ps1 / stop-deps.ps1 / mysql-init/*.sql
-│                                  #   + probe_mcp_server.py（手工发 JSON-RPC 探 MCP server 回没回）
+├── scripts/                       # probe_mcp_server.py（手工发 JSON-RPC 探 MCP server 回没回）
+│   │                              #   + mysql-init/*.sql（被 docker-compose 当挂载目录用，别挪）
+│   └── run/                       # 启动/停止脚本：start-app.cmd / start-app.ps1（起 Web UI）
+│                                  #   + start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
 ├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
 ├── evals/                         # 只剩 RAG 检索基准 rag_bench.py（旧 30 题集已于阶段 5 删除，阶段 6 重建）
 ├── tests/                         # 308 个测试（单元 + 工具级）
