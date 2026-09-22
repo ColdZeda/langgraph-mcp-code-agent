@@ -219,15 +219,18 @@ async def planner_node(state: AgentState) -> dict:
     parsed = _extract_json(plan_text)
     if parsed and parsed.get("steps"):
         plan_text = json.dumps(parsed, ensure_ascii=False, indent=2)
+    planner_tokens = _msg_tokens(resp)
     await emit(
         {
             "type": "node",
             "node": "planner",
             "status": "end",
             "steps": len((parsed or {}).get("steps") or []),
+            # 阶段 6：token 带进事件 —— 评估报告要按节点拆"哪一段最费 token"
+            "tokens": planner_tokens,
         }
     )
-    return {"plan": plan_text, "token_usage": state.get("token_usage", 0) + _msg_tokens(resp)}
+    return {"plan": plan_text, "token_usage": state.get("token_usage", 0) + planner_tokens}
 
 
 def _trace_to_text(trace: list[dict]) -> str:
@@ -365,6 +368,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
                 "status": "end",
                 "steps": step_count,
                 "budgetExceeded": True,
+                "tokens": tokens,
             }
         )
         return {
@@ -385,7 +389,9 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             "pruned_messages": state.get("pruned_messages", 0) + pruned,
         }
 
-    await emit({"type": "node", "node": "executor", "status": "end", "steps": step_count})
+    await emit(
+        {"type": "node", "node": "executor", "status": "end", "steps": step_count, "tokens": tokens}
+    )
     return {
         "executor_result": last_content or "（Executor 未产出最终回复）",
         "executor_trace": _trace_to_text(trace),
@@ -436,6 +442,7 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
             "node": "verifier",
             "status": "end",
             "passed": str((parsed or {}).get("verdict", "")).upper() == "PASS",
+            "tokens": tokens,
         }
     )
     return {

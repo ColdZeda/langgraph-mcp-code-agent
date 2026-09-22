@@ -64,14 +64,18 @@ async def test_run_single_task_does_not_need_client_cleanup(monkeypatch):
     monkeypatch.setattr(ca, "build_executor_agent", lambda tools, **kw: None)
     monkeypatch.setattr(ca, "build_verifier_agent", lambda tools: None)
 
-    response, trace, conversation, steps, tokens, _route = await ca.run_single_task(
-        "任务", thread_id="probe"
-    )
+    result = await ca.run_single_task("任务", thread_id="probe")
 
-    assert response == "已完成"
-    assert not response.startswith("[ERROR]"), f"不应因清理/适配器问题失败：{response}"
-    assert tokens == 7
-    assert steps == 1
+    assert result["response"] == "已完成"
+    assert result["ok"] is True, f"不应因清理/适配器问题失败：{result.get('error')}"
+    assert result["token_usage"] == 7
+    assert result["step_count"] == 1
+    # 阶段 6：验收结论必须**带出来**（旧版 6 元组把它丢掉了 → 对抗题无法判定）
+    assert result["verdict_passed"] is True
+    assert result["retry_count"] == 0
+    # 权限痕迹：档位必须是「需确认」+ 逐条留痕的自动批准器（阶段 6 决策）
+    assert result["permission"]["mode"] == "confirm"
+    assert result["permission"]["approver"] == "eval_auto"
 
 
 def test_rag_server_imports_native_extensions_at_module_level():

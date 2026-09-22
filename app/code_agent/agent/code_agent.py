@@ -1,11 +1,14 @@
 import asyncio
+import json
 import os
 import sys
 import time
+from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app.code_agent.agent.events import bind_sink
 from app.code_agent.agent.multi_agent import (
     build_executor_agent,
     build_verifier_agent,
@@ -25,6 +28,7 @@ from app.code_agent.security.permissions import (
     HEADLESS_PERMISSION_MODE,
     MODE_OPEN,
     MODE_READONLY,
+    AutoApprover,
     PermissionRequest,
     Session,
     bind_session,
@@ -212,62 +216,170 @@ def main(
 
 # ── Evals 非交互接口 ──
 
+#: 6 个 MCP server 的 (client_id, 入口脚本) 清单（`run_single_task` 与评估 runner 共用）。
+MCP_SERVERS: tuple[tuple[str, Any], ...] = (
+    ("powershell", POWERSHELL_SERVER_PATH),
+    ("rag", RAG_SERVER_PATH),
+    ("browser", BROWSER_SERVER_PATH),
+    ("vm", VM_SERVER_PATH),
+    ("mysql", MYSQL_SERVER_PATH),
+    ("code_tools", CODE_TOOLS_SERVER_PATH),
+)
+
+
+async def _load_all_tools() -> list:
+    """加载全部 MCP 工具 + 7 个文件工具（**不加包装层**，包装由调用方按任务作用域做）。
+
+    为什么抽出来：评估一轮要跑 60 趟（30 题 × 2 模式），而"起 6 个 server"实测 8~16 秒
+    —— 每趟都重来一遍就是十几分钟白等。工具本身**无状态**
+    （`get_tools()` 的 docstring：每次工具调用自建并自关一个会话），
+    跨任务复用不会串味；每题的隔离靠**独立缓存作用域**与**独立 checkpoint 线程**。
+    """
+    results = await asyncio.gather(
+        *(load_mcp_tools(client_id=cid, server_path=sp) for cid, sp in MCP_SERVERS),
+        return_exceptions=True,
+    )
+    tools: list = []
+    for (cid, _sp), res in zip(MCP_SERVERS, results, strict=True):
+        if isinstance(res, Exception):
+            raise RuntimeError(f"MCP server '{cid}' 加载失败: {type(res).__name__}: {res}") from res
+        tools.extend(res)
+    tools.extend(file_tools)
+    return tools
+
+
+def _verdict_of(verdict_text: str) -> bool | None:
+    """从 Verifier 的结论文本里取 PASS/FAIL。
+
+    ⚠️ **返回 None ≠ False**：single 模式与 auto-simple 路径**根本没有验收环节**，
+    把它记成"验收失败"正是阶段 5 修过的那个前端 bug（single 模式误报"验收未通过"）。
+    """
+    text = (verdict_text or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict) and parsed.get("verdict"):
+            text = str(parsed["verdict"])
+    except (ValueError, TypeError):
+        pass
+    upper = text.upper()
+    if "FAIL" in upper:
+        return False
+    if "PASS" in upper:
+        return True
+    return None
+
+
+def _permission_stats(session: Session, approver: Any) -> dict:
+    """本次任务的权限痕迹：档位 + 确认闸门被问了几次、批了几次、其中几次是高危。"""
+    asked = getattr(approver, "requests", None)
+    asked_list = asked if isinstance(asked, list) else []
+    return {
+        "mode": session.mode,
+        "modeLabel": mode_label(session.mode),
+        "approver": session.approver_label,
+        "asked": len(asked_list),
+        "granted": getattr(approver, "granted_count", 0),
+        "highRiskAsked": getattr(approver, "high_risk_asked", 0),
+        "highRiskTools": sorted({r["tool"] for r in asked_list if r.get("highRisk")}),
+    }
+
+
+def _summarize_node_events(events: list[tuple[float, dict]]) -> dict[str, dict]:
+    """把节点事件时间线折成「每个节点花了多少毫秒 / 多少 token / 跑了几次」。
+
+    为什么要折：报告要做**分节点分析**（"哪一段最费 token"）—— 只有整题汇总是看不出来的。
+    同一节点会因 Verifier 打回而**跑多次**（executor/verifier），所以是累加 + 计数而不是覆盖。
+    """
+    open_at: dict[str, float] = {}
+    summary: dict[str, dict] = {}
+    for ts, ev in events:
+        node = str(ev.get("node") or "?")
+        status = str(ev.get("status") or "")
+        slot = summary.setdefault(node, {"ms": 0.0, "calls": 0, "tokens": 0, "steps": 0})
+        if status == "start":
+            open_at[node] = ts
+        elif status == "end":
+            if node in open_at:
+                slot["ms"] += (ts - open_at.pop(node)) * 1000
+            slot["calls"] += 1
+            slot["tokens"] += int(ev.get("tokens") or 0)
+            slot["steps"] = max(slot["steps"], int(ev.get("steps") or 0))
+    for slot in summary.values():
+        slot["ms"] = round(slot["ms"], 1)
+    return summary
+
 
 async def run_single_task(
-    task_prompt: str, thread_id: str = "eval", mode: str = "auto"
-) -> tuple[str, list[dict], list[dict], int, int]:
-    """向多 Agent 架构发送单次任务，返回 (最终回复, 工具调用trace, 对话存档, 步数, token用量, 路由结论)。
+    task_prompt: str,
+    thread_id: str = "eval",
+    mode: str = "auto",
+    *,
+    permission_mode: str | None = None,
+    approver: Any | None = None,
+    timeout: float | None = None,
+    tools: list | None = None,
+) -> dict:
+    """向多 Agent 架构发送单次任务，返回**完整结果字典**（阶段 6 起；此前是 6 元组）。
 
     流程：Planner（纯 LLM 规划）→ Executor（ReAct 全量工具执行）→ Verifier（只读验收，
     失败带原因打回，最多 2 轮）。
-    - trace 结构: [{name, args, result}, ...]（工具调用摘要，result 截断 500 字符）
-    - conversation 结构: 明文对话存档（人可读，用于失败题定位）
+
+    返回键：
+      - `ok` / `error`：异常**不再伪装成一条"回复"**（旧版把 `[ERROR] ...` 塞进 response，
+        评估侧只能靠字符串前缀分辨，很容易把"炸了"记成"答了"）；
+      - `response` / `tool_trace` / `conversation` / `step_count` / `token_usage`；
+      - `mode` / `route` / `verdict` / `verdict_passed` / `retry_count`（**旧版全被丢掉**，
+        导致"假成功诱导应该判 FAIL"这类题根本无法判定）；
+      - `budget_exceeded` / `pruned_messages` / `knowledge_injected`；
+      - `elapsed_ms` / `node_timings`（分节点耗时与 token）/ `node_events`（原始时间线）；
+      - `permission`：本次任务的权限档位与"过了几次确认闸门"。
+
+    `permission_mode` 默认 `HEADLESS_PERMISSION_MODE`（阶段 6 = 「需确认」）；
+    `approver` 默认一个 `AutoApprover`（逐条留痕的自动批准器，见 permissions.py）。
+    **对抗性题**要传 `AutoApprover(deny_high_risk=True)` 或 `permission_mode="readonly"`。
+
+    `tools`：**已加载好的原始工具列表**（不含包装层）。评估 runner 一轮跑 60 趟，
+    只是把 `_load_all_tools()` 的结果传进来复用，就能省掉每趟 8~16 秒的 server 启动；
+    传 `None`（默认）时本函数自己加载。
     """
     conversation: list[dict] = [{"role": "user", "content": task_prompt[:2000]}]
+    started = time.perf_counter()
+    events: list[tuple[float, dict]] = []
 
-    _clients: list = []  # MCP client 生命周期管理（用完必须关闭，否则子进程累积）
+    def _collect(event: dict) -> None:
+        events.append((time.perf_counter(), event))
+
+    if approver is None:
+        approver = AutoApprover()
+    perm_mode = normalize_mode(permission_mode or HEADLESS_PERMISSION_MODE)
+    permission = Session(
+        mode=perm_mode,
+        scope=f"eval-{thread_id}",
+        approver=approver,
+        timeout=timeout,
+        approver_label=getattr(approver, "label", "eval_auto"),
+    )
+    result: dict = {}
     try:
-        # ── 加载 MCP 工具（return_exceptions=True：单个 server 失败不整体崩溃，便于定位）──
-        _MCP_SERVERS = [
-            ("powershell", POWERSHELL_SERVER_PATH),
-            ("rag", RAG_SERVER_PATH),
-            ("browser", BROWSER_SERVER_PATH),
-            ("vm", VM_SERVER_PATH),
-            ("mysql", MYSQL_SERVER_PATH),
-            ("code_tools", CODE_TOOLS_SERVER_PATH),
-        ]
-        _results = await asyncio.gather(
-            *(load_mcp_tools(client_id=cid, server_path=sp) for cid, sp in _MCP_SERVERS),
-            return_exceptions=True,
-        )
-        tool_sets = []
-        for (cid, _sp), res in zip(_MCP_SERVERS, _results, strict=True):
-            if isinstance(res, Exception):
-                raise RuntimeError(
-                    f"MCP server '{cid}' 加载失败: {type(res).__name__}: {res}"
-                ) from res
-            tool_sets.append(res)
-        tools = [t for tool_set in tool_sets for t in tool_set]
-        tools.extend(file_tools)
+        # ── 加载 MCP 工具（`tools` 传进来就复用，省掉每题 8~16 秒的 server 启动）──
+        raw_tools = tools if tools is not None else await _load_all_tools()
         # 阶段 4：包装「结果外置 + 只读结果缓存」。
         # ⚠️ 每个任务一个**独立的缓存作用域** —— 跨任务复用缓存会让
         #    "上一个任务改过的文件"污染"下一个任务的读取"（缓存命中越准，错得越隐蔽）。
         cache = ToolCache(scope=f"eval-{thread_id}-{uuid4().hex[:8]}")
-        tools = wrap_tools(tools, cache)
+        wrapped = wrap_tools(list(raw_tools), cache)
 
-        executor_agent = build_executor_agent(tools, mode=mode)
+        executor_agent = build_executor_agent(wrapped, mode=mode)
+        verifier_agent = build_verifier_agent(wrapped)
         verifier_agent = build_verifier_agent(tools)
 
-        # ── 阶段 5：无人值守入口**必须显式指定权限档位** ──
-        # 不显式指定就会落到默认的「需确认」，而这里**没有人可以问** ——
-        # 按 B2「无人应答 → 自动拒绝」，每个写工具都会被自动拒掉，任务全线失败。
-        # 具体档位与它的过渡性质见 `permissions.HEADLESS_PERMISSION_MODE`。
-        permission = Session(
-            mode=HEADLESS_PERMISSION_MODE,
-            scope=f"eval-{thread_id}",
-            timeout=None,  # 无人值守 → 不走"等确认"这条路径
-        )
-        with bind_session(permission):
+        # ── 阶段 5：无人值守入口**必须显式指定权限档位**；阶段 6 起不再绕开闸门 ──
+        # 这里是 `HEADLESS_PERMISSION_MODE`（=「需确认」）+ `AutoApprover`：
+        # 每次写操作**照旧逐次过确认闸门**，只是答话的一方是程序，且每条答复都进审计
+        # （`allowed_by_eval_auto`）。见 permissions.py 里 `AutoApprover` 的对照表。
+        with bind_sink(_collect), bind_session(permission):
             result = await run_multi_agent(
                 task_prompt,
                 tools,
@@ -283,9 +395,29 @@ async def run_single_task(
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        # 异常时不抛：保留已收集的对话，返回错误信息（供 evals 定位）
-        err = f"[ERROR] {type(e).__name__}: {e}"
-        return err, [], conversation, 0, 0
+        # 异常时不抛：保留已收集的对话，返回结构化错误（供 evals 定位/记录）
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "response": "",
+            "tool_trace": [],
+            "conversation": conversation,
+            "step_count": 0,
+            "token_usage": 0,
+            "mode": mode,
+            "route": "",
+            "verdict": "",
+            "verdict_passed": None,
+            "retry_count": 0,
+            "budget_exceeded": False,
+            "pruned_messages": 0,
+            "knowledge_injected": [],
+            "thread_id": thread_id,
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+            "node_events": [{"t_ms": round((ts - started) * 1000, 1), **ev} for ts, ev in events],
+            "node_timings": _summarize_node_events(events),
+            "permission": _permission_stats(permission, approver),
+        }
     # ⚠️ 这里**故意没有**"关闭 MCP client"的清理块 —— 实测（langchain-mcp-adapters 0.1.1）：
     #   1) `MultiServerMCPClient.get_tools()` 是"每次工具调用自建一个会话"（其 docstring 明写
     #      "a new session will be created for each tool call"），用完即关（stdio 子进程同理）
@@ -333,14 +465,31 @@ async def run_single_task(
                     t["result"] = str(m.get("content", ""))[:500]
                     break
 
-    return (
-        result["final_response"],
-        tool_trace,
-        conversation,
-        result["step_count"],
-        result["token_usage"],
-        result.get("route", ""),  # auto 模式的路由结论（single/multi 模式为空）
-    )
+    verdict_text = str(result.get("verdict") or "")
+    parsed_verdict = _verdict_of(verdict_text)
+    return {
+        "ok": True,
+        "error": "",
+        "response": result["final_response"],
+        "tool_trace": tool_trace,
+        "conversation": conversation,
+        "step_count": result["step_count"],
+        "token_usage": result["token_usage"],
+        "mode": result.get("mode", mode),
+        "route": result.get("route", ""),  # auto 模式的路由结论（single/multi 模式为空）
+        # ── 阶段 6 新增：验收结论不再被丢掉（对抗题"假成功诱导应判 FAIL"要靠它）──
+        "verdict": verdict_text,
+        "verdict_passed": parsed_verdict,  # True / False / None（single 模式没有验收）
+        "retry_count": result.get("retry_count", 0),
+        "budget_exceeded": bool(result.get("budget_exceeded")),
+        "pruned_messages": result.get("pruned_messages", 0),
+        "knowledge_injected": result.get("knowledge_injected", []),
+        "thread_id": thread_id,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+        "node_events": [{"t_ms": round((ts - started) * 1000, 1), **ev} for ts, ev in events],
+        "node_timings": _summarize_node_events(events),
+        "permission": _permission_stats(permission, approver),
+    }
 
 
 if __name__ == "__main__":

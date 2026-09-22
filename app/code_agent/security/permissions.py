@@ -61,13 +61,14 @@ DEFAULT_MODE = MODE_CONFIRM  # D4：CLI 默认「需确认」；Web 新会话也
 
 #: **无人值守入口**（评估脚本 / 无头调用）固定用的档位。
 #:
-#: 为什么不让它们走默认的「需确认」：B2 规定"超时 / 无人应答 → 自动拒绝"，
-#: 而这些入口**没有人可以问** → 每个写工具都会被自动拒绝，任务全线失败
-#: （fail-closed 生效得太彻底，等于入口不可用）。
-#: 为什么不选「只读」：这些入口要跑的正是"会写文件 / 会写库"的端到端任务，只读档会把它们全拒掉。
-#: ⚠️ 这是**过渡值**：评估题集与评分器已随阶段 5 删除、阶段 6 重建，
-#:    重建时再连同口径一起定"评估侧到底用哪一档"。
-HEADLESS_PERMISSION_MODE = MODE_OPEN
+#: 阶段 5 这里是 `MODE_OPEN`，只是**过渡值**（当时的理由是"没人可以问 → 需确认会把写工具全拒"）。
+#: **阶段 6 改成「需确认」**：无头入口现在自带 `AutoApprover`（见下），
+#: 于是"没人可以问"不再成立 —— 每次写操作照旧逐次过确认闸门，只是答话的一方换成了程序，
+#: 而且**每一条答复都进审计**（`allowed_by_eval_auto`）。
+#: 这样评估跑的就是**产品默认档**，而不是一个为了跑通而绕开闸门的档位
+#: （"放开"档下确认分支根本不执行，跑出来的成绩证明不了确认机制好不好使）。
+#: 为什么不选「只读」：评估要跑的正是"会写文件 / 会写库"的端到端任务，只读档会把它们全拒掉。
+HEADLESS_PERMISSION_MODE = MODE_CONFIRM
 
 # 判定结果（`decide()` 的返回值）
 ALLOW = "allow"
@@ -330,6 +331,10 @@ class Session:
     `always_allow`（B7）：**「本会话内对该工具总是允许」** 的集合，
     元素是 `(模式, 工具名)` 二元组 —— 这样**切模式即失效**，不用额外清理；
     集合对象由会话持有、跨多次任务复用（每次任务新建一个集合的话，勾选框就白勾了）。
+
+    `approver_label`（阶段 6 新增）：**"是谁批的"**，只影响审计里那行决定的措辞。
+    人点的确认（CLI / Web）是 `user`；评估入口的自动批准器是 `eval_auto` ——
+    两者的授权强度完全不同，日志里**不能长得一样**（否则翻日志的人会以为评估期间有人守着点确认）。
     """
 
     mode: str = DEFAULT_MODE
@@ -338,6 +343,7 @@ class Session:
     sync_approver: SyncApprover | None = None
     timeout: float | None = CONFIRM_TIMEOUT
     always_allow: set[tuple[str, str]] = field(default_factory=set)
+    approver_label: str = "user"
 
     @classmethod
     def from_config(cls, scope: str = "default") -> Session:
@@ -352,7 +358,73 @@ class Session:
             sync_approver=self.sync_approver,
             timeout=self.timeout,
             always_allow=self.always_allow,
+            approver_label=self.approver_label,
         )
+
+
+class AutoApprover:
+    """无人值守入口的**自动批准器**：以程序代替人回答确认框，且**逐条留痕**。
+
+    它**不是"放开"档**，两者可观测地不同：
+
+    | | 放开档 | 需确认 + AutoApprover |
+    |---|---|---|
+    | 是否走确认分支 | ❌ 不走（`decide()` 直接 allow） | ✅ 每次都走 |
+    | 审计里的决定 | `allowed_open_high_risk`（只有高危才记） | `allowed_by_eval_auto`（**每一次写操作都记**） |
+    | 高危工具 | 放行 | 默认放行，但 `deny_high_risk=True` 可只拦高危 |
+
+    `deny_high_risk=True` 是给**对抗性题**用的：让 Agent 去尝试删除/执行类操作，
+    确认闸门一律答"拒绝"，用来测"被拒之后模型据实报告、而不是假装成功"。
+
+    `allow=False` 更狠：**所有**写操作都被拒（用来测"全拒之下任务应当如实失败"）。
+
+    记录下来的 `requests` 会进评估结果 JSON —— 报告里那句
+    「N 次写操作 100% 经确认闸门、0 次越权」就是从这里数出来的。
+    """
+
+    def __init__(
+        self,
+        *,
+        allow: bool = True,
+        deny_high_risk: bool = False,
+        label: str = "eval_auto",
+    ) -> None:
+        self.allow = allow
+        self.deny_high_risk = deny_high_risk
+        self.label = label
+        self.requests: list[dict] = []
+
+    async def __call__(self, request: PermissionRequest) -> bool:
+        granted = self.allow and not (self.deny_high_risk and request.high_risk)
+        self.requests.append(
+            {
+                "tool": request.tool_name,
+                "highRisk": request.high_risk,
+                "granted": granted,
+                "args": request.args_brief(),
+            }
+        )
+        if not granted:
+            logger.info(
+                "自动批准器拒绝（%s）：%s（高危=%s）",
+                "已配置为全拒" if not self.allow else "仅拦高危",
+                request.tool_name,
+                request.high_risk,
+            )
+        return granted
+
+    # ── 统计（评估报告用）──
+    @property
+    def asked_count(self) -> int:
+        return len(self.requests)
+
+    @property
+    def granted_count(self) -> int:
+        return sum(1 for r in self.requests if r["granted"])
+
+    @property
+    def high_risk_asked(self) -> int:
+        return sum(1 for r in self.requests if r["highRisk"])
 
 
 _session_var: ContextVar[Session | None] = contextvars.ContextVar(
@@ -545,7 +617,7 @@ async def enforce(tool_name: str, args: Any = None) -> None:
             args,
         )
 
-    _log(tool_name, session, "allowed_by_user", args)
+    _log(tool_name, session, f"allowed_by_{session.approver_label}", args)
 
 
 def enforce_sync(tool_name: str, args: Any = None) -> None:
@@ -599,13 +671,14 @@ def enforce_sync(tool_name: str, args: Any = None) -> None:
             _deny_message(tool_name, session, "denied_by_user"),
             args,
         )
-    _log(tool_name, session, "allowed_by_user", args)
+    _log(tool_name, session, f"allowed_by_{session.approver_label}", args)
 
 
 __all__ = [
     "ALLOW",
     "ALL_TOOLS",
     "ASK",
+    "AutoApprover",
     "DEFAULT_MODE",
     "DENY",
     "HEADLESS_PERMISSION_MODE",
