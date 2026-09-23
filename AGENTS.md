@@ -295,6 +295,14 @@ uv run python evals/report.py --single runtime/runs/v3-single.json \
 ⚠️ **别再用 `--all` 一次跑一整轮**（结果 JSON 只在整轮结束写一次，被掐断就整轮白跑 —— E016 事故的教训）；
 逐题跑 = 每题各落一份 JSON，天然的增量保存。
 
+> 💡 **看输出的编码提示（2026-09-24 实测，纯显示问题、不影响数据）**：
+> `code_agent.py` 在 **import 时**把 stdin/stdout/stderr 统一 reconfigure 成 UTF-8（第 47-49 行，
+> 为的是 Windows 控制台默认 GBK）。
+> 所以① **它 import 之前**打印的行（例如 `evals/env.py` 那两句 `[evals] 语料隔离…`）是 **GBK 字节**；
+> ② **之后**的行才是 UTF-8。
+> 控制台代码页是 65001 时①显示成 `���`，是 936 时②显示成乱码 —— **两种都只是终端显示**，
+> 落盘的结果 JSON 与报告不受影响。在 DSH 里跑时是 65001，所以只有那两句会花。
+
 - ⚠️ **两轮必须换 `run-id`**：thread_id 里带 run-id 与 mode，复用会让第二轮读到第一轮的 checkpoint。
   预检会检查 run-id 有没有重名（`--run-id`）。
 - `--archive` 另存一份到 `docs/evidence/`（纳入版本控制）；不加只落 `runtime/runs/`（gitignore）。
