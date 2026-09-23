@@ -374,7 +374,7 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 - 留着一把坏尺子，只会让后续开发（包括 AI 助手）继续拿它量东西 —— 所以删掉，而不是标注。
 - 备份：`E:\agentstart\work\backup\1new\backup\evals\`；也能从 git 历史取回（`git show 8d0ab78:evals/tasks.py`）。
 
-**新尺子长什么样**（`evals/`，8 个文件）：
+**新尺子长什么样**（`evals/`，9 个文件 + 一个夹具目录）：
 
 | 文件 | 职责 |
 |---|---|
@@ -386,6 +386,7 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 | `report.py` | **报告生成器**：把结果 JSON 变成能进 `docs/evidence/` 的 Markdown（含**算出来的 STAR 量化对比**） |
 | `rag_bench.py` | RAG 检索基准（单轮快照，与题集无关，见下一节） |
 | `rag_ablation.py` | RAG **消融对照**（2×2 + 全量召回对照组，不需要 LLM，见下一节） |
+| `env.py` | **语料隔离**：`use_eval_corpus()` 把评估指到 `runtime/eval_knowledge/` + `chroma_db_eval/`，**不碰产品的 `data/knowledge/`**（订正 #36） |
 
 **四条口径**（相对旧尺子的修正）：**通过 = 满分**（旧口径 `score >= 0.5` 就把"对一半"算通过）；
 **`skip` ≠ 0 分**（环境不可用记 `unavailable`、不进分母，别把"没测"记成"做错了"）；
@@ -486,10 +487,12 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 │   └── run/                       # 启动/停止脚本：start-app.cmd / start-app.ps1（起 Web UI）
 │                                  #   + start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
 ├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
-├── evals/                         # 阶段 6 重建的评估体系（8 个文件）：tasks.py(30 题) / verifiers.py(43 个判定器)
-│                                  #   / runner.py / run_e2e.py / preflight.py(跑前预检) / report.py(报告+STAR)
-│                                  #   / rag_bench.py(RAG 基准) / rag_ablation.py(RAG 消融对照)
-├── tests/                         # 499 个测试（单元 + 工具级 + 评估体系自检）
+├── evals/                         # 阶段 6 重建的评估体系（9 个文件 + 夹具）：tasks.py(30 题)
+│                                  #   / verifiers.py(43 个判定器) / runner.py / run_e2e.py
+│                                  #   / preflight.py(跑前预检) / report.py(报告+STAR)
+│                                  #   / rag_bench.py(RAG 基准) / rag_ablation.py(RAG 消融)
+│                                  #   / env.py(语料隔离) + fixtures/knowledge/(7 篇测试语料)
+├── tests/                         # 505 个测试（单元 + 工具级 + 评估体系自检）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 从阶段 6 起重新只追加；archive/ 仍空）
 ├── AGENTS.md                      # AI 助手约定与已知坑
@@ -501,12 +504,12 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 499 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 505 | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | **测试语料** 35（7 文件 × 5 条）→ `evals/fixtures/knowledge/`；产品库默认空 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数） | top-1 命中正解文件 0.20 → 0.60（对照 0.70） | `uv run python evals/rag_ablation.py --reps 10` |
 | 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
-| 测试覆盖率 | **70%**（2049 语句 / 613 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
+| 测试覆盖率 | **70%**（2057 语句 / 615 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 

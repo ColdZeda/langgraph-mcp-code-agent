@@ -57,7 +57,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（499 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（505 个） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | 看评估题集（**不跑、不烧 token**） | `uv run python evals/run_e2e.py --list` |
 | 跑评估（单/多 Agent 各一轮，**必须换 run-id**） | `uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive` |
@@ -70,7 +70,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 重建前端 | `cd app/web/frontend && npm run build` |
 
 > ⚠️ **评估体系已于阶段 6 重建**（旧口径那套在阶段 5 删除、`evals/` 从零重写）——
-> 跑法与口径见下方「**评估相关**」；**30 题正式两轮还没跑**（等用户审阅），所以现存的旧分数一律不可比。
+> 跑法与口径见下方「**评估相关**」；**30 题正式两轮还没跑**（题集已审阅通过，见 🔵 段的手册），所以现存的旧分数一律不可比。
 > ⚠️ CI（`.gitee.yml`）从阶段 2 起跑三步：`ruff check .` → `ruff format --check .` → `pytest tests/ -v`。
 
 ## 代码地图（精简）
@@ -85,7 +85,8 @@ app/code_agent/
 ├── agent/memory.py              分层记忆读写：自动注入(T4.4②) / 自动沉淀(T4.4③，**进程内直调**)
 ├── agent/events.py              ★ 阶段 5：节点级进度事件（ContextVar sink；没绑就静默跳过）
 ├── agent/code_agent.py          REPL 循环 run_agent() + 非交互入口 run_single_task()（阶段 6 重建的评估脚本会用）
-├── agent/prompts.py             SYSTEM_PROMPT_TEMPLATE（Plan→Execute→Verify 三步法）+ PROMPT_CONTEXT
+├── agent/prompts.py             SYSTEM_PROMPT_TEMPLATE（Plan→Execute→Verify 三步法）
+│                                  + prompt_context(role)：**模型名运行期解析**（订正 #37，别用静态 PROMPT_CONTEXT）
 ├── model/llm.py                 LLMRegistry：get_llm(role) / chain(role) / invoke_with_fallback
 │                                  + build_llm / set_llm（热切换后需重建 agent）
 ├── config.py                    所有配置 + setup_logging（stderr）
@@ -105,23 +106,27 @@ config/models.json               内置模型注册表（**显示名 key + 实�
 app/web/server.py                FastAPI：WS /ws/chat（含权限确认协议）+ REST + 静态托管 dist
 app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框）+ store.js + components/
                                  （ChatView / ResultCard / SettingsPanel / **PermissionDialog**〔阶段 5〕）
-evals/                           ★ 阶段 6 重建的评估体系（8 个文件，口径见「评估相关」）：
+evals/                           ★ 阶段 6 重建的评估体系（9 个文件，口径见「评估相关」）：
                                  tasks.py（30 题题集）/ verifiers.py（43 个判定器工厂，四档强度）
                                  runner.py（执行引擎）/ run_e2e.py（命令行入口）
                                  preflight.py（跑前环境预检）/ report.py（报告生成器，含 STAR）
                                  rag_bench.py（RAG 检索基准）/ rag_ablation.py（RAG 消融对照）
+                                 env.py（★ 语料隔离：use_eval_corpus() 把评估指到自己的
+                                   runtime/eval_knowledge + chroma_db_eval，**不碰产品库**）
+                                 fixtures/knowledge/（只读夹具：4 篇正解 + 3 篇干扰，7 文件 / 35 条）
 scripts/                         probe_mcp_server.py（手工发 JSON-RPC 探某个 MCP server 到底回没回）
                                  + mysql-init/*.sql（被 docker-compose 当**挂载目录**用，别挪）
 scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对照表）：
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           499 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           505 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / web_permission〔阶段 5 的三个〕/
                                  web_model_settings + evals_verifiers / evals_tasks / evals_runner /
-                                 evals_report / evals_rag_ablation / evals_preflight〔阶段 6 的六个〕）
+                                 evals_report / evals_rag_ablation / evals_preflight / evals_env /
+                                 prompt_model_name〔阶段 6 的八个〕）
 ```
 
 ## 已知坑（务必先看）
@@ -142,6 +147,7 @@ tests/                           499 个测试（config / prompts / mysql_safe_i
 | **「当前生效模型」必须看得见**（阶段 6 · 用户实测后提的） | 模型是**全局配置、不随会话保存**，四个角色还可各不相同 —— 顶栏常驻显示 Executor 那个（`registry.effective_models()` 经 `/api/models` 给前端）；每条结果卡片另显示「**本轮实际使用的模型**」（`response_metadata.model_name` = 服务端真实回报的名字，与"配置里写的"区分开）。⚠️ 配置改动**从下一条消息生效**：正在跑的那条任务用的是它启动时的快照 |
 | **三处模型配置的优先级**（2026-09-22 明确，别搞反） | `runtime/web-settings.json`（界面点出来的）**>** `config/models.json`（仓库默认）**>** `.env`（密钥 + 兜底模型名/地址）。⚠️ 两个后果：① 界面上存过一次模型选择后，改 `models.json` 的 `roles` **不生效**；② **evals / CLI 根本不读 `web-settings.json`**（`load_settings`/`apply_settings` 只存在于 `app/web/server.py`）→ 它们只用 models.json 的 roles + `.env` 的 key。**跑评估前必须确认 `.env` 的 key 是有效的**（界面里那个 key 帮不上忙） |
 | **`web-settings.json` 含明文密钥** | 内置凭据 + 每个自定义模型的 key 都是明文写在这个文件里。它已 gitignore，但**不要分享**；界面只回显尾号；`/api/models` 与 `/api/settings` **都必须先剥掉 `api_key`** 再返回（`tests/test_web_model_settings.py` 守着"响应里不出现明文 key"）。⚠️ **改 `.env` 要重启进程才生效**（`load_dotenv` 只在 import 时跑一次），界面改的则热生效 |
+| **提示词里的模型名必须运行期取**（订正 #37） | `prompts.PROMPT_CONTEXT` **故意不含 `model_name`** —— 它要运行期从注册表取（`effective_model_name(role)` → `resolve_model(role)["model"]`，取**实际调用名**），格式化一律走 `prompt_context(role)`。⚠️ 以前写的是 `.env` 的 `MODEL_NAME`（**import 时定死**）→ 用户在面板切了模型、`rebuild_agents()` 也重建了 agent，**提示词里还是旧名字**（用户实测：换成 mimo，模型却说自己运行在 deepseek-flash）。拿静态 `PROMPT_CONTEXT` 去 format 会 `KeyError: 'model_name'` —— **这是故意的**：宁可响亮失败，别静默报错名字 |
 | **显示名 ≠ 调用名** | `models.json` 里键是**给用户看的显示名**，`model` 字段才是**实际发给 API 的名字**。这样官方改名/下线（如 2026-09-10 V4 Flash → V4.1 Flash，旧名"暂时路由"）时只动 `model` 一行。前端只在两者不同时才补一句「实际调用 xxx」 |
 
 ### 环境与工具链
@@ -236,13 +242,14 @@ tests/                           499 个测试（config / prompts / mysql_safe_i
 
 ### 评估相关（**阶段 6 已从零重建；准备件做完了，正式两轮还没跑**）
 
-**现状（2026-09-23）**：`evals/` 八个文件 ——
+**现状（2026-09-23）**：`evals/` **九个文件 + 一个夹具目录** ——
 `tasks.py`（30 题题集）/ `verifiers.py`（43 个判定器工厂）/ `runner.py`（执行引擎）/
-`run_e2e.py`（命令行入口）/ `rag_bench.py`（RAG 检索基准）/
-**`rag_ablation.py`（RAG 消融对照，**已经跑出正式数字**）/
-**`preflight.py`（跑前环境预检）** / **`report.py`（报告生成器，含 STAR 量化对比）**。
-**T6.1（评分器）/ T6.2（题集）已完成**（提交 `9aafa6b`）；**T6.3 的四个准备件（①②③④）已完成**，
-只剩 **⑤ 两轮全量 + ⑥ 正式报告**（**等用户审阅 30 题之后才跑**）。
+`run_e2e.py`（命令行入口）/ `rag_bench.py`（RAG 检索基准）/ `rag_ablation.py`（RAG 消融对照）/
+**`preflight.py`（跑前环境预检）** / **`report.py`（报告生成器，含 STAR 量化对比）** /
+**`env.py`（★ 语料隔离 `use_eval_corpus()`）** + `fixtures/knowledge/`（7 篇测试语料夹具）。
+**T6.1（评分器）/ T6.2（题集）已完成**（提交 `9aafa6b`，题集**已审阅通过**）；
+**T6.3 的准备件（含订正 #36 语料分家、#37 提示词模型名）全部完成**，
+只剩 **⑤ 两轮全量 + ⑥ 正式报告** —— 命令见上方 🔵 段的「跑两轮的手册」。
 
 **先预检再跑**（预检会替你验 `.env` 的 key、容器、WSL、端口、知识库，**不修任何东西**）：
 
@@ -420,7 +427,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > | **T5.6** Web 节点级实时推送（现有 WS，**不引 SSE**） | ✅ `agent/events.py`（ContextVar sink）+ 四个节点 `emit()` + 前端逐行进度；`tests/test_web_permission.py` 里 3 条协议级测试 |
 > | 前端：权限下拉框 + 确认弹框 + 节点进度 + `npm run build` | ✅ 全部构建进 `dist/` |
 > | **额外修的 3 个 bug**（跑通 Web 时暴露的，见订正 #27/#28） | ✅ RAG 工具在 MCP 里**死锁**（一行 import 修好）/ 历史会话不显示回复 / single 模式误报"验收未通过" |
-> | **额外改的 4 处**（用户 2026-09-21 决策） | ✅ 助手改名 `novi` + 界面 `Code Agent-novi` + 真实模型名进提示词；沉淀判据收窄；沉淀**豁免权限层**（只读档仍不写）；确认弹框队列化 |
+> | **额外改的 4 处**（用户 2026-09-21 决策） | ✅ 助手改名 `novi` + 界面 `Code Agent-novi` + 真实模型名进提示词（⚠️ 当时只做到「把 `.env` 的名字写进提示词」，**跟着生效模型走**是阶段 6 订正 #37 才做到的）；沉淀判据收窄；沉淀**豁免权限层**（只读档仍不写）；确认弹框队列化 |
 >
 > 🆕 **阶段 5 新增模块**：`app/code_agent/security/permissions.py`（档位表 + 判定 + 人工确认闸门 + 审计）。
 > 新增配置：`CODE_AGENT_PERMISSION_MODE` / `CODE_AGENT_CONFIRM_TIMEOUT` / `CODE_AGENT_PERMISSIONS_LOG`。
@@ -432,8 +439,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > | 子任务 | 状态 |
 > |---|---|
 > | **T6.1 评分器**（四档断言 / 通过=满分 / skip≠0 / 超时也验分 / 真实工具名） | ✅ `evals/verifiers.py` + `runner.py` + `run_e2e.py`（提交 `9aafa6b`） |
-> | **T6.2 题集**（30 题 = 基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3，163 条断言） | ✅ `evals/tasks.py`（提交 `9aafa6b`）—— ⚠️ **用户尚未审阅，等他说"可以跑"** |
-> | **T6.3 跑两轮 + 归档 + 报告** | 🔵 **准备件 ①②③④ 已完成（2026-09-23）**，只剩 **⑤ 两轮全量 + ⑥ 正式报告**。见下方「推进顺序」的完成标记 |
+> | **T6.2 题集**（30 题 = 基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3，163 条断言） | ✅ `evals/tasks.py`（提交 `9aafa6b`）—— ✅ **用户 2026-09-23 已审阅通过**（看过《30 题速览》并确认「没问题」）→ **可以跑了** |
+> | **T6.3 跑两轮 + 归档 + 报告** | 🔵 **准备件全部完成（2026-09-23）**，只剩 **⑤ 两轮全量 + ⑥ 正式报告** —— 命令见下方「**跑两轮的手册**」 |
 >
 > **三条前提里，② 已解决（别再按旧说法理解）**：
 > - ① **从零重建**→ 已完成；现在是"已重建、待跑"；
@@ -455,26 +462,56 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > | ② | `evals/rag_ablation.py`（**不用 LLM**） | ✅ 已写并跑出正式数字（**2×2 + 全量召回对照组 E**），归档到 `docs/evidence/rag_ablation_20260923_203822.json` |
 > | ③ | 报告生成器（含 STAR） | ✅ `evals/report.py`（`--selftest` 用假数据自测；18 条单测） |
 > | ④ | 跑前预检 | ✅ `evals/preflight.py`（10 项检查 + `fix` 提示；17 条单测）——**它第一次跑就把我自己写错的探针抓出来了（订正 #34）** |
-> | ⑤ | **两轮全量**（先 single 再 multi） | ⬜ **等用户审阅 30 题之后再做**（唯一贵的一步，40–100 分钟 ×2 + token） |
+> | ④.5 | **语料分家**（订正 #36） | ✅ 测试语料搬到 `evals/fixtures/knowledge/`，评估用 `runtime/eval_knowledge/` + `chroma_db_eval/`；**产品库默认空、不再被评测污染** |
+> | ④.6 | **提示词模型名运行期取**（订正 #37） | ✅ 用户实测 bug（换成 mimo 却说自己跑在 deepseek-flash）；现在跟生效模型走、按角色各取各的 |
+> | ⑤ | **两轮全量**（先 single 再 multi） | 🟢 **可以跑了**（30 题已审阅通过）；唯一贵的一步，命令见下方手册 |
 > | ⑥ | 正式报告 + 归档 + 更新活文档 | ⬜ 依赖 ⑤（STAR 需要两轮数据，**不许用单轮编**） |
 >
-> **⑤ 之前必须满足的条件**（预检会逐条报，❌ 就别开跑）：
-> 1. **30 题等用户审阅通过**（他说"可以跑"才跑）；
-> 2. `.env` 的 `MODEL_API_KEY` 有效（2026-09-23 预检实测：200，`deepseek-flash` 在服务端模型列表里）；
-> 3. 4 个依赖容器在跑（2026-09-23 实测：`agent-mysql`/`searxng`/`redis-stack-server`/`my-nginx` 全在跑）；
-> 4. WSL 可用、上传目录可清、端口 8123 空闲、知识库 35 块。
+> **⑤⑥ 跑两轮的手册（照做就行；别凭记忆操作）**
+>
+> ```powershell
+> # ① 预检（10 项；❌ 就别开跑。只读 + 清一次 WSL 上传目录，不起服务、不改配置）
+> uv run python evals/preflight.py --run-id v3-single
+> # ② 单 Agent 一轮（**用后台任务跑** —— 前台命令有超时上限，被掐断 = 整轮白跑）
+> uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive
+> # ③ 多 Agent 一轮（**必须换 run-id**）
+> uv run python evals/run_e2e.py --all --mode multi  --run-id v3-multi  --archive
+> # ④ 出报告（数字全部现算；缺哪个输入就如实写「未提供」，不编）
+> uv run python evals/report.py --single runtime/runs/v3-single.json `
+>     --multi runtime/runs/v3-multi.json `
+>     --rag docs/evidence/rag_ablation_20260923_203822.json `
+>     --out docs/evidence/评估报告.md
+> ```
+>
+> **四条不变量（违反哪条，那一轮数据就不可比/会白跑）**：
+> 1. **跑前必过预检**：它验 `.env` 的 key（**CLI/evals 不读界面设置**，界面里那个 key 帮不上忙）、
+>    4 个容器、WSL、端口 8123、知识库 35 块；
+> 2. **两轮必须换 `run-id`**（thread_id 里带 run-id + mode，复用会让第二轮读到第一轮 checkpoint）；
+> 3. **每题开跑前有两次复位**（`runtime/workspace/` + `runtime/eval_knowledge/`）——
+>    日志里出现「`1 篇已删清理`」是**正常且必需**的（模型自己会调 `save_knowledge`，订正 #35）；
+> 4. **评估只用 `runtime/eval_knowledge/` + `runtime/chroma_db_eval/`**（夹具在 `evals/fixtures/knowledge/`），
+>    **绝不碰产品的 `data/knowledge/`**（订正 #36）。跑评估时也别用 Web UI/CLI 干活（共用 `runtime/workspace/`）。
+>
+> ⚠️ **别中途 Ctrl+C、别关终端、别关后台任务**：结果 JSON **只在整轮跑完时写一次**，没有断点续跑。
+> ⚠️ 耗时参考：冒烟 3 题 **53~85 秒**（这 3 题偏简单，**不能外推**；30 题含长任务与对抗题，
+> 早期估算是 40–100 分钟/轮，单题上限 300–480 秒）。
+> ⚠️ 跑完把结果交回来做 ⑥：出报告 → 归档 `docs/evidence/` → 更新活文档（含 STAR 量化对比，**真实、不许编**）。
+>
+> **已满足的前提**（2026-09-23 实测，预检逐条会再报一次）：
+> 30 题**已审阅通过**；`.env` key 有效（`GET /models` → 200，`deepseek-flash` 在服务端列表里）；
+> 4 个容器在跑；WSL 可用、上传目录可清、端口 8123 空闲、知识库 35 块。
 >
 > **恢复入口**：① 本文件这一段；② `docs/handover.md` 的「阶段 6 现状」；
 > ③ `program-fix第八版\阶段6_evals重做.md` 顶部「执行中状态」；
-> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–#34）。
+> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–**#37**）。
 
 **已知遗留**：
 
-1. **评估要跑完才算完**：题集与评分器**已重建**（阶段 6 · T6.1/T6.2），T6.3 的四个准备件
-   （修 WSL 残留 / RAG 消融 / 报告生成器 / 跑前预检）**已完成**，剩下
-   **⑤ single/multi 各一轮全量 → ⑥ 报告 + STAR 量化指标 → 归档到 `docs/evidence/`**。
-   ⚠️ 跑之前：① **30 题等用户审阅**（他说"可以跑"才跑）；② 先跑 `evals/preflight.py`
-   （它会验 `.env` 的 key、容器、WSL、端口、知识库；❌ 就别开跑）。详见上方 🔵 那段。
+1. **评估要跑完才算完**：题集与评分器**已重建**（阶段 6 · T6.1/T6.2），T6.3 的准备件
+   （修 WSL 残留 / RAG 消融 / 报告生成器 / 跑前预检 / **语料分家** / **提示词模型名**）**全部完成**，
+   剩下 **⑤ single/multi 各一轮全量 → ⑥ 报告 + STAR 量化指标 → 归档到 `docs/evidence/`**。
+   ✅ **30 题已审阅通过**（2026-09-23），⑤ **可以跑了** —— 命令与四条不变量见上方 🔵 段的
+   「跑两轮的手册」；**跑之前先过 `evals/preflight.py`**。
 2. **前端构建产物**：`app/web/frontend/dist/` 必须入库；⚠️ 根 `.gitignore` 曾有裸 `dist/`
    会把新构建的哈希资源一并吞掉（已改为 `/dist/`）。改前端后必须 `npm run build` 并提交
    **新增与删除**的资源文件。
@@ -498,8 +535,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 499 | `uv run python -m pytest tests/ -q` |
-| 测试覆盖率 | 70%（2049 语句 / 613 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 75 条测试（424 → 499） |
+| 测试数 | 505 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 70%（2057 语句 / 615 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 81 条测试（424 → 505） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
 | 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
