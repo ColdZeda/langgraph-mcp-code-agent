@@ -178,6 +178,93 @@ async def test_run_all_actually_cleans_wsl_uploads(monkeypatch, tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 知识库复位（订正 #35：模型会自己写知识库）
+# ═══════════════════════════════════════════════════════════════════
+
+
+async def test_knowledge_is_reset_before_every_task(monkeypatch):
+    """每题开跑前都要**清根目录散文件 + 重扫知识库**。
+
+    2026-09-23 smoke 实测：模型自己调了 `save_knowledge`（E007），
+    写进去的条目会进向量库 → 后面的题检索时会看到它 → 破坏"每题独立可比"。
+    关掉工具会改变口径（32 → 31），所以改成**每题复位**。
+    """
+    from app.code_agent.rag import store
+
+    order: list[str] = []
+
+    def spy_clean() -> int:
+        order.append("clean_root")
+        return 2
+
+    def spy_seed() -> None:
+        order.append("seed")
+
+    async def ok_task(prompt, thread_id="eval", mode="auto", **kwargs):
+        order.append("agent")
+        return {"ok": True, "response": "done", "tool_trace": []}
+
+    monkeypatch.setattr(R, "_clean_knowledge_root", spy_clean)
+    monkeypatch.setattr(store, "seed_knowledge_base", spy_seed)
+    monkeypatch.setattr(store, "get_chunk_count", lambda: 35)
+    monkeypatch.setattr(R, "run_single_task", ok_task)
+
+    record = await R.run_one_task(_spec(), mode="single", run_id="r1")
+
+    assert order == ["clean_root", "seed", "agent"], "复位必须发生在 Agent 开跑之前"
+    assert record["knowledge_reset"] == {"removed": 2, "chunks": 35}
+
+
+async def test_knowledge_reset_uses_seed_not_ensure_seeded(monkeypatch):
+    """**不能用 `ensure_seeded()`** —— 它带进程级 `_seeded` 标志，第二次调用直接跳过（永远不清）。"""
+    from app.code_agent.rag import store
+
+    calls: list[str] = []
+    monkeypatch.setattr(store, "ensure_seeded", lambda *a, **k: calls.append("ensure_seeded"))
+    monkeypatch.setattr(store, "seed_knowledge_base", lambda *a, **k: calls.append("seed"))
+    monkeypatch.setattr(store, "get_chunk_count", lambda: 35)
+    monkeypatch.setattr(R, "_clean_knowledge_root", lambda: 0)
+
+    R._reset_knowledge()
+    R._reset_knowledge()
+
+    assert calls == ["seed", "seed"], "两次都要真的重扫，不能被 _seeded 短路"
+
+
+def test_knowledge_reset_failure_is_recorded_not_fatal(monkeypatch):
+    """复位失败**不该让整道题挂掉**，但必须看得见（不许静默吞掉）。"""
+    from app.code_agent.rag import store
+
+    def boom() -> None:
+        raise RuntimeError("向量库连不上")
+
+    monkeypatch.setattr(store, "seed_knowledge_base", boom)
+    monkeypatch.setattr(R, "_clean_knowledge_root", lambda: 1)
+
+    record = R._reset_knowledge()
+
+    assert record["removed"] == 1
+    assert record["chunks"] == -1
+    assert "向量库连不上" in record["error"]
+
+
+async def test_knowledge_reset_is_in_every_task_record(monkeypatch):
+    """每题的结果里都要留下复位痕迹（报告/排查时能看出"这道题跑在什么知识库上"）。"""
+    from app.code_agent.rag import store
+
+    async def ok_task(prompt, thread_id="eval", mode="auto", **kwargs):
+        return {"ok": True, "response": "done", "tool_trace": []}
+
+    monkeypatch.setattr(R, "run_single_task", ok_task)
+    monkeypatch.setattr(R, "_clean_knowledge_root", lambda: 0)
+    monkeypatch.setattr(store, "seed_knowledge_base", lambda: None)
+    monkeypatch.setattr(store, "get_chunk_count", lambda: 35)
+
+    record = await R.run_one_task(_spec(), mode="single", run_id="r1")
+    assert record["knowledge_reset"]["chunks"] == 35
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 线程隔离 / 判定器照跑
 # ═══════════════════════════════════════════════════════════════════
 

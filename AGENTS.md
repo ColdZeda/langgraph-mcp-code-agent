@@ -57,7 +57,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（481 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（485 个） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | 看评估题集（**不跑、不烧 token**） | `uv run python evals/run_e2e.py --list` |
 | 跑评估（单/多 Agent 各一轮，**必须换 run-id**） | `uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive` |
@@ -116,7 +116,7 @@ scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           481 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           485 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / web_permission〔阶段 5 的三个〕/
@@ -225,6 +225,12 @@ tests/                           481 个测试（config / prompts / mysql_safe_i
   MCP 工具每次调用都要新起 python 子进程重新 import chromadb + torch，延迟从毫秒级变秒级。
   ⚠️ **评估时 `run_single_task` 强制关掉自动沉淀**（`auto_deposit=False`），
   否则评测过程产生的经验会写进知识库、改写后续题目的检索结果。
+  ⚠️ **但那只关了「应用自动沉淀」这一条路**（订正 #35，2026-09-23 smoke 实测）：
+  **模型自己会调 `save_knowledge` 工具**（E007 就把"MySQL 经验"写进去了，872 字符 / 3 块），
+  这条路**关不掉** —— 工具是产品真实存在的，为评测摘掉它等于改口径（32 → 31 个工具）。
+  所以评估改成：**每题开跑前把知识库复位**（`runner._reset_knowledge()`：清根目录散文件 +
+  `store.seed_knowledge_base()` 清掉"文件已删但块还在"的 source）。
+  ⚠️ 复位**不能调 `ensure_seeded()`**（它带进程级 `_seeded` 标志，第二次调用直接跳过 = 永远不清）。
 - **`import app.code_agent.rag.store` 不加载模型**（全懒加载）：单测里碰它不会去 load torch。
   测试环境由 `tests/conftest.py` 统一关掉自动注入 / 自动沉淀 / 工具缓存。
 
@@ -254,7 +260,9 @@ uv run python evals/report.py --single runtime/runs/v3-single.json \
 - ⚠️ **两轮必须换 `run-id`**：thread_id 里带 run-id 与 mode，复用会让第二轮读到第一轮的 checkpoint。
   预检会检查 run-id 有没有重名（`--run-id`）。
 - `--archive` 另存一份到 `docs/evidence/`（纳入版本控制）；不加只落 `runtime/runs/`（gitignore）。
-- ⚠️ **每题开跑前会清空 `runtime/workspace/`**；整轮前还会清 `data/knowledge/` **根目录**散文件、
+- ⚠️ **每题开跑前会做两件复位**：清空 `runtime/workspace/`，**以及把知识库复位**
+  （`runner._reset_knowledge()`，订正 #35 —— 模型会自己调 `save_knowledge` 写进去）。
+  整轮前还会清 `data/knowledge/` **根目录**散文件、
   题集声明的 MySQL 库（`eval_shop`/`eval_lib`/`eval_metrics`/`eval_decoy`）、
   **以及 WSL 上传目录**（`/home/leprite/nginx/uploads/`，保留 `.gitkeep`）。
 - ✅ **WSL 上传目录的清理已经修好了**（2026-09-22 自查发现、2026-09-23 修完，见订正 #33/#34）：
@@ -488,8 +496,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 481 | `uv run python -m pytest tests/ -q` |
-| 测试覆盖率 | 69%（2049 语句 / 632 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——所以阶段 6 加了 55 条测试，覆盖率数字**没动** |
+| 测试数 | 485 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 71%（2049 语句 / 596 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 61 条测试（424 → 485） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
 | 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |

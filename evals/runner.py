@@ -172,6 +172,33 @@ def _clean_mysql(databases: Iterable[str], tables: Iterable[tuple[str, str]] = (
     return done
 
 
+def _reset_knowledge() -> dict:
+    """把知识库复位到"只有预置的那 7 篇"，**每题开跑前都做一次**。
+
+    为什么必须做（2026-09-23 smoke 实测）：**模型自己会调 `save_knowledge`** ——
+    跑 E007 时它把"MySQL 查询工具的经验"写进了知识库（872 字符 / 3 块，chroma 35 → 38 块）。
+    应用层的自动沉淀在评估里是关掉的（`run_single_task(auto_deposit=False)`），
+    但**"模型主动调工具"这条路关不掉**：`save_knowledge` 是产品里真实存在的工具，
+    为了评测把它从工具集里摘掉，等于换了口径（工具数 32 → 31）。
+    于是换个思路：**不堵工具，而是把知识库在每题前复位** —— 和"每题清空 workspace"同源。
+
+    写法上有个坑：**不能调 `store.ensure_seeded()`** —— 它带进程级 `_seeded` 标志，
+    进程内只灌一次，第二次调用直接跳过（那样就永远不清）。
+    要调 `store.seed_knowledge_base()`（真正的扫描+增量+清理），
+    它会因为"文件已删但块还在"把残留 source 的块清掉。
+
+    开销很小：预置 7 篇 mtime 没变 → 不重建，只做一次全库 metadata 扫 + 可能的删除。
+    """
+    removed = _clean_knowledge_root()
+    from app.code_agent.rag import store
+
+    try:
+        store.seed_knowledge_base()
+        return {"removed": removed, "chunks": store.get_chunk_count()}
+    except Exception as exc:  # noqa: BLE001 —— 复位失败不该让整道题挂掉，但要看得见
+        return {"removed": removed, "chunks": -1, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def _clean_wsl_uploads(path: str | None) -> dict:
     """清 WSL 上传目录里的文件（保留 `.gitkeep`），返回**可分辨的**执行记录。
 
@@ -314,7 +341,8 @@ async def run_one_task(
     run_id: str,
     tools: list | None = None,
 ) -> dict:
-    """跑一道题：执行 → （超时/异常也）执行判定器 → 汇总。"""
+    """跑一道题：复位知识库 → 清工作目录 → 执行 → （超时/异常也）执行判定器 → 汇总。"""
+    knowledge_reset = _reset_knowledge()
     clean_workspace()
     if spec.setup is not None:
         spec.setup(WORKSPACE_DIR)
@@ -420,6 +448,8 @@ async def run_one_task(
         "budget_exceeded": bool(result.get("budget_exceeded")),
         "pruned_messages": int(result.get("pruned_messages") or 0),
         "node_timings": result.get("node_timings") or {},
+        # ── 每题开跑前的复位（残留会让后面的题跑在不一样的环境里）──
+        "knowledge_reset": knowledge_reset,
         # ── 权限痕迹 ──
         "permission": result.get("permission")
         or {

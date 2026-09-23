@@ -487,7 +487,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 ├── evals/                         # 阶段 6 重建的评估体系（8 个文件）：tasks.py(30 题) / verifiers.py(43 个判定器)
 │                                  #   / runner.py / run_e2e.py / preflight.py(跑前预检) / report.py(报告+STAR)
 │                                  #   / rag_bench.py(RAG 基准) / rag_ablation.py(RAG 消融对照)
-├── tests/                         # 481 个测试（单元 + 工具级 + 评估体系自检）
+├── tests/                         # 485 个测试（单元 + 工具级 + 评估体系自检）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 从阶段 6 起重新只追加；archive/ 仍空）
 ├── AGENTS.md                      # AI 助手约定与已知坑
@@ -499,12 +499,12 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 481 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 485 | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数） | top-1 命中正解文件 0.20 → 0.60（对照 0.70） | `uv run python evals/rag_ablation.py --reps 10` |
 | 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
-| 测试覆盖率 | **69%**（2049 语句 / 632 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
+| 测试覆盖率 | **71%**（2049 语句 / 596 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 
