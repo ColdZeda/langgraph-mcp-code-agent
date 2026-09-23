@@ -94,6 +94,33 @@ def test_decode_line_handles_utf8_and_gbk():
     assert ps._decode_line("中文 GBK\n".encode("gbk")) == "中文 GBK\n"
 
 
+def test_latin_supplement_detector():
+    """区间判定本身：`Ŀ¼` 命中、正常中英文不命中。"""
+    assert ps._has_latin_supplement("Ŀ¼: ") is True
+    assert ps._has_latin_supplement("目录: ") is False
+    assert ps._has_latin_supplement("plain ascii") is False
+
+
+def test_decode_line_prefers_gbk_when_utf8_decode_is_latin_junk():
+    """**GBK 字节恰好也是合法 UTF-8** 时必须选 GBK（2026-09-24 实测漏掉的那一半）。
+
+    实例：PowerShell 的中文表头 `目录: ` 在 GBK 下是 `C4 BF C2 BC …`，
+    这串字节 **UTF-8 也解得开**（解成 `Ŀ¼: `）——
+    只写「先 UTF-8、失败退 GBK」就**永远轮不到 GBK 分支**，模型看到的仍是乱码。
+    """
+    raw = "目录: E:\\x".encode("gbk")
+    assert raw.decode("utf-8") == "Ŀ¼: E:\\x", "前提：这串 GBK 字节确实是合法 UTF-8"
+    assert ps._decode_line(raw) == "目录: E:\\x"
+
+
+def test_decode_line_still_handles_the_two_pure_encodings():
+    """回归：别为了修上一条，把“纯 UTF-8 / 纯 GBK”这两条路弄坏。"""
+    text = "报告：输入为 3"
+    assert ps._decode_line(text.encode("utf-8")) == text
+    assert ps._decode_line(text.encode("gbk")) == text  # GBK 字节不是合法 UTF-8 → 走 GBK
+    assert ps._decode_line(b"plain ascii\n") == "plain ascii\n"
+
+
 def test_mixed_encoding_output_is_decoded_line_by_line(monkeypatch):
     """**同一路流里混着两种编码**是真实发生过的，必须逐行判。"""
     lines = [

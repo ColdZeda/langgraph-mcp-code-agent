@@ -56,10 +56,27 @@ def _is_dangerous(command: str) -> str | None:
     return None
 
 
-def _decode_line(raw: bytes) -> str:
-    """按「先 UTF-8、失败退 GBK」解一行输出。
+def _has_latin_supplement(text: str) -> bool:
+    """文本里有没有落在 **U+0080–U+02FF**（拉丁补充 / 拉丁扩展-A/B）的字符？
 
-    ⚠️ **不能固定一种编码**（2026-09-24 跑评估时实测出来的）：
+    这个区间是"**GBK 被误当 UTF-8 解开**"的典型指纹：`目录`(GBK) 的字节
+    `C4 BF C2 BC` **恰好也是合法 UTF-8**，解出来是 `Ŀ¼` —— 两个字符都在这个区间里。
+    正常的中文/英文输出几乎不会用到这一段。
+    """
+    return any(0x80 <= ord(ch) <= 0x2FF for ch in text)
+
+
+def _decode_line(raw: bytes) -> str:
+    """按「优先 UTF-8；**解出来像拉丁乱码就换 GBK**」解一行输出。
+
+    ⚠️ 为什么不能只写"先 UTF-8、失败退 GBK"（那是第一版，2026-09-24 实测不够）：
+
+      - GBK 的字节序列**有时恰好也是合法 UTF-8** —— 于是永远轮不到 GBK 分支。
+        实例：PowerShell 的中文表头 `目录: ` 在 GBK 下是 `C4 BF C2 BC ...`，
+        UTF-8 也解得开，但结果是 `Ŀ¼: `（乱码）。**模型看到的就是这个乱码。**
+      - 所以判据要加上"**解出来的东西是不是拉丁补充区的怪字符**"（见 `_has_latin_supplement`）。
+
+    为什么不能固定一种编码（2026-09-24 跑评估时实测）：
 
       - PowerShell **自己**的输出走**控制台代码页**（中文 Windows 上是 GBK/936）；
       - 而它启动的 **Python 子进程**，只要继承了 `PYTHONIOENCODING=utf-8`
@@ -70,13 +87,25 @@ def _decode_line(raw: bytes) -> str:
     于是花了好几轮去"确认文件编码"，还写了个脚本用 `repr()` 抓输出 —— 白烧 token。
 
     按行解是安全的：`\\n`(0x0A) 既不是 UTF-8 多字节序列的组成部分，也不是 GBK 的尾字节。
+
+    ⚠️ **已知的假阳性**（刻意接受）：真正的 UTF-8 拉丁文本（如 `café`）也会命中
+    `_has_latin_supplement` → 被按 GBK 解成 `caf茅`。本项目的输出是中文 + 英文，
+    出现带音标拉丁字母的概率极低，代价（一个词乱码）远小于上面那种整行乱码。
     """
-    for enc in ("utf-8", "gbk"):
-        try:
-            return raw.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return raw.decode("utf-8", errors="replace")
+    utf8: str | None = None
+    try:
+        utf8 = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+
+    if utf8 is not None and not _has_latin_supplement(utf8):
+        return utf8
+
+    try:
+        return raw.decode("gbk")
+    except UnicodeDecodeError:
+        pass
+    return utf8 if utf8 is not None else raw.decode("utf-8", errors="replace")
 
 
 def _echo_to_stderr(line: str) -> None:
