@@ -96,6 +96,7 @@ class AgentState(TypedDict):
     verifier_messages: list  # Verifier 消息流
     step_count: int  # Executor 执行步数（近似原单 Agent 步数）
     route: str  # auto 模式的路由结论："simple" / "complex"（由 route_node 写入）
+    planner_model: str  # Planner 这次实际用的模型名（服务端回报；结果卡片显示用）
     # ── 阶段 4：上下文工程 ──
     knowledge: str  # 任务开始时自动注入的相关经验（T4.4 ②；空串=没注入）
     budget_exceeded: bool  # 任务级 token 预算是否已击穿（T4.3）
@@ -188,6 +189,23 @@ def _msg_tokens(msg: Any) -> int:
     return int(usage.get("total_tokens") or 0) if usage else 0
 
 
+def _msg_model(msg: Any) -> str:
+    """取服务端**真实回报**的模型名（`response_metadata.model_name`）。
+
+    为什么不用配置里的名字：配置说的是"我让谁答"，这里是"**真的谁答的**"
+    —— 两者在"官方把旧模型名路由到新模型"这种情况下会不一样（本机实测过：
+    发 `deepseek-v4-flash`，服务端回报 `deepseek-flash`）。结果卡片与阶段 6 的
+    评估报告都用这个字段做"模型口径"。
+    """
+    meta = getattr(msg, "response_metadata", None) or {}
+    return str(meta.get("model_name") or meta.get("model") or "")
+
+
+def _models_of(messages: Any) -> list[str]:
+    """一组消息里出现过的模型名（去重排序，空值丢掉）。"""
+    return sorted({name for name in (_msg_model(m) for m in (messages or [])) if name})
+
+
 def _plan_to_text(plan: str) -> str:
     obj = _extract_json(plan)
     if obj and obj.get("steps"):
@@ -230,7 +248,12 @@ async def planner_node(state: AgentState) -> dict:
             "tokens": planner_tokens,
         }
     )
-    return {"plan": plan_text, "token_usage": state.get("token_usage", 0) + planner_tokens}
+    return {
+        "plan": plan_text,
+        "token_usage": state.get("token_usage", 0) + planner_tokens,
+        # 结果卡片要显示"本轮实际用了哪个模型"（服务端回报的那个名字）
+        "planner_model": _msg_model(resp),
+    }
 
 
 def _trace_to_text(trace: list[dict]) -> str:
@@ -793,4 +816,10 @@ async def run_multi_agent(
         "budget_exceeded": bool(state.get("budget_exceeded")),
         "pruned_messages": state.get("pruned_messages", 0),
         "deposited": deposited,
+        # ── 阶段 6：**本轮实际用了哪些模型**（服务端回报的名字，不是配置里的）──
+        "models_used": {
+            "planner": [m for m in [state.get("planner_model") or ""] if m],
+            "executor": _models_of(state.get("executor_messages")),
+            "verifier": _models_of(state.get("verifier_messages")),
+        },
     }

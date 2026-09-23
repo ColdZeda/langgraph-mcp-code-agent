@@ -27,6 +27,24 @@ const verdictObj = (() => {
 const hasVerdict = Boolean(verdictObj?.verdict)
 const passed = verdictObj?.verdict?.toUpperCase() === 'PASS'
 const showTrace = ref(false)
+
+/** 阶段 6：**本轮实际使用的模型**（服务端在响应里回报的那个名字）。
+ *  为什么要显示它：配置里写的是"我让谁答"，这里是"**真的谁答的**"——
+ *  官方把旧模型名路由到新模型、或用中转别名时，两者会不一样。 */
+const modelsUsed = (() => {
+  const raw = props.result.modelsUsed || {}
+  const names = new Set()
+  for (const list of Object.values(raw)) {
+    for (const n of list || []) names.add(n)
+  }
+  return {
+    all: [...names].sort(),
+    roles: Object.entries(raw)
+      .map(([role, list]) => `${role}=${(list || []).join('/')}`)
+      .filter((s) => !s.endsWith('='))
+      .join('，'),
+  }
+})()
 </script>
 
 <template>
@@ -62,6 +80,9 @@ const showTrace = ref(false)
       </span>
       <span v-else class="badge none">— 本轮未验收（{{ result.mode === 'single' ? 'single' : '简单任务直通' }}）</span>
       <span v-if="verdictObj?.reason && !passed" class="reason">{{ verdictObj.reason }}</span>
+      <span v-if="modelsUsed.all.length" class="models" :title="modelsUsed.roles">
+        🧠 本轮实际使用：{{ modelsUsed.all.join('、') }}
+      </span>
       <span class="meta">打回 {{ result.retryCount }} 次 · 步数 {{ result.stepCount }} · token {{ result.tokenUsage }} · 耗时 {{ result.elapsedSec }}s</span>
     </div>
   </div>
@@ -85,5 +106,6 @@ const showTrace = ref(false)
 .badge.fail { background: #450a0a; color: #fca5a5; }
 .badge.none { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
 .reason { font-size: 12px; color: #fca5a5; }
+.models { font-size: 12px; color: #93c5fd; cursor: help; }
 .meta { margin-left: auto; font-size: 12px; color: #64748b; }
 </style>

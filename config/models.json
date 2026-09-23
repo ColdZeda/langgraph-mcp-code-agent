@@ -1,38 +1,24 @@
 {
   "_readme": [
     "模型注册表 —— 这个文件进版本控制（配置是人写的，不是运行时产物）。",
-    "键（key）= 下拉框里给用户看的名字；`model` = 实际发给 API 的模型名。",
-    "⚠️ 两者分开是为了防官方改名/下线：2026-09-10 官方把 V4 Flash 升级为 V4.1 Flash，",
-    "   并把旧名 deepseek-v4-flash「暂时路由」到新模型。内部一律用官方现名，",
-    "   显示名自己控制 —— 官方再改名时只动这一行的 model，不用改代码。",
-    "用法：roles 决定每个角色默认用哪个键；fallback 决定某角色失败时的降级顺序（可留空）。",
-    "密钥不放这里：放 .env（MODEL_API_KEY）或 Web 面板（runtime/web-settings.json）。",
-    "用户自己加的模型**不进这个文件** —— 存在 runtime/web-settings.json 的 custom_models 里。",
-    "新增内置模型：在 models 里加一条，再把 roles/fallback 指过去即可。"
+    "⚠️ 现在**故意是空的**（2026-09-22 用户决定）：默认就一个「系统默认」，直接走 .env 的",
+    "   MODEL_NAME / MODEL_BASE_URL / MODEL_API_KEY —— 不需要在这里再登记一遍。",
+    "   用户自己加的模型走 Web 面板 → 存 runtime/web-settings.json 的 custom_models（不进仓库）。",
+    "",
+    "要加**内置预设**（给所有用户开箱即用的选项）时，照下面这个形状填 models，再把 roles 指过去：",
+    "  models:  { \"<显示名>\": { \"provider\": \"openai-compatible\", \"model\": \"<实际调用的模型名>\",",
+    "                            \"base_url\": \"https://...\" } }",
+    "  roles:   { \"planner\": \"<显示名>\", \"executor\": \"<显示名>\",",
+    "             \"verifier\": \"<显示名>\", \"router\": \"<显示名>\" }",
+    "  fallback:{ \"executor\": [\"<备用显示名>\"] }   ← 填了才启用降级链",
+    "",
+    "⚠️ 「显示名」与「实际调用的模型名」分开是有意的：官方改名/下线时（例如 2026-09-10",
+    "   V4 Flash 升级为 V4.1 Flash、旧名被暂时路由）只需要改 model 那一行，显示名不用动。",
+    "roles 留空 = 四个角色都用 .env 的 MODEL_NAME。",
+    "密钥**永远不放这里**（这个文件进仓库）：放 .env 或 Web 面板。"
   ],
-  "models": {
-    "deepseek-v4.1-flash": {
-      "provider": "openai-compatible",
-      "model": "deepseek-flash",
-      "base_url": "https://api.deepseek.com"
-    },
-    "deepseek-v4-pro": {
-      "provider": "openai-compatible",
-      "model": "deepseek-v4-pro",
-      "base_url": "https://api.deepseek.com"
-    }
-  },
-  "roles": {
-    "planner": "deepseek-v4.1-flash",
-    "executor": "deepseek-v4.1-flash",
-    "verifier": "deepseek-v4.1-flash",
-    "router": "deepseek-v4.1-flash"
-  },
-  "fallback": {
-    "planner": [],
-    "executor": [],
-    "verifier": [],
-    "router": []
-  },
+  "models": {},
+  "roles": {},
+  "fallback": {},
   "timeout_sec": 60
 }

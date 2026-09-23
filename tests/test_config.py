@@ -37,8 +37,16 @@ class TestConfigDefaults:
 
     def test_runtime_dirs_exist(self):
         """运行时目录应自动创建。"""
-        assert config.CHECKPOINT_DIR.exists()
         assert config.CHROMA_DIR.exists()
+
+    def test_legacy_checkpoint_dir_is_gone(self):
+        """阶段 1 之前的 JSON checkpoint 目录方案**已彻底移除**（2026-09-22）。
+
+        为什么专门留一条"不存在"的断言：它曾经是个**每次启动都被 mkdir 回来**的空目录，
+        名字与 `checkpoints.db` 只差一个 s，把用户绕了一次。谁要是把它加回来，这条会红。
+        """
+        assert not hasattr(config, "CHECKPOINT_DIR")
+        assert not (config.RUNTIME_DIR / "checkpoint").exists()
 
     def test_thread_id_default(self):
         """默认 thread_id。"""

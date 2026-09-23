@@ -213,6 +213,32 @@ class LLMRegistry:
     def custom_models(self) -> dict[str, dict]:
         return {k: dict(v) for k, v in self._custom_models.items()}
 
+    def resolve_model(self, role: str = DEFAULT_ROLE) -> dict:
+        """解析某个角色**当前实际会用**的模型（给界面显示「当前生效模型」用）。
+
+        三层兜底，与 `model_key()` / `_build_for_key()` 保持一致：
+          ① 角色键在自定义模型里 → 用它的显示名 + 实际调用名；
+          ② 角色键在内置注册表里 → 同上；
+          ③ 都不是 → 就是「**系统默认**」（模型名 = `.env` 的 `MODEL_NAME`，`key` 为它本身）。
+
+        ⚠️ 为什么界面要显示这个：模型是**全局配置、不随会话保存**，而且四个角色可以各不相同 ——
+        不显示的话用户没法知道"现在到底是谁在干活"（2026-09-22 用户实测后提的需求）。
+        """
+        key = self.model_key(role)
+        spec = self.all_models().get(key)
+        if spec:
+            return {
+                "key": key,
+                "label": spec.get("label") or key,
+                "model": spec.get("model") or key,
+                "custom": bool(spec.get("custom")),
+            }
+        return {"key": "", "label": "系统默认", "model": key, "custom": False}
+
+    def effective_models(self) -> dict[str, dict]:
+        """四个角色各自"当前实际会用"的模型（顶栏常驻显示 + 排查用）。"""
+        return {role: self.resolve_model(role) for role in ROLE_NAMES}
+
     def all_models(self) -> dict[str, dict]:
         """内置注册表 + 用户自定义模型（**给下拉框当数据源**）。
 

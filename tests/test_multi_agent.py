@@ -135,3 +135,31 @@ async def test_verifier_pass_stops_immediately(fake_planner, thread_id):
     assert executor.calls == 1
     assert result["retry_count"] == 0
     assert "PASS" in result["verdict"].upper()
+
+
+# ── 阶段 6：「本轮实际使用的模型」（结果卡片显示用）──
+
+
+def test_msg_model_reads_server_reported_name():
+    """取的是服务端**真实回报**的模型名，不是配置里写的那个。
+
+    本机实测过两者的差别：发 `deepseek-v4-flash`，服务端回报 `deepseek-flash`
+    （官方 2026-09-10 把旧名路由到了新模型）。
+    """
+    msg = AIMessage(content="好", response_metadata={"model_name": "deepseek-flash"})
+    assert ma._msg_model(msg) == "deepseek-flash"
+
+
+def test_msg_model_tolerates_missing_metadata():
+    assert ma._msg_model(AIMessage(content="x")) == ""
+
+
+def test_models_of_dedupes_and_sorts():
+    msgs = [
+        AIMessage(content="a", response_metadata={"model_name": "b-model"}),
+        AIMessage(content="b", response_metadata={"model_name": "a-model"}),
+        AIMessage(content="c", response_metadata={"model_name": "b-model"}),
+        AIMessage(content="d"),
+    ]
+    assert ma._models_of(msgs) == ["a-model", "b-model"]
+    assert ma._models_of(None) == []

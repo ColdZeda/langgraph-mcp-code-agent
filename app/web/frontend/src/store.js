@@ -26,6 +26,10 @@ export const store = reactive({
   sending: false,
   sessions: [],
   showSettings: false,
+  // 「当前生效模型」：四个角色**解析后**各自会用哪个（后端算好给前端 —— 兜底链有三层，
+  // 前端自己拼容易算错）。阶段 6 加的：模型是全局配置、不随会话保存，
+  // 不显示的话用户不知道"现在到底是谁在干活"（用户实测后提的需求）。
+  effectiveModels: {},
 })
 
 let ws = null
@@ -185,14 +189,17 @@ export async function loadSession(threadId) {
   } catch { /* 服务未就绪时静默 */ }
 }
 
-/** 取模型清单（内置注册表 + 我的模型），给设置面板的四个角色下拉框当数据源。
- *  每项 `label` = 显示名、`model` = 实际调用名（不同时面板会补一句"实际调用 xxx"）。 */
+/** 取模型清单（「我的模型」+「系统默认」解析结果），给设置面板的下拉框当数据源。
+ *  每项 `label` = 显示名、`model` = 实际调用名（不同时面板会补一句"实际调用 xxx"）。
+ *  顺带把「当前生效模型」写进 store —— 顶栏常驻显示它。 */
 export async function loadModels() {
   try {
     const res = await fetch('/api/models')
-    return await res.json()
+    const data = await res.json()
+    store.effectiveModels = data.effectiveModels || {}
+    return data
   } catch {
-    return { models: [], roles: {} }
+    return { models: [], roles: {}, effectiveModels: {} }
   }
 }
 

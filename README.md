@@ -69,35 +69,41 @@ MODEL_API_KEY=你的API密钥
 # 可选: CODE_AGENT_LLM_TIMEOUT=60      # 单次调用超时（秒）
 ```
 
-**模型是按角色配的**（Planner / Executor / Verifier / Router），配置在 **`config/models.json`**（进版本控制）：
+**模型是按角色配的**（Planner / Executor / Verifier / Router）。**默认什么都不用配** ——
+四个角色都走 `.env` 的那一套（`MODEL_NAME` / `MODEL_BASE_URL` / `MODEL_API_KEY`），
+界面上下拉框的第一项「**使用配置默认**」就是它：
 
-```jsonc
-// 键（key）= 下拉框里给用户看的显示名；model = 实际发给 API 的模型名。
-// 两者分开是为了防官方改名/下线：2026-09-10 官方把 V4 Flash 升级成 V4.1 Flash，
-// 并把旧名 deepseek-v4-flash「暂时路由」过去 —— 内部一律用官方现名，显示名自己控制。
-"models":   { "deepseek-v4.1-flash": { "model": "deepseek-flash",
-                                       "base_url": "https://api.deepseek.com" } },
-"roles":    { "planner": "deepseek-v4.1-flash", "executor": "deepseek-v4.1-flash",
-              "verifier": "deepseek-v4.1-flash", "router": "deepseek-v4.1-flash" },
-"fallback": { "executor": [] }   // 填备用模型即启用"主力报错/超时自动降级"
+```bash
+# .env（唯一的必填项是 key）
+MODEL_API_KEY=sk-xxxx
+MODEL_NAME=deepseek-flash        # 不填则用代码默认值
+MODEL_BASE_URL=https://api.deepseek.com
 ```
 
-- 默认四个角色同一个模型（行为可预期）；可在 **Web UI 的模型设置面板**里分别选，改完热生效。
+- **想给用户预置几个可选模型**（开箱即用）：填 `config/models.json`（进版本控制）。
+  ⚠️ 它**默认是空的**（2026-09-22 决定）—— 格式与示例写在该文件的 `_readme` 里。
+  键 = 给用户看的**显示名**、`model` 字段 = **实际发给 API 的名字**（官方改名时只动后者）。
+- **用户自己加模型**：面板 →「我的模型」→ 填 `显示名 + 模型名 + API 地址 + Key`，
+  存本机 `runtime/web-settings.json`，加完立刻出现在四个角色的下拉框里。
+  **每个自定义模型自带凭据**，与系统默认那组互不影响（"系统默认用 `.env` 的 key、
+  我的 GLM 用我自己的 key"可以共存）。旁边的「测试连接」测的就是你刚填的这一组，
+  并会回显**实际测的是哪个模型名**。
 - **verifier 想单独换模型**要勾上「验收使用异构模型」—— 默认三角色同模型、Verifier 跟随 Executor
   （同一个模型自己验自己容易有一致的盲区，换一个模型能拿到独立视角）。
-- **用户也能加"自己的模型"**：面板 →「我的模型」填 `显示名 + 模型名 + API 地址 + Key`，
-  存本机 `runtime/web-settings.json`，加完立刻出现在四个角色的下拉框里。
-  **每个自定义模型自带凭据**，与内置模型那组全局凭据互不影响（所以"内置用 .env 的 key、
-  我的 GLM 用我自己的 key"可以共存）。
+- **界面上随时能看到"现在是谁在干活"**：侧栏常驻显示「当前生效模型」（= Executor 那个）；
+  每条结果卡片另显示「本轮**实际使用**的模型」—— 后者取自服务端回报的 `model_name`，
+  所以用了官方改名后的别名或中转时，你能看出**真正回答的是谁**。
 
 > ⚠️ **三处配置的优先级**（从高到低），别搞反：
 > `runtime/web-settings.json`（界面点出来的）**>** `config/models.json`（仓库里的默认）
 > **>** `.env`（密钥与兜底的模型名/地址）。
 > 所以**在界面上存过一次模型选择后，改 `models.json` 的 `roles` 是不生效的** —— 要回界面改。
 >
-> - **`web-settings.json` 里含明文密钥**（内置凭据 + 每个自定义模型的 key）。它已 gitignore、
+> - **`web-settings.json` 里含明文密钥**（系统默认凭据 + 每个自定义模型的 key）。它已 gitignore、
 >   不进仓库，但**不要分享这个文件**；界面只回显尾号 4 位。
-> - **改 `.env` 必须重启服务才生效**（配置在进程启动时读一次）；而界面改的会热生效。
+> - **改 `.env` 必须重启服务才生效**（配置在进程启动时读一次）；而界面改的会热生效，
+>   且**从下一条消息开始**（正在跑的那条任务用的是它启动时的配置快照）。
+> - **CLI 与评估（evals）不读 `web-settings.json`** —— 它们只用 `config/models.json` + `.env`。
 
 ### 运行（命令行）
 
@@ -145,11 +151,13 @@ uv run uvicorn app.web.server:app --port 8000
   也可以勾「**本会话内对该工具总是允许**」（**默认不勾**，切档位或换会话即失效）；
   **没人应答会倒计时自动拒绝**
 - 模型设置：界面内热切换模型 / API 地址 / Key，**四个角色（Planner / Executor / Verifier / Router）
-  分别选模型**（数据源 = `config/models.json` 的内置项 +「我的模型」里用户自己加的）；
+  分别选模型**（下拉框默认只有「使用配置默认」= 走 `.env`，加上「我的模型」里用户自己加的）；
   设置只存本机 `runtime/web-settings.json`（**含明文密钥**，已 gitignore、不进仓库）
 - 「我的模型」：填 `显示名 + 模型名 + API 地址 + Key` 就能接任意 OpenAI 兼容服务
-  （中转站、GLM、Qwen…），**每个模型自带密钥**；旁边的「测试连接」测的就是你刚填的这一组
-  （会回显**实际测的是哪个模型名**，避免"测试通过但跟你选的模型无关"）
+  （中转站、GLM、Qwen…），**每个模型自带密钥**；可**测试连接 / 编辑 / 删除**（删除要点两次确认，
+  并会顺带清掉角色里指向它的选择）
+- **当前生效模型看得见**：侧栏常驻显示它（= Executor 用的那个，四角色不同时会提示）；
+  每条结果卡片显示「本轮**实际使用**的模型」（服务端回报的名字，不是配置里写的那个）
 - 会话列表：读 `runtime/checkpoints.db`；**点击任一会话即可切换并回放历史**，之后的对话在原会话上续聊
 
 > 权限模式的持久化是**有取舍的**：只把「只读 / 需确认」落盘，**「放开」永不持久化** ——
@@ -423,7 +431,7 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 │   └── web/
 │       ├── server.py              # FastAPI（WS + 权限确认协议 + REST + 静态托管）
 │       └── frontend/              # Vue3 + Vite（dist 已入库）；含 PermissionDialog（人工确认弹框）
-├── config/models.json             # 模型注册表（显示名 + 实际调用名）+ 角色分配 + 降级链（进版本控制）
+├── config/models.json             # 模型注册表（显示名 + 实际调用名；**默认空** = 走 .env）+ 角色分配 + 降级链
 ├── data/knowledge/                # 知识库源文件：35 条（7 个文件 × 每文件 5 条）
 ├── scripts/                       # probe_mcp_server.py（手工发 JSON-RPC 探 MCP server 回没回）
 │   │                              #   + mysql-init/*.sql（被 docker-compose 当挂载目录用，别挪）

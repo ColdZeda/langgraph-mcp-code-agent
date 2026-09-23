@@ -90,8 +90,10 @@ app/code_agent/
 ├── utils/mcp.py                 load_mcp_tools（工厂；client 无需关闭，见「已知坑」）
 ├── utils/tool_cache.py          只读工具结果缓存（Redis；挂了自动降级）
 └── utils/tool_wrap.py           工具包装：**权限判定(第一句)** + 结果外置 + 结果缓存
-config/models.json               内置模型注册表（**显示名 key + 实际调用名 model**）+ 角色分配 + 降级链
-                                 （**进版本控制**，不要放 runtime/；用户自定义模型不在这里，见 web-settings.json）
+config/models.json               内置模型注册表（**显示名 key + 实际调用名 model**）+ 角色分配 + 降级链。
+                                 ⚠️ **默认是空的** = 四个角色走 .env 的 MODEL_NAME（这就是「使用配置默认」）；
+                                 加内置预设的格式写在它的 `_readme` 里。**进版本控制**，不要放 runtime/；
+                                 用户自定义模型不在这里（见 web-settings.json 的 custom_models）
 app/web/server.py                FastAPI：WS /ws/chat（含权限确认协议）+ REST + 静态托管 dist
 app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框）+ store.js + components/
                                  （ChatView / ResultCard / SettingsPanel / **PermissionDialog**〔阶段 5〕）
@@ -120,7 +122,10 @@ tests/                           308 个测试（config / prompts / mysql_safe_i
 | **Verifier 打回** | ✅ 已修：`retry_count` 在 `executor_node` 里「是重跑才 +1」→ 最多打回 `MAX_RETRY`(2) 次，Executor 共跑 `MAX_RETRY+1` 次 |
 | `file_saver.py` | ✅ **已删除**（连同 `tests/test_file_saver.py`）；它曾是全仓唯一非法 UTF-8 的 `.py` |
 | **执行模式** | `single` / `multi` / `auto`：`auto` 先由 `route_node` 判复杂度（写进 `state["route"]`），simple 只跑 Executor、complex 走完整三阶段；CLI `--mode` 与 Web UI 下拉框都能选 |
-| **模型按角色配** | 注册表在 `config/models.json`（roles + fallback）；`get_llm(role)`，默认 executor；运行期改法有两个：Web UI 设置面板（`set_role_models`）与 `registry.override_from_spec()`（原 `evals --role-models`，那个 CLI 参数随旧评估脚本一起删了）。⚠️ **测试里必须同时 patch `ma.get_llm` 与 `ma.registry`**，否则 planner 会真的调模型（实测让 pytest 从 8s 变 104s） |
+| **模型按角色配** | 注册表在 `config/models.json`；`get_llm(role)`，默认 executor；运行期改法有两个：Web UI 设置面板（`set_role_models`）与 `registry.override_from_spec()`（原 `evals --role-models`，那个 CLI 参数随旧评估脚本一起删了）。⚠️ **测试里必须同时 patch `ma.get_llm` 与 `ma.registry`**，否则 planner 会真的调模型（实测让 pytest 从 8s 变 104s） |
+| **`models.json` 默认是空的（有意为之 · 2026-09-22 用户决定）** | `models: {}` + `roles: {}` → **四个角色都走 `.env` 的 `MODEL_NAME`**，这就是界面下拉框第一项「使用配置默认」。内置预设**不再暴露给用户**（用户要加模型就自己在面板里加）。要加内置预设的格式写在 `models.json` 的 `_readme` 里 |
+| **用户自定义模型**（阶段 6 · 方案 A） | Web 面板「我的模型」→ 存 `web-settings.json` 的 `custom_models`，**每个模型自带 key/base_url**；`LLMRegistry.set_custom_models()` 加载，`_build_for_key` **优先用自带凭据** → 与内置/系统默认那组全局凭据互不污染。接口：`POST /api/settings/custom-model`、`DELETE /api/settings/custom-model/{id}`（**删除会顺带清掉角色里指向它的引用**） |
+| **「当前生效模型」必须看得见**（阶段 6 · 用户实测后提的） | 模型是**全局配置、不随会话保存**，四个角色还可各不相同 —— 顶栏常驻显示 Executor 那个（`registry.effective_models()` 经 `/api/models` 给前端）；每条结果卡片另显示「**本轮实际使用的模型**」（`response_metadata.model_name` = 服务端真实回报的名字，与"配置里写的"区分开）。⚠️ 配置改动**从下一条消息生效**：正在跑的那条任务用的是它启动时的快照 |
 | **三处模型配置的优先级**（2026-09-22 明确，别搞反） | `runtime/web-settings.json`（界面点出来的）**>** `config/models.json`（仓库默认）**>** `.env`（密钥 + 兜底模型名/地址）。⚠️ 两个后果：① 界面上存过一次模型选择后，改 `models.json` 的 `roles` **不生效**；② **evals / CLI 根本不读 `web-settings.json`**（`load_settings`/`apply_settings` 只存在于 `app/web/server.py`）→ 它们只用 models.json 的 roles + `.env` 的 key。**跑评估前必须确认 `.env` 的 key 是有效的**（界面里那个 key 帮不上忙） |
 | **`web-settings.json` 含明文密钥** | 内置凭据 + 每个自定义模型的 key 都是明文写在这个文件里。它已 gitignore，但**不要分享**；界面只回显尾号；`/api/models` 与 `/api/settings` **都必须先剥掉 `api_key`** 再返回（`tests/test_web_model_settings.py` 守着"响应里不出现明文 key"）。⚠️ **改 `.env` 要重启进程才生效**（`load_dotenv` 只在 import 时跑一次），界面改的则热生效 |
 | **显示名 ≠ 调用名** | `models.json` 里键是**给用户看的显示名**，`model` 字段才是**实际发给 API 的名字**。这样官方改名/下线（如 2026-09-10 V4 Flash → V4.1 Flash，旧名"暂时路由"）时只动 `model` 一行。前端只在两者不同时才补一句「实际调用 xxx」 |
@@ -131,8 +136,12 @@ tests/                           308 个测试（config / prompts / mysql_safe_i
   **没有 `func`** → 想包装工具**不能用 `tool._run`**（对 32 个 MCP 工具都会 raise）；
   FileManagementToolkit 的 7 个工具则**只有同步 `_run`**。两条路径都要处理。
 - **运行时目录**（阶段 1 已修）：`config.py` 现在会创建 `RUNTIME_DIR / WORKSPACE_DIR /
-  CHECKPOINT_DIR / CHROMA_DIR / RUNS_DIR`。此前全新 clone 下 `tests/test_config.py`
+  CHROMA_DIR / RUNS_DIR / TOOL_RESULTS_DIR`。此前全新 clone 下 `tests/test_config.py`
   会因为目录不存在而失败（本机通过只是因为有残留）。
+  ⚠️ 这里**曾经还有 `CHECKPOINT_DIR`（`runtime/checkpoint/`）**，是阶段 1 之前"一个会话一个 JSON 文件"
+  的目录方案遗留 —— 它每次启动都被 mkdir 回来，却和真正在用的 `runtime/checkpoints.db`
+  只差一个 s。**2026-09-22 已按用户决定彻底移除**（常量 + mkdir + 那条断言 + 目录本身），
+  并留了一条"不存在"的断言防它被加回来（`tests/test_config.py::test_legacy_checkpoint_dir_is_gone`）。
 - **改造前的历史不在 `master` 上**：`master` 的**地基** `8d0ab78`（"init: 导入改造前基线"）是**单提交重建**的，
   它下面没有历史；改造期的提交都直接追加在它上面（`git log --oneline` 看得到）。
   要找**改造前**的东西必须去 `refs/remotes/raw-origin/*`（旧仓库 master / phase1..phase5）→ 考古要用 **`git log --all -S '...'`**。

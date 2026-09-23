@@ -315,6 +315,9 @@ async def list_models():
         "roles": registry.role_models(),
         "roleNames": list(ROLE_NAMES),
         "models": models,
+        # 「当前生效模型」：四个角色**解析后**各自会用哪个 —— 界面顶栏常驻显示它。
+        # 为什么要后端算：兜底链有三层（界面覆盖 → models.json → .env），前端自己拼容易算错。
+        "effectiveModels": registry.effective_models(),
     }
 
 
@@ -663,6 +666,9 @@ async def _run_chat(
                 "mode": result.get("mode", exec_mode),
                 "route": result.get("route", ""),
                 "elapsedSec": elapsed,
+                # 阶段 6：**本轮实际使用的模型**（服务端回报的名字）—— 结果卡片显示，
+                # 与"配置里写的是谁"区分开（官方改名/中转别名时两者会不同）
+                "modelsUsed": result.get("models_used", {}),
                 "permissionMode": permission_mode,
                 "permissionModeLabel": mode_label(permission_mode),
             },

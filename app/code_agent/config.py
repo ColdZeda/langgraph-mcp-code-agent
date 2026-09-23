@@ -17,9 +17,11 @@ RUNTIME_DIR = PROJECT_ROOT / "runtime"
 
 KNOWLEDGE_DIR = Path(os.getenv("CODE_AGENT_KNOWLEDGE_DIR", DATA_DIR / "knowledge"))
 WORKSPACE_DIR = Path(os.getenv("CODE_AGENT_WORKSPACE_DIR", RUNTIME_DIR / "workspace"))
-CHECKPOINT_DIR = Path(os.getenv("CODE_AGENT_CHECKPOINT_DIR", RUNTIME_DIR / "checkpoint"))
-# 阶段 1 起：跨轮记忆改用 SQLite（langgraph 的 AsyncSqliteSaver，按 thread_id 恢复）。
-# 旧的 CHECKPOINT_DIR（JSON 目录）已废弃 —— 保留常量只为兼容与清理。
+# 跨轮记忆用 **SQLite 单文件**（langgraph 的 AsyncSqliteSaver，按 thread_id 恢复）。
+# ⚠️ 这里曾经还有一个 `CHECKPOINT_DIR = runtime/checkpoint/`（阶段 1 之前是"一个会话一个
+#    JSON 文件"的目录方案）。阶段 1 改成 SQLite 后它就成了空目录，却**每次启动都被 mkdir 回来**，
+#    还和 `runtime/checkpoints.db` 只差一个 s —— 2026-09-22 用户就被这个同名设计绕了一次。
+#    已按用户决定**彻底移除**（连同 test_config.py 里那条断言）。
 CHECKPOINT_DB = Path(os.getenv("CODE_AGENT_CHECKPOINT_DB", RUNTIME_DIR / "checkpoints.db"))
 CHROMA_DIR = Path(os.getenv("CODE_AGENT_CHROMA_DIR", RUNTIME_DIR / "chroma_db"))
 RUNS_DIR = Path(os.getenv("CODE_AGENT_RUNS_DIR", RUNTIME_DIR / "runs"))
@@ -28,9 +30,9 @@ TOOL_RESULTS_DIR = Path(os.getenv("CODE_AGENT_TOOL_RESULTS_DIR", RUNTIME_DIR / "
 
 # 运行时目录由配置层统一创建。
 # 为什么放在这里：这些目录不属于版本控制（runtime/ 被 gitignore），全新 clone 下来并不存在；
-# 而 tests/test_config.py 断言 CHECKPOINT_DIR / CHROMA_DIR 存在、运行期也需要它们。
+# 而 tests/test_config.py 断言它们存在、运行期也需要它们。
 # （实测：不创建时，全新 clone 下 `test_runtime_dirs_exist` 会失败。）
-for _d in (RUNTIME_DIR, WORKSPACE_DIR, CHECKPOINT_DIR, CHROMA_DIR, RUNS_DIR, TOOL_RESULTS_DIR):
+for _d in (RUNTIME_DIR, WORKSPACE_DIR, CHROMA_DIR, RUNS_DIR, TOOL_RESULTS_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 PYTHON_EXECUTABLE = os.getenv("CODE_AGENT_PYTHON", sys.executable)
