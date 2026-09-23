@@ -9,7 +9,8 @@
 Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner → Executor → Verifier）
 + 6 个自建 MCP Server（stdio 子进程，25 个工具）+ FileManagementToolkit（7 个文件工具），
 双入口（CLI `main.py` / Web UI `app/web/server.py`）。
-⚠️ 旧的 30 题评估体系已于**阶段 5 删除**（口径不可用），阶段 6 重建 —— 见下方「评估相关」。
+⚠️ **旧 30 题评估体系已于阶段 5 删除**（口径不可用）；**阶段 6 已从零重建**（30 题 + 强断言评分器），
+但**正式两轮结果还没跑** —— 见下方「评估相关」。
 
 ## 必须遵守的约定
 
@@ -56,13 +57,16 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（308 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（424 个） |
+| 看评估题集（**不跑、不烧 token**） | `uv run python evals/run_e2e.py --list` |
+| 跑评估（单/多 Agent 各一轮，**必须换 run-id**） | `uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive` |
+| 试跑几道题 | `uv run python evals/run_e2e.py --task E001 --mode single` / `--limit 3` |
 | MCP server 探针（排查"工具调不通"） | `uv run python scripts/probe_mcp_server.py rag query_rag --args '{"query":"MCP"}'` |
 | RAG 基准（含分块/精排指标） | `uv run python evals/rag_bench.py` |
 | 重建前端 | `cd app/web/frontend && npm run build` |
 
-> ⚠️ **端到端评估（旧 30 题）已于阶段 5 删除** —— 阶段 6 重建题集与评分器之前，
-> `evals/` 里只剩 `rag_bench.py`（RAG 检索基准）。别再去 `git grep run_e2e` 找命令，它已经不在了。
+> ⚠️ **评估体系已于阶段 6 重建**（旧口径那套在阶段 5 删除、`evals/` 从零重写）——
+> 跑法与口径见下方「**评估相关**」；**正式结果还没跑**，所以现存的旧分数一律不可比。
 > ⚠️ CI（`.gitee.yml`）从阶段 2 起跑三步：`ruff check .` → `ruff format --check .` → `pytest tests/ -v`。
 
 ## 代码地图（精简）
@@ -97,17 +101,21 @@ config/models.json               内置模型注册表（**显示名 key + 实�
 app/web/server.py                FastAPI：WS /ws/chat（含权限确认协议）+ REST + 静态托管 dist
 app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框）+ store.js + components/
                                  （ChatView / ResultCard / SettingsPanel / **PermissionDialog**〔阶段 5〕）
-evals/                           rag_bench.py（RAG 检索基准）—— 旧 30 题集已于阶段 5 删除，阶段 6 重建
+evals/                           ★ 阶段 6 重建的评估体系（5 个文件，口径见「评估相关」）：
+                                 tasks.py（30 题题集）/ verifiers.py（43 个判定器工厂，四档强度）
+                                 runner.py（执行引擎）/ run_e2e.py（命令行入口）
+                                 rag_bench.py（RAG 检索基准，与题集无关）
 scripts/                         probe_mcp_server.py（手工发 JSON-RPC 探某个 MCP server 到底回没回）
                                  + mysql-init/*.sql（被 docker-compose 当**挂载目录**用，别挪）
 scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对照表）：
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           308 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           424 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
-                                 permissions / dangerous_commands / web_permission〔后三个是阶段 5 的〕）
+                                 permissions / dangerous_commands / web_permission〔阶段 5 的三个〕/
+                                 evals_verifiers / evals_tasks / evals_runner / web_model_settings〔阶段 6 的四个〕）
 ```
 
 ## 已知坑（务必先看）
@@ -214,16 +222,55 @@ tests/                           308 个测试（config / prompts / mysql_safe_i
 - **`import app.code_agent.rag.store` 不加载模型**（全懒加载）：单测里碰它不会去 load torch。
   测试环境由 `tests/conftest.py` 统一关掉自动注入 / 自动沉淀 / 工具缓存。
 
-### 评估相关（⚠️ 2026-09-21 起：**旧 30 题集已删除，阶段 6 重建**）
+### 评估相关（**阶段 6 已从零重建；正式两轮还没跑**）
 
-- **`evals/` 现在只剩 `rag_bench.py`**（RAG 检索基准，与题集无关）。
-  旧的 `tasks.py` / `verifiers.py` / `run_e2e.py` / `compare.py` 已在**阶段 5 删除**：
-  它是**改造前**那把尺子，问题不是"分数低"而是"量不准" ——
-  实测 **14/30 题没有任何产物级断言**；且 `no_dangerous_tool_called` 检查的工具名
-  `run_vm_shell_command` **根本不是 MCP 工具**（`vm.py` 里它是普通函数，没挂 `@mcp.tool`）
-  → 那两条安全题**恒定满分**（判定器空转）。
-  备份 `E:\agentstart\work\backup\1new\backup\evals\`；git 历史可取回（`git show 8d0ab78:evals/tasks.py`）。
-  → **在这套题集重建之前，不要用任何旧分数评判当前代码。**
+**现状（2026-09-22）**：`evals/` 五个文件 ——
+`tasks.py`（30 题题集）/ `verifiers.py`（43 个判定器工厂）/ `runner.py`（执行引擎）/
+`run_e2e.py`（命令行入口）/ `rag_bench.py`（RAG 检索基准，**与题集无关**）。
+**T6.1（评分器）与 T6.2（题集）已完成**（提交 `9aafa6b`）；**T6.3（跑两轮 + 归档 + 报告）未开始**。
+
+**怎么跑**（命令也在「常用命令」表里）：
+
+```bash
+uv run python evals/run_e2e.py --list                              # 只看结构，不执行、不烧 token
+uv run python evals/run_e2e.py --task E001 --mode single           # 试跑一题
+uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive
+uv run python evals/run_e2e.py --all --mode multi  --run-id v3-multi  --archive
+```
+
+- ⚠️ **两轮必须换 `run-id`**：thread_id 里带 run-id 与 mode，复用会让第二轮读到第一轮的 checkpoint。
+- `--archive` 另存一份到 `docs/evidence/`（纳入版本控制）；不加只落 `runtime/runs/`（gitignore）。
+- ⚠️ **每题开跑前会清空 `runtime/workspace/`**；整轮前还会清 `data/knowledge/` 根目录散文件、
+  题集声明的 MySQL 库（`eval_shop`/`eval_lib`/`eval_metrics`/`eval_decoy`）、WSL uploads。
+- **CLI 与 evals 都不读 `runtime/web-settings.json`** → 它们只用 `config/models.json` + `.env`，
+  所以**跑评估前必须确认 `.env` 的 `MODEL_API_KEY` 有效**（界面里填的 key 帮不上忙）。
+
+**判定器四档强度**（`verifiers.py`，43 个工厂 → 30 题里实际用了 **163 条**）：
+
+| 档 | 常量 | 实例数 | 能抓住什么 |
+|---|---|---|---|
+| ① 文本 | `TIER_TEXT` | 10 | 模型"说对话" |
+| ② 轨迹 | `TIER_TRACE` | 29 | 调没调对工具 / 过程预算 |
+| ③ **状态** | `TIER_STATE` | **124** | **真实产物**（文件 / 库表 / WSL / 接口） |
+| ④ LLM 评分 | `TIER_JUDGE` | 0 | 质量维度（**本批题集没用它**，且它默认只是参考分、不参与通过判定） |
+
+**四条口径（相对旧尺子的修正，别改回去）**：
+
+1. **通过 = 满分**（旧口径 `score >= 0.5` 记为通过，而部分判定器会给 0.5 部分分 → 通过率虚高）；
+   部分分单列 `partial` 并在报告里披露占比。
+2. **`skip` ≠ 0 分**：环境不可用（MySQL/WSL 连不上）记 `ok=None`，既不算对也不算错；
+   **全部 skip 的题标 `unavailable` 且不进分母**（旧口径把"没测"平均进总分 = 记成"做错了"）。
+3. **超时/异常也跑判定器**（产物可能已经写出来了；旧口径只在 `status == completed` 时验分 → 超时题直接 0）。
+4. **判定器按真实 MCP 工具名 + 真实参数名写**：`assert_known_tools()` 对着 `permissions.ALL_TOOLS` 校验，
+   危险命令扫描**整个 args**。⚠️ 旧题集检查的 `run_vm_shell_command` 根本不是 MCP 工具、
+   又只读 `args["command"]`（VM 工具的参数叫 `dir_path`）→ 那几条安全题**判定器空转、恒定满分**。
+
+**题集结构**（`tests/test_evals_tasks.py` 机械守着，改题集时它会红）：
+30 题 = **基础 10 / 长任务 12 / 对抗 8**；8 个维度各 ≥3（task_completion 5、safety 5、
+multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_management 3、efficiency 3）；
+**每题至少 1 条状态断言，且不能只有 LLM 评分**。
+⚠️ **对抗题不许让 Agent 真去执行危险命令** —— 危险命令拦截由 `tests/test_dangerous_commands.py`
+（打桩 subprocess）验证；评测里放真命令等于"防线一失效就把机器删了"（阶段 5 真踩过）。
 - **跑 RAG 基准前必须清残留**：`runtime/chroma_db/`、`data/knowledge/` **根目录**
   （Agent 自学习写入的）、MySQL `agent_test` 表、WSL uploads（保留 `.gitkeep`）；
   知识库预置是 **35 条（7 个文件 × 每文件 5 条）**，`real_knowledge/` 4 个 + `distractors/` 3 个。
@@ -233,10 +280,12 @@ tests/                           308 个测试（config / prompts / mysql_safe_i
   git 历史里也有（如 `git show 1ea2687^:docs/evidence/baseline-final.json` —— `1ea2687` 是**删除**这批存档的提交，
   所以要用它的父提交 `^`；拿删除之后的提交去 show 只会得到 `path ... does not exist in ...`）。
   阶段 6 会产出新口径的结果。
-- **旧口径的两个坑（阶段 6 重做时要避开，别原样照抄）**：
+- **旧口径的两个坑（阶段 6 已按它重写；留档作教训）**：
   ① `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分 → 偏乐观；
   ② 安全题的判定器要按 **MCP 工具名 + 真实参数名**写（`make_dir_in_vm` 的参数叫 `dir_path`，
   没有 `command`）—— 否则判定器看不见东西还恒给满分。
+  另外旧题集**没有备份就找不到的**东西都在 git 里：`git show 8d0ab78:evals/tasks.py`；
+  文件级备份在 `E:\agentstart\work\backup\1new\backup\evals\`。
 - **MCP 工具没有"需要关闭的 client"**（实测，langchain-mcp-adapters 0.1.1）：
   `MultiServerMCPClient.get_tools()` 的 docstring 明写
   *"a new session will be created for each tool call"* → 每次工具调用**自建并自关**一个会话
@@ -341,25 +390,35 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > Web 端确认协议：出站 `permission_request`（含 `requestId` / `tool` / `args` / `highRisk` / `note` / `timeoutSec`），
 > 入站 `permission_response`（`requestId` / `allow` / `alwaysAllow`）+ `set_permission_mode`。
 
-> 🚦 **下一步是阶段 6（evals 重建）—— 开工先读这三处，别凭记忆上手**：
-> 1. `program-fix第八版\阶段6_evals重做.md` ← 唯一入口（**顶部有一块「阶段 6 开工前必读」，先看它**：
->    该文件正文里对 `tasks.py` / `verifiers.py` / `run_e2e.py` / `compare.py` 的**行号引用已全部失效** ——
->    那些文件在阶段 5 被删了；引用保留下来是当"旧口径为什么不能用"的**证据**，**别去找这些文件**）；
-> 2. `讨论结论汇总.md` 的 **§十二**（订正 #24–#28：黑名单漏拦 / 评估验收项作废 / 旧题集删除 /
->    RAG 死锁 / 自动沉淀）+ **§十二末尾那条"命名与过渡值"记录**；
-> 3. `给我自己看\候选池_以后可做.md`（§七 黑名单方案、§八 RAG 本地化 —— 都是"**以后**可做"，别顺手做掉）。
+> 🔵 **阶段 6（evals 重建）进行中 —— 压缩/换会话后从这里恢复，别凭记忆上手**：
 >
-> **三条已知前提（阶段 6 必须知道，否则一定踩坑）**：
-> - **从零重建**，不是"改旧件"：`evals/` 里现在只剩 `rag_bench.py`；
-> - **评估入口必须显式指定权限档位**：`run_single_task` 现在固定 `HEADLESS_PERMISSION_MODE = open`
->   （无头入口没人可问 →「需确认」会被全部自动拒绝；而「只读」会把 **17/30 道要写文件的题**直接拒掉）。
->   ⚠️ 这是**过渡值**：本阶段重定题集口径时**可以改**，但要连同题集一起决定，别只改一行；
-> - **三套检索粒度指标**（块 / 文件 / **正解来源占比**）按 C1 保留 —— 干扰项问题（C2）只如实记录、不投入优化。
+> | 子任务 | 状态 |
+> |---|---|
+> | **T6.1 评分器**（四档断言 / 通过=满分 / skip≠0 / 超时也验分 / 真实工具名） | ✅ `evals/verifiers.py` + `runner.py` + `run_e2e.py`（提交 `9aafa6b`） |
+> | **T6.2 题集**（30 题 = 基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3，163 条断言） | ✅ `evals/tasks.py`（提交 `9aafa6b`）—— ⚠️ **用户尚未审阅，等他说"可以跑"** |
+> | **T6.3 跑两轮 + 归档 + 报告** | ⬜ **未开始**：① RAG 消融对照（`rag_ablation.py`，不用 LLM）② single/multi 各一轮全量 ③ 报告 + **STAR 量化指标** 进 `docs/evidence/` |
+>
+> **三条前提里，② 已解决（别再按旧说法理解）**：
+> - ① **从零重建**→ 已完成；现在是"已重建、待跑"；
+> - ② **评估入口的权限档：已从 `open` 改成 `confirm` + `AutoApprover`**（用户 2026-09-22 决策 A）。
+>   为什么不能用 `open`：它**绕开确认闸门**，跑出来的成绩证明不了机制；为什么不能用「只读」：
+>   **17/30 道题要写文件**，会被直接拒掉。现在的口径是"**评估跑的就是产品默认档**"，
+>   每次写操作都过闸门并留痕（审计里记 `allowed_by_eval_auto`）。
+> - ③ **三套检索粒度**（块 / 文件 / 正解来源占比）按 C1 保留；干扰项（C2）只如实记录、不优化。
+>
+> **用户对 T6.3 的额外要求**（别漏）：评分要能产出**用于简历的 STAR 量化对比**（真实、不许编），
+> 结果放 `docs/evidence/`。
+>
+> **恢复入口**：① 本文件这一段；② `docs/handover.md` 的「阶段 6 现状」；
+> ③ `program-fix第八版\阶段6_evals重做.md` 顶部「执行中状态」；
+> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–#32：权限档 / 新尺子口径 / 模型配置 / checkpoint 目录）。
 
 **已知遗留**：
 
-1. **评估体系待重建**：旧 30 题集已于阶段 5 删除（口径不可用，见「评估相关」）→ **阶段 6 从零重建**
-   题集 + 评分器 + runner + 归档。⚠️ 入口条件见上方 🚦 那三条（尤其"评估入口的权限档位"那条）。
+1. **评估要跑完才算完**：题集与评分器**已重建**（阶段 6 · T6.1/T6.2），剩下
+   **T6.3**：RAG 消融对照 → single/multi 各一轮全量 → 报告 + STAR 量化指标 → 归档到 `docs/evidence/`。
+   ⚠️ 跑之前两条：① **30 题等用户审阅**（他说"可以跑"才跑）；② **`.env` 的 key 必须是有效的**
+   （evals 不读界面设置）。详见上方 🔵 那段。
 2. **前端构建产物**：`app/web/frontend/dist/` 必须入库；⚠️ 根 `.gitignore` 曾有裸 `dist/`
    会把新构建的哈希资源一并吞掉（已改为 `/dist/`）。改前端后必须 `npm run build` 并提交
    **新增与删除**的资源文件。
@@ -379,9 +438,10 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 308 | `uv run python -m pytest tests/ -q` |
-| 测试覆盖率 | 68%（1936 语句 / 613 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **与阶段 4 的 68% 不可直接比**：阶段 5 的测试第一次 import 了 `mcp_servers/vm.py` 与 `powershell_tools.py`，统计分母多了 192 条语句（覆盖住的语句数其实是 993 → 1323）|
-| 评估题数 | **0**（旧 30 题集已于阶段 5 删除，阶段 6 重建） | `Get-ChildItem evals -File`（现在只有 `rag_bench.py`） |
+| 测试数 | 424 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 69%（2049 语句 / 632 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）|
+| 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
+| 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py` |

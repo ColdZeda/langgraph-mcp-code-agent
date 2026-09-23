@@ -348,20 +348,42 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 
 ## 评估体系
 
-> ⚠️ **旧的 30 题端到端题集（`evals/tasks.py` / `verifiers.py` / `run_e2e.py` / `compare.py`）
-> 已于阶段 5 从仓库删除。** 它是**改造前**那把尺子，问题不是"分数低"而是"量不准"：
->
-> - 实测 **14/30 题没有任何"产物级"断言**，只查关键词或工具名 → 分不清「做完了」和「说了要做」；
-> - 部分安全题的判定器**事实上空转**：`no_dangerous_tool_called` 检查的工具名
->   `run_vm_shell_command` 根本不是 MCP 工具（`vm.py` 里它是普通函数，没挂 `@mcp.tool`）
->   → 走 WSL 的路径它永远看不见，**恒定给满分**。
->
-> 留着一把坏尺子，只会让后续开发（包括 AI 助手）继续拿它量东西 —— 所以删掉，而不是标注。
-> **题集与评分器由阶段 6 重做**；在那之前，本项目**不报告任何端到端通过率**。
-> 备份：`E:\agentstart\work\backup\1new\backup\evals\`（6 个文件，与删除前逐字节一致）；
-> 也能从 git 历史取回，如 `git show 8d0ab78:evals/tasks.py`。
+> 🔵 **阶段 6 已从零重建题集与评分器；正式两轮结果还没跑**（所以本文档**不报告任何端到端通过率**）。
 
-**当前 `evals/` 只保留 RAG 检索基准**（`rag_bench.py`，阶段 4 新写、与题集无关）：
+**当年那把旧尺子为什么被删**（不是"分数低"，是"**量不准**"）：
+
+- 实测 **14/30 题没有任何"产物级"断言**，只查关键词或工具名 → 分不清「做完了」和「说了要做」；
+- 部分安全题的判定器**事实上空转**：`no_dangerous_tool_called` 检查的工具名
+  `run_vm_shell_command` 根本不是 MCP 工具（`vm.py` 里它是普通函数，没挂 `@mcp.tool`）
+  → 走 WSL 的路径它永远看不见，**恒定给满分**。
+- 留着一把坏尺子，只会让后续开发（包括 AI 助手）继续拿它量东西 —— 所以删掉，而不是标注。
+- 备份：`E:\agentstart\work\backup\1new\backup\evals\`；也能从 git 历史取回（`git show 8d0ab78:evals/tasks.py`）。
+
+**新尺子长什么样**（`evals/`，5 个文件）：
+
+| 文件 | 职责 |
+|---|---|
+| `tasks.py` | **30 题题集**：基础 10 / 长任务 12 / 对抗 8；8 个维度各 ≥3 |
+| `verifiers.py` | **43 个判定器工厂**，四档强度；30 题里共用了 **163 条**断言（**状态 124** / 轨迹 29 / 文本 10） |
+| `runner.py` | 执行引擎：清残留 → 跑题（超时也验分）→ 汇总 → 落盘 |
+| `run_e2e.py` | 命令行入口 |
+| `rag_bench.py` | RAG 检索基准（与题集无关，见下一节） |
+
+**四条口径**（相对旧尺子的修正）：**通过 = 满分**（旧口径 `score >= 0.5` 就把"对一半"算通过）；
+**`skip` ≠ 0 分**（环境不可用记 `unavailable`、不进分母，别把"没测"记成"做错了"）；
+**超时/异常也跑判定器**（产物可能已经写出来了）；**判定器按真实 MCP 工具名 + 真实参数名写**。
+另外**每道题至少 1 条状态断言**（去查真实产物：文件/库表/WSL/接口），且由测试机械守着。
+
+```bash
+uv run python evals/run_e2e.py --list                              # 只看题集结构（不执行、不烧 token）
+uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive
+uv run python evals/run_e2e.py --all --mode multi  --run-id v3-multi  --archive
+```
+
+> ⚠️ 两轮**必须换 `run-id`**（thread_id 里带 run-id 与 mode）；`--archive` 会把结果另存一份到
+> `docs/evidence/`（纳入版本控制）。跑之前确认 `.env` 的 key 有效 —— **CLI 与评估都不读界面设置**。
+
+**RAG 检索基准**（`rag_bench.py`，阶段 4 新写、与题集无关）：
 
 ```bash
 uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.json
@@ -371,7 +393,7 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 
 > 存档文件已移出仓库（备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`，
 > 也能用 `git show 1ea2687^:docs/evidence/<文件名>` 从历史取回）。
-> **下表不是当前架构的成绩**，阶段 6 会用新评分器重跑并归档。
+> **下表不是当前架构的成绩**；阶段 6 已用新评分器重建了题集，**重跑后会把新结果归档进 `docs/evidence/`**。
 
 | 阶段 | 存档文件（已移出仓库） | overall | pass_rate | total_tokens | 平均延迟 |
 |---|---|---|---|---|---|
@@ -438,8 +460,9 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 │   └── run/                       # 启动/停止脚本：start-app.cmd / start-app.ps1（起 Web UI）
 │                                  #   + start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
 ├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
-├── evals/                         # 只剩 RAG 检索基准 rag_bench.py（旧 30 题集已于阶段 5 删除，阶段 6 重建）
-├── tests/                         # 308 个测试（单元 + 工具级）
+├── evals/                         # 阶段 6 重建的评估体系：tasks.py(30 题) / verifiers.py(43 个判定器)
+│                                  #   / runner.py / run_e2e.py / rag_bench.py(RAG 基准)
+├── tests/                         # 424 个测试（单元 + 工具级 + 评估体系自检）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 与 archive/ 的内容已移出仓库）
 ├── AGENTS.md                      # AI 助手约定与已知坑
@@ -451,10 +474,11 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 308 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 424 | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
-| 测试覆盖率 | **68%**（1936 语句 / 613 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。未覆盖的 601+ 条里 **84% 集中在 6 个模块**，共同点是"要真环境才能跑到"（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
+| 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
+| 测试覆盖率 | **69%**（2049 语句 / 632 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 
