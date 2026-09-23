@@ -57,10 +57,12 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（521 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（528 个） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
+| **复用同名 run-id 前必跑**（清库里的 eval 线程；默认只报告，`--yes` 才删） | `uv run python evals/reset_eval_threads.py --yes` |
+| 逐题跑完后合并成一轮（缺题会拒绝写出） | `uv run python evals/merge_runs.py --prefix v3-single --mode single --archive` |
 | 看评估题集（**不跑、不烧 token**） | `uv run python evals/run_e2e.py --list` |
-| 跑评估（单/多 Agent 各一轮，**必须换 run-id**） | `uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive` |
+| 跑评估（**逐题跑**，单/多 Agent 各一轮，**必须换 run-id / 前缀**） | `uv run python evals/run_e2e.py --task E001 --mode single --run-id v3-single-E001`（逐题循环见下方手册） |
 | 试跑几道题 | `uv run python evals/run_e2e.py --task E001 --mode single` / `--limit 3` |
 | 出评估报告（Markdown，数字全部现算） | `uv run python evals/report.py --single runtime/runs/v3-single.json --multi runtime/runs/v3-multi.json --rag runtime/runs/rag_ablation_*.json` |
 | 报告生成器自测（**用假数据**，不跑评估） | `uv run python evals/report.py --selftest` |
@@ -106,12 +108,13 @@ config/models.json               内置模型注册表（**显示名 key + 实�
 app/web/server.py                FastAPI：WS /ws/chat（含权限确认协议）+ REST + 静态托管 dist
 app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框）+ store.js + components/
                                  （ChatView / ResultCard / SettingsPanel / **PermissionDialog**〔阶段 5〕）
-evals/                           ★ 阶段 6 重建的评估体系（10 个文件，口径见「评估相关」）：
+evals/                           ★ 阶段 6 重建的评估体系（11 个文件，口径见「评估相关」）：
                                  tasks.py（30 题题集）/ verifiers.py（43 个判定器工厂，四档强度）
                                  runner.py（执行引擎）/ run_e2e.py（命令行入口）
                                  preflight.py（跑前环境预检）/ report.py（报告生成器，含 STAR）
                                  rag_bench.py（RAG 检索基准）/ rag_ablation.py（RAG 消融对照）
-                                 merge_runs.py（★ 逐题分片 → 合并成一轮；2026-09-24 新增，见「已知坑」）
+                                 merge_runs.py（★ 逐题分片 → 合并成一轮）
+                                 reset_eval_threads.py（★ 清库里的 eval 线程 —— **复用 run-id 前必跑**）
                                  env.py（★ 语料隔离：use_eval_corpus() 把评估指到自己的
                                    runtime/eval_knowledge + chroma_db_eval，**不碰产品库**）
                                  fixtures/knowledge/（只读夹具：4 篇正解 + 3 篇干扰，7 文件 / 35 条）
@@ -121,14 +124,15 @@ scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           521 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           528 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / **powershell_exec** /
                                  web_permission〔阶段 5 的三个〕/
                                  web_model_settings + evals_verifiers / evals_tasks / evals_runner /
                                  evals_report / evals_rag_ablation / evals_preflight / evals_env /
-                                 **evals_merge_runs** / prompt_model_name〔阶段 6 的十个〕）
+                                 **evals_merge_runs** / **evals_reset_threads** /
+                                 prompt_model_name〔阶段 6 的十二个〕）
 ```
 
 ## 已知坑（务必先看）
@@ -196,9 +200,15 @@ tests/                           521 个测试（config / prompts / mysql_safe_i
   ② 同一个原因 ⇒ **命令里的 `&` 被 cmd 当分隔符**（`?a=1&b=2` 里的 `b=2` 变成独立命令，返回码 255）；
   ③ 固定 `encoding="gbk"` ⇒ PowerShell（GBK）与它启动的 **Python 子进程**（若继承
   `PYTHONIOENCODING=utf-8` 就输出 UTF-8）**混在同一路流里** ⇒ 固定任何一种都乱码。
-  **修法**：`shell=False` + **逐行解码（先 UTF-8 失败退 GBK）** + stderr 回显兜异常。
+  **修法**：`shell=False` + **逐行解码** + stderr 回显兜异常。
   ⚠️ 回归测试在 `tests/test_powershell_exec.py`，**其中 3 条必须真起子进程** ——
   缺陷 ①②的破坏发生在 **cmd.exe 的解析阶段**，纯打桩证明不了"它真的不再被截断"。
+  🔴 **逐行解码有两个坑，第二个是后来才补上的（订正 #45）**：
+  ① 第 1 版写的是"**先 UTF-8、失败退 GBK**" —— 但 **GBK 的字节序列有时恰好也是合法 UTF-8**
+     （`目录` 的 GBK 字节 `C4 BF C2 BC` 解成 `Ŀ¼`）⇒ **永远轮不到 GBK 分支**，模型看到的还是乱码；
+  ② 所以判据要再加一条：**解出来的字符若落在 `U+0080–U+02FF`（拉丁补充/扩展）就改用 GBK**
+     —— 正常的中英文输出几乎不会用到那一段。
+     已知假阳性（刻意接受）：真正的 UTF-8 拉丁文本（`café`）会被按 GBK 解成 `caf茅`。
 
 ### 上下文工程与分层记忆（阶段 4，四条都是实测结论）
 
@@ -258,28 +268,32 @@ tests/                           521 个测试（config / prompts / mysql_safe_i
 
 ### 评估相关（**阶段 6 已从零重建；准备件做完了，正式两轮还没跑**）
 
-**现状（2026-09-24）**：`evals/` **十个文件 + 一个夹具目录** ——
+**现状（2026-09-24）**：`evals/` **十一个文件 + 一个夹具目录** ——
 `tasks.py`（30 题题集）/ `verifiers.py`（43 个判定器工厂）/ `runner.py`（执行引擎）/
 `run_e2e.py`（命令行入口）/ `rag_bench.py`（RAG 检索基准）/ `rag_ablation.py`（RAG 消融对照）/
 **`preflight.py`（跑前环境预检）** / **`report.py`（报告生成器，含 STAR 量化对比）** /
-**`merge_runs.py`（逐题分片 → 合并成一轮）** /
+**`merge_runs.py`（逐题分片 → 合并成一轮）** / **`reset_eval_threads.py`（清 eval 线程）** /
 **`env.py`（★ 语料隔离 `use_eval_corpus()`）** + `fixtures/knowledge/`（7 篇测试语料夹具）。
 **T6.1（评分器）/ T6.2（题集）已完成**（提交 `9aafa6b`，题集**已审阅通过**）；
-**T6.3 的准备件（含订正 #36 语料分家、#37 提示词模型名）全部完成**，
+**T6.3 的准备件（讲人话：剩下的杂活）全部完成** —— 含订正 #36 语料分家、#37 提示词模型名、
+**#38–#45 跑正式轮前的核对与修复**、以及起跑线复位；
 只剩 **⑤ 两轮全量 + ⑥ 正式报告** —— 命令见上方 🔵 段的「跑两轮的手册」。
 
 **先预检再跑**（预检会替你验 `.env` 的 key、容器、WSL、端口、知识库，**不修任何东西**）：
 
 ```bash
+uv run python evals/reset_eval_threads.py --yes        # 复用 run-id 前必跑（只删 eval-* 线程）
 uv run python evals/preflight.py --run-id v3-single    # 读法：❌ = 阻塞（退出码 1），⚠️ = 不阻塞
 uv run python evals/run_e2e.py --list                  # 只看结构，不执行、不烧 token
-uv run python evals/run_e2e.py --task E001 --mode single           # 试跑一题
-uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive
-uv run python evals/run_e2e.py --all --mode multi  --run-id v3-multi  --archive
+uv run python evals/run_e2e.py --task E001 --mode single --run-id v3-single-E001   # 逐题跑
+uv run python evals/merge_runs.py --prefix v3-single --mode single --archive       # 合并（缺题拒绝写）
 uv run python evals/report.py --single runtime/runs/v3-single.json \
                               --multi  runtime/runs/v3-multi.json \
                               --rag    runtime/runs/rag_ablation_*.json --out docs/evidence/评估报告.md
 ```
+
+⚠️ **别再用 `--all` 一次跑一整轮**（结果 JSON 只在整轮结束写一次，被掐断就整轮白跑 —— E016 事故的教训）；
+逐题跑 = 每题各落一份 JSON，天然的增量保存。
 
 - ⚠️ **两轮必须换 `run-id`**：thread_id 里带 run-id 与 mode，复用会让第二轮读到第一轮的 checkpoint。
   预检会检查 run-id 有没有重名（`--run-id`）。
@@ -482,8 +496,9 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > | ④ | 跑前预检 | ✅ `evals/preflight.py`（10 项检查 + `fix` 提示；17 条单测）——**它第一次跑就把我自己写错的探针抓出来了（订正 #34）** |
 > | ④.5 | **语料分家**（订正 #36） | ✅ 测试语料搬到 `evals/fixtures/knowledge/`，评估用 `runtime/eval_knowledge/` + `chroma_db_eval/`；**产品库默认空、不再被评测污染** |
 > | ④.6 | **提示词模型名运行期取**（订正 #37） | ✅ 用户实测 bug（换成 mimo 却说自己跑在 deepseek-flash）；现在跟生效模型走、按角色各取各的 |
-> | ④.7 | **跑正式轮前的核对与修复**（订正 **#38–#44**，2026-09-24） | ✅ 修 PowerShell 三缺陷（E016 事故根因）/ 修题集两条**永不可能通过**的断言（E008·E010）/ 修 Verifier 未包装工具 / 删 `verify_tools` 死代码 / **清掉语料里 5 条"危险指令"级干扰项** / **评估默认关注入（E022 例外）** / 改成**逐题跑 + 合并**。详见 `讨论结论汇总.md` |
-> | ⑤ | **两轮全量**（先 single 再 multi；**逐题跑**） | 🟢 **可以跑了**（30 题已审阅通过）；命令见下方手册 —— **先跑 smoke 停下汇报**，再逐题跑 |
+> | ④.7 | **跑正式轮前的核对与修复**（订正 **#38–#45**，2026-09-24） | ✅ 修 PowerShell 三缺陷（E016 事故根因）/ 修题集两条**永不可能通过**的断言（E008·E010）/ 修 Verifier 未包装工具 / 删 `verify_tools` 死代码 / **清掉语料里 5 条"危险指令"级干扰项** / **评估默认关注入（E022 例外）** / 改成**逐题跑 + 合并** / 编码判定补上第二半（`Ŀ¼`）。详见 `讨论结论汇总.md` |
+> | ④.8 | **只读核对 + 环境复原 + 起跑线复位**（2026-09-24） | ✅ 逐题核对注入内容与失败归因（**E004 的失分已坐实是注入知识导致的**）/ 查管理员身份（**否** ⇒ 格式化那类被 UAC 挡住）/ 备份 `.env`+`web-settings.json`+`embedding-model`+WSL `~/nginx` → `backup\1new\preevals-backup\`（54 文件 257MB）/ 删两处历史遗留（`~/mysql/docker-compose.yaml`、`~/evalsbackup/`）/ **清空 42 个 eval 线程**（`evals/reset_eval_threads.py`）/ 历史结果归档到 `runtime/runs/backup/` |
+> | ⑤ | **两轮全量**（先 single 再 multi；**逐题跑**） | 🟢 **可以跑了**（30 题已审阅通过 + 起跑线已复位）；命令见下方手册 |
 > | ⑥ | 正式报告 + 归档 + 更新活文档 | ⬜ 依赖 ⑤（STAR 需要两轮数据，**不许用单轮编**） |
 >
 > **⑤⑥ 跑两轮的手册（照做就行；别凭记忆操作）**
@@ -493,33 +508,51 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > —— 每题各落一份 JSON ⇒ **天然的增量保存**（订正 #38）。
 >
 > ```powershell
-> # ① 预检（10 项；❌ 就别开跑。只读 + 清一次 WSL 上传目录，不起服务、不改配置）
+> # ① 【必做】复位起跑线：清掉库里的评估线程
+> #    ⚠️ 复用同名 run-id 而**不清** ⇒ `run_multi_agent` 会把上一轮这题的历史喂回给模型
+> #       （它大概率照抄自己上次的答案）⇒ **整轮作废**。
+> #    ⚠️ 把结果 JSON 挪去别处**不能**解决这件事（"文件同名"是另一回事，两者别混）。
+> uv run python evals/reset_eval_threads.py --yes    # 只删 eval-*，用户会话一个不碰
+>
+> # ② 预检（10 项；❌ 就别开跑。只读 + 清一次 WSL 上传目录，不起服务、不改配置）
 > uv run python evals/preflight.py --run-id v3-single
 >
-> # ② smoke：**先跑 2~3 题验证改动生效，然后停下向用户汇报**
-> uv run python evals/run_e2e.py --task E004 --mode single --run-id v3-single-E004  # 注入已关 → 应从 0.75 变 1.0
-> uv run python evals/run_e2e.py --task E011 --mode single --run-id v3-single-E011  # 中文不乱码
-> uv run python evals/run_e2e.py --task E016 --mode single --run-id v3-single-E016  # 多行 / & 不再截断
+> # ③ （可选）smoke 2~3 题 —— **只在刚改过平台代码之后才需要**；
+> #    选题要能触发改动点（例：E004 验"注入已关"、E011 验编码、E016 验多行与 & 不再截断）
+> uv run python evals/run_e2e.py --task E004 --mode single --run-id v3-single-E004
 >
-> # ③ single 轮：逐题跑（一题一个 run-id，**前缀必须是轮次名**）
+> # ④ single 轮：逐题跑（一题一个 run-id，**前缀 = 轮次名**）
 > foreach ($t in 1..30) { $id = "E{0:D3}" -f $t
 >   uv run python evals/run_e2e.py --task $id --mode single --run-id "v3-single-$id" }
-> #     ⚠️ 跑完前 5 题时**再停下汇报一次 RAG 环境**（块数 35 / 向量库指向 chroma_db_eval / 每题复位日志）
 >
-> # ④ 合并成一轮（**缺题会拒绝写出**，避免把残轮当整轮）+ 归档
+> # ⑤ 合并成一轮（**缺题会拒绝写出**，避免把残轮当整轮）+ 归档
 > uv run python evals/merge_runs.py --prefix v3-single --mode single --archive
 >
-> # ⑤ multi 轮：同样逐题，但**换前缀**（thread_id 里带 run-id + mode，复用会读到第一轮的 checkpoint）
+> # ⑥ multi 轮：同样逐题，但**换前缀**（thread_id 里带 run-id + mode）
 > foreach ($t in 1..30) { $id = "E{0:D3}" -f $t
 >   uv run python evals/run_e2e.py --task $id --mode multi --run-id "v3-multi-$id" }
 > uv run python evals/merge_runs.py --prefix v3-multi --mode multi --archive
 >
-> # ⑥ 出报告（数字全部现算；缺哪个输入就如实写「未提供」，不编）
+> # ⑦ 出报告（数字全部现算；缺哪个输入就如实写「未提供」，不编）
 > uv run python evals/report.py --single runtime/runs/v3-single.json `
 >     --multi runtime/runs/v3-multi.json `
 >     --rag docs/evidence/rag_ablation_20260924_053228.json `
 >     --out docs/evidence/评估报告.md
 > ```
+>
+> ⚠️ **跑的过程中「什么时候该停下来」（2026-09-24 用户定的判据 —— 别搞反）**：
+>
+> | 现象 | 性质 | 怎么办 |
+> |---|---|---|
+> | **平台 / 工具 / 题集自己的毛病**（把评估跑死、断言**永远不可能通过**、工具层 bug、中文乱码） | **测量噪声** —— 不是 agent 的表现 | ✅ **停下、修掉、重跑** |
+> | **agent 做得不好**（选错工具、答错、烧 token、超时） | **这就是数据本身** | ❌ **别停、别"修"** —— 记录后继续跑 |
+>
+> > **反面教训**：E003（"查一个配置值"）在 single 里一次 1.0、一次 0.8 —— 差在
+> > **它这次用 shell 去搜仓库，而不是文件工具**。那**正是 `tool_selection` 维度要测的东西**，
+> > 我一度把它当成"题面与断言不一致"的缺陷、准备去改题面 ⇒ **改了就等于把要测的信号抹掉**。
+> > **正确做法是跑完 single 与 multi 再比**：single 挂而 multi 过 → 那是**多 Agent 的真实收益**；
+> > 两边都挂 → 那是**模型的工具选择倾向**，与架构无关。
+> > ⚠️ 每轮每题只跑 1 次，所以"E003 是概率题"这件事**从两轮里量化不出来**（各 1 个样本）—— 报告里要如实写。
 >
 > ⚠️ **逐题跑时只归档"合并后的那一份"**，不逐题加 `--archive`（否则 `docs/evidence/` 会被塞 30 个文件）。
 >
@@ -547,7 +580,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 >
 > **恢复入口**：① 本文件这一段；② `docs/handover.md` 的「阶段 6 现状」；
 > ③ `program-fix第八版\阶段6_evals重做.md` 顶部「执行中状态」；
-> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–**#44**）。
+> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–**#45**）。
 
 **已知遗留**：
 
@@ -582,8 +615,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 521 | `uv run python -m pytest tests/ -q` |
-| 测试覆盖率 | 71%（2067 语句 / 598 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 97 条测试（424 → 521） |
+| 测试数 | 528 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 71%（2075 语句 / 600 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 104 条测试（424 → 528） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
 | 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |

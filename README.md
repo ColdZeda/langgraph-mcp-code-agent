@@ -237,6 +237,11 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 > 外置只用于**过程性输出**（命令输出 / 目录清单 / 搜索结果）。
 > ⚠️ **自动沉淀在跑评估时关闭**（`run_single_task` 强制关）：否则评测过程产生的经验会写进知识库，
 > 让后续题目的检索结果改变、同一批数据前后不可比。
+> ⚠️ **2026-09-24 起，跑评估时「自动注入」也默认关闭**（唯一例外是 `E022`，它专门测 `query_rag`）：
+> 注入函数**没有相关性阈值**（每题都注 top-3），而 8 个维度里没有"抵抗错误知识"这一维 ——
+> 开着等于给每道题都加一个没打算测的变量。注入内容会记进结果 JSON 的 `knowledge_injected`。
+> ⚠️ 但**「模型自己调 `save_knowledge`」这条路关不掉**（工具是产品真实存在的，摘掉等于改口径）——
+> 所以评估改成**每题开跑前把知识库复位**（日志里出现「`1 篇已删清理`」是正常且必需的）。
 
 **RAG 改造前 vs 改造后**（`uv run python evals/rag_ablation.py`；**2×2 消融 + 全量召回对照组**，
 同一批 10 个查询、同一份知识库、同一个 embedding 模型 → 谁贡献了多少一目了然）：
@@ -420,7 +425,7 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 - 留着一把坏尺子，只会让后续开发（包括 AI 助手）继续拿它量东西 —— 所以删掉，而不是标注。
 - 备份：`E:\agentstart\work\backup\1new\backup\evals\`；也能从 git 历史取回（`git show 8d0ab78:evals/tasks.py`）。
 
-**新尺子长什么样**（`evals/`，9 个文件 + 一个夹具目录）：
+**新尺子长什么样**（`evals/`，11 个文件 + 一个夹具目录）：
 
 | 文件 | 职责 |
 |---|---|
@@ -430,6 +435,8 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 | `run_e2e.py` | 命令行入口 |
 | `preflight.py` | **跑前环境预检**（容器 / WSL / `.env` key / 端口 / 知识库）—— 缺一条那一轮的数据就废了，还不会报错 |
 | `report.py` | **报告生成器**：把结果 JSON 变成能进 `docs/evidence/` 的 Markdown（含**算出来的 STAR 量化对比**） |
+| `merge_runs.py` | **逐题分片 → 合并成一轮**（缺题**拒绝写出**，避免把残轮当整轮） |
+| `reset_eval_threads.py` | **清库里的 eval 线程** —— **复用同名 run-id 前必跑**（不清会把上一轮的历史喂回给模型） |
 | `rag_bench.py` | RAG 检索基准（单轮快照，与题集无关，见下一节） |
 | `rag_ablation.py` | RAG **消融对照**（2×2 + 全量召回对照组，不需要 LLM，见下一节） |
 | `env.py` | **语料隔离**：`use_eval_corpus()` 把评估指到 `runtime/eval_knowledge/` + `chroma_db_eval/`，**不碰产品的 `data/knowledge/`**（订正 #36） |
@@ -440,18 +447,28 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 另外**每道题至少 1 条状态断言**（去查真实产物：文件/库表/WSL/接口），且由测试机械守着。
 
 ```bash
-uv run python evals/preflight.py --run-id v3-single    # ① 先预检（修完它报的阻塞项再跑）
+uv run python evals/reset_eval_threads.py --yes        # ① 复位：清掉库里的 eval-* 线程（复用 run-id 前必跑）
+uv run python evals/preflight.py --run-id v3-single    # ② 预检（修完它报的阻塞项再跑）
 uv run python evals/run_e2e.py --list                  # 只看题集结构（不执行、不烧 token）
-uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive
-uv run python evals/run_e2e.py --all --mode multi  --run-id v3-multi  --archive
+# ③ 逐题跑 single 轮（一题一进程 ⇒ 每题各落一份 JSON = 天然的增量保存）
+uv run python evals/run_e2e.py --task E001 --mode single --run-id v3-single-E001
+#    ... E002..E030 同上；然后合并（缺题会拒绝写出）+ 归档
+uv run python evals/merge_runs.py --prefix v3-single --mode single --archive
+# ④ multi 轮同样逐题，但必须换前缀
+uv run python evals/merge_runs.py --prefix v3-multi --mode multi --archive
+# ⑤ 出报告
 uv run python evals/report.py --single runtime/runs/v3-single.json \
-                             --multi  runtime/runs/v3-multi.json  \
-                             --rag    runtime/runs/rag_ablation_*.json \
-                             --out    docs/evidence/评估报告.md       # ② 再出报告
+                              --multi  runtime/runs/v3-multi.json  \
+                              --rag    runtime/runs/rag_ablation_*.json \
+                              --out    docs/evidence/评估报告.md
 ```
 
+> ⚠️ **为什么逐题跑**：一个进程跑一整轮时**结果 JSON 只在整轮结束写一次** ——
+> 2026-09-24 那次事故（agent 在题里把 python 进程全杀了）直接让**已完成的 15 道题产物全丢**。
+> 逐题跑之后"被掐断"不再是灾难，但**合并必须等 30 题都齐**（缺题拒绝写出）。
 > ⚠️ 两轮**必须换 `run-id`**（thread_id 里带 run-id 与 mode；复用会让第二轮读到第一轮的 checkpoint）。
-> `--archive` 会把结果另存一份到 `docs/evidence/`（纳入版本控制）。
+> 同一个 run-id 只用一次；要重跑某题就换 id（如 `v3-single-E016-2`，合并时按文件修改时间取最新那份）。
+> `--archive` 会把结果另存一份到 `docs/evidence/`（纳入版本控制）——**只归档合并后的那一份**，别逐题加。
 > 跑之前确认 `.env` 的 key 有效 —— **CLI 与评估都不读界面设置**（预检会替你验一次，只打 `GET /models`、不烧 token）。
 
 **RAG 检索基准与消融对照**（与题集无关，**不需要 LLM**）：
@@ -533,13 +550,14 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 │   └── run/                       # 启动/停止脚本：start-app.cmd / start-app.ps1（起 Web UI）
 │                                  #   + start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
 ├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
-├── evals/                         # 阶段 6 重建的评估体系（10 个文件 + 夹具）：tasks.py(30 题)
+├── evals/                         # 阶段 6 重建的评估体系（11 个文件 + 夹具）：tasks.py(30 题)
 │                                  #   / verifiers.py(43 个判定器) / runner.py / run_e2e.py
 │                                  #   / preflight.py(跑前预检) / report.py(报告+STAR)
 │                                  #   / rag_bench.py(RAG 基准) / rag_ablation.py(RAG 消融)
 │                                  #   / merge_runs.py(逐题分片合并成一轮)
+│                                  #   / reset_eval_threads.py(复用 run-id 前清库里的 eval 线程)
 │                                  #   / env.py(语料隔离) + fixtures/knowledge/(7 篇测试语料)
-├── tests/                         # 521 个测试（单元 + 工具级 + 评估体系自检）
+├── tests/                         # 528 个测试（单元 + 工具级 + 评估体系自检）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 从阶段 6 起重新只追加；archive/ 仍空）
 ├── AGENTS.md                      # AI 助手约定与已知坑
@@ -551,12 +569,12 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 521 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 528 | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | **测试语料** 35（7 文件 × 5 条）→ `evals/fixtures/knowledge/`；产品库默认空 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数，**2026-09-24 语料修订后**） | top-1 命中正解文件 **0.40 → 0.60**（对照 0.70）；⚠️ 旧语料基线是 **0.20** | `uv run python evals/rag_ablation.py --reps 10` |
 | 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
-| 测试覆盖率 | **71%**（2067 语句 / 598 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
+| 测试覆盖率 | **71%**（2075 语句 / 600 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 
