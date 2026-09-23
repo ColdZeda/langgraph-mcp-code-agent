@@ -240,8 +240,13 @@ uv run python evals/run_e2e.py --all --mode multi  --run-id v3-multi  --archive
 
 - ⚠️ **两轮必须换 `run-id`**：thread_id 里带 run-id 与 mode，复用会让第二轮读到第一轮的 checkpoint。
 - `--archive` 另存一份到 `docs/evidence/`（纳入版本控制）；不加只落 `runtime/runs/`（gitignore）。
-- ⚠️ **每题开跑前会清空 `runtime/workspace/`**；整轮前还会清 `data/knowledge/` 根目录散文件、
-  题集声明的 MySQL 库（`eval_shop`/`eval_lib`/`eval_metrics`/`eval_decoy`）、WSL uploads。
+- ⚠️ **每题开跑前会清空 `runtime/workspace/`**；整轮前还会清 `data/knowledge/` **根目录**散文件
+  与题集声明的 MySQL 库（`eval_shop`/`eval_lib`/`eval_metrics`/`eval_decoy`）。
+- 🔴 **WSL 上传目录现在不会被清**（2026-09-22 自查发现，**跑之前必须修**）：
+  `runner.run_all()` 调 `prepare_run()` 时**没传 `wsl_uploads`**（该参数默认 `None`）→
+  `/home/leprite/nginx/uploads/` 里的东西会留着。后果不只是"脏"：**E014 的两条断言
+  （WSL 上文件存在 + 内容一致）会被上一轮的残留蒙过 → 假阳性**（与本文件里
+  "残留污染"那条同一个病）。修法是 5 行（把 `VM_UPLOADS_DIR` 传进去）。
 - **CLI 与 evals 都不读 `runtime/web-settings.json`** → 它们只用 `config/models.json` + `.env`，
   所以**跑评估前必须确认 `.env` 的 `MODEL_API_KEY` 有效**（界面里填的 key 帮不上忙）。
 
@@ -396,7 +401,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > |---|---|
 > | **T6.1 评分器**（四档断言 / 通过=满分 / skip≠0 / 超时也验分 / 真实工具名） | ✅ `evals/verifiers.py` + `runner.py` + `run_e2e.py`（提交 `9aafa6b`） |
 > | **T6.2 题集**（30 题 = 基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3，163 条断言） | ✅ `evals/tasks.py`（提交 `9aafa6b`）—— ⚠️ **用户尚未审阅，等他说"可以跑"** |
-> | **T6.3 跑两轮 + 归档 + 报告** | ⬜ **未开始**：① RAG 消融对照（`rag_ablation.py`，不用 LLM）② single/multi 各一轮全量 ③ 报告 + **STAR 量化指标** 进 `docs/evidence/` |
+> | **T6.3 跑两轮 + 归档 + 报告** | ⬜ **未开始**。分三块：① RAG 消融对照（`rag_ablation.py`，**不用 LLM**）② single/multi 各一轮全量（**唯一贵的一步**）③ 报告 + **STAR 量化指标** 进 `docs/evidence/` |
 >
 > **三条前提里，② 已解决（别再按旧说法理解）**：
 > - ① **从零重建**→ 已完成；现在是"已重建、待跑"；
@@ -409,9 +414,24 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > **用户对 T6.3 的额外要求**（别漏）：评分要能产出**用于简历的 STAR 量化对比**（真实、不许编），
 > 结果放 `docs/evidence/`。
 >
+> **推进顺序（用户 2026-09-22 定，别自作主张提前跑）**：
+> **先把不烧 token 的准备件做完，最后一步才跑两轮** ——
+> ① 修下面「跑前必做」① 那个 WSL 残留 bug → ② 写 `evals/rag_ablation.py` 并跑它（几分钟出数）
+> → ③ 写报告生成器（用假数据自测）→ ④ 加一个"跑前预检"（容器 / WSL / `.env` key / 端口 8123 / chroma 块数）
+> → ⑤ **你在场时**跑两轮（先 single 看结果，再 multi）→ ⑥ 报告 + 归档 + 更新文档 = 阶段 6 收尾。
+> 理由：跑两轮是 40–100 分钟 ×2 + token，准备件做完再跑最省；但**别拖到阶段 7 之后**
+> （阶段 6 的验收就是这两套结果，没有它 README 的评估表一直是空的、简历也没有数字）。
+>
+> 🔴 **跑前必做（缺一条那一轮的某些数据就废了）**：
+> 1. **修 WSL 残留清理**（上面的 🔴；否则 E014 假阳性）；
+> 2. **`.\scripts\run\start-deps.ps1` 把 4 个容器拉起来** —— 2026-09-22 体检时它们是
+>    `Exited (12 小时前)`（用户手动停过 → `unless-stopped` 不会自动拉起）；
+>    不起的话 E007/E009/E015/E023/E025/E027 六道 MySQL 题会记「未测」；
+> 3. 确认 `.env` 的 key 有效（2026-09-22 实测：有效，`MODEL_NAME=deepseek-flash`）。
+>
 > **恢复入口**：① 本文件这一段；② `docs/handover.md` 的「阶段 6 现状」；
 > ③ `program-fix第八版\阶段6_evals重做.md` 顶部「执行中状态」；
-> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–#32：权限档 / 新尺子口径 / 模型配置 / checkpoint 目录）。
+> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–#33）。
 
 **已知遗留**：
 
