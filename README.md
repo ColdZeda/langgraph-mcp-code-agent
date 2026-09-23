@@ -485,7 +485,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 │                                  #   / rag_bench.py(RAG 基准) / rag_ablation.py(RAG 消融对照)
 ├── tests/                         # 481 个测试（单元 + 工具级 + 评估体系自检）
 ├── docs/
-│   └── handover.md                # 交接文档（evidence/ 与 archive/ 的内容已移出仓库）
+│   └── handover.md                # 交接文档（evidence/ 从阶段 6 起重新只追加；archive/ 仍空）
 ├── AGENTS.md                      # AI 助手约定与已知坑
 ├── docker-compose.yml             # mysql / searxng / redis 三个依赖服务（nginx 由 WSL 侧 compose 管）
 └── .gitee.yml                     # CI（ruff check → ruff format --check → pytest）

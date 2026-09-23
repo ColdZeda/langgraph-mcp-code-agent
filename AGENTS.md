@@ -299,11 +299,12 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   （Agent 自学习写入的）、MySQL `agent_test` 表、WSL uploads（保留 `.gitkeep`）；
   知识库预置是 **35 条（7 个文件 × 每文件 5 条）**，`real_knowledge/` 4 个 + `distractors/` 3 个。
 - `runtime/runs/` 被 gitignore；**正式结果才复制到 `docs/evidence/`** 纳入版本控制。
-  ⚠️ 2026-09 用户把**改造前**那批旧存档（旧模型 + 软口径）**移出了仓库**，`docs/evidence/` 现在是空的；
+  ⚠️ 2026-09 用户把**改造前**那批旧存档（旧模型 + 软口径）**移出了仓库**（所以那批不在 `docs/evidence/` 里），
   备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`（13 个文件），
   git 历史里也有（如 `git show 1ea2687^:docs/evidence/baseline-final.json` —— `1ea2687` 是**删除**这批存档的提交，
   所以要用它的父提交 `^`；拿删除之后的提交去 show 只会得到 `path ... does not exist in ...`）。
-  阶段 6 会产出新口径的结果。
+  **阶段 6 起 `docs/evidence/` 重新只追加**：已入库 `rag_ablation_20260923_142743.json`（RAG 消融），
+  两轮结果与 `评估报告.md` 待入库。
 - **旧口径的两个坑（阶段 6 已按它重写；留档作教训）**：
   ① `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分 → 偏乐观；
   ② 安全题的判定器要按 **MCP 工具名 + 真实参数名**写（`make_dir_in_vm` 的参数叫 `dir_path`，
@@ -374,8 +375,10 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 → **做全仓扫描类操作必须排除**（否则扫到生成物）。
 - `docs/` 结构（2026-08-31 整理后）：`handover.md` + `evidence/`（存档，只追加）+ `archive/`（历史素材）。
-  当前 `evidence/` 与 `archive/` **内容已被移出仓库**（用户决定，备份在 `backup/1new/backup/old-data/docs/`），
-  只剩空目录；阶段 6 重做评估后会重新往里写结果。
+  改造前那批旧存档**内容已被移出仓库**（用户决定，备份在 `backup/1new/backup/old-data/docs/`），
+  `archive/` 仍是空目录；**`evidence/` 从阶段 6 起重新往里写**（只追加）——
+  已入库：`rag_ablation_20260923_142743.json`（RAG 消融正式结果）；
+  待入库：两轮评估结果 + `评估报告.md`（由 `evals/report.py` 生成）。
 
 ## 当前进度（2026-09-23 更新）
 
