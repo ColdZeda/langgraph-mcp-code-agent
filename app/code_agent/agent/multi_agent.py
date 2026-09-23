@@ -1,7 +1,11 @@
 """多 Agent 架构 — Planner → Executor → Verifier 三阶段协作图（D 路径）。
 
 将原单 Agent 的 Plan→Execute→Verify 从 Prompt 软约束升级为 StateGraph 硬流程：
-- Planner：纯 LLM（无工具），产出结构化计划 JSON（含 verify_tools 声明）
+- Planner：纯 LLM（无工具），产出结构化计划 JSON（goal + steps）
+  ⚠️ 曾经还让它声明 `verify_tools`（"建议验收员用哪些只读工具"），但**全仓库没有任何代码去读它**
+  —— Planner 每次都在花 token 产出一个被丢掉字段。2026-09-24 已从提示词里删掉。
+  想真正接上（按题收缩 Verifier 工具集）要改架构：Verifier 现在是**图跑之前**构建的，
+  而计划是**图里面**才产出的。已登记进候选池。
 - Executor：复用 create_react_agent（全量工具），按计划执行
 - Verifier：只读工具白名单（按计划动态挂载子集），对照「需求 + 计划 + 执行轨迹」验收
 - 打回机制：Verifier FAIL 时带原因打回 Executor 重做，最多 2 轮
@@ -123,18 +127,13 @@ PLANNER_PROMPT = """你是任务规划员（Planner）。你的职责是理解�
 输出要求（严格 JSON，不要输出任何其他内容）：
 {{
   "goal": "任务目标（一句话概括）",
-  "steps": ["步骤1：...", "步骤2：...", "步骤3：..."],
-  "verify_tools": ["建议验收员使用的只读工具名，如 read_file_range / mysql_list_tables / generate_diff / query_rag"]
+  "steps": ["步骤1：...", "步骤2：...", "步骤3：..."]
 }}
 
 注意：
 - steps 要具体到可执行动作（读哪个文件、创建什么、查什么库），不要空泛。
 - 简单查询/搜索/查库类任务（搜索关键词、查表、读文件后汇报）：直接调用对应工具并汇报结果即可，
-  【不要创建中间文件、不要写解析脚本、不要执行多余命令】，除非用户明确要求保存/处理。
-- verify_tools 只填只读工具，按任务类型从以下候选里选 1-5 个：
-  read_file_range, generate_diff, analyze_ast, list_project_structure,
-  mysql_list_databases, mysql_list_tables, mysql_describe_tables, mysql_execute_query,
-  query_rag, read_file, list_directory, file_search"""
+  【不要创建中间文件、不要写解析脚本、不要执行多余命令】，除非用户明确要求保存/处理。"""
 
 VERIFIER_PROMPT = """你是任务验收员（Verifier）。你的职责是对照「用户需求」和「执行计划」，检查「执行结果」是否真正满足要求。
 你可以使用只读工具核实（如读取文件确认修改、查库确认数据），但【绝不能修改任何内容】。

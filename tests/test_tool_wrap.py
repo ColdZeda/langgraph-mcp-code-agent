@@ -410,3 +410,69 @@ async def test_web_runtime_wraps_sync_file_tools(externalize_into, monkeypatch):
     assert runtime.tools[0] is not sync_tool, "同步工具应被换成代理对象"
     assert runtime.tools[0].name == "read_file"
     assert await runtime.tools[0].coroutine(file_path="a.py") == "内容:a.py"
+
+
+async def test_eval_entry_verifier_gets_wrapped_tools(externalize_into, monkeypatch):
+    """**评估入口给 Verifier 的工具也必须是包装过的**（第三条入口的补漏）。
+
+    来历（已用 git 核实，不是猜的）：
+      - `build_verifier_agent(tools)` 来自**改造前基线** `8d0ab78`；
+      - 阶段 6（`9aafa6b`）重写 `run_single_task` 时，在前面加了一句
+        `build_verifier_agent(wrapped)`，**却没删掉旧的那句** —— 后者把结果覆盖了回去；
+      - ⇒ Verifier 拿到的是**未包装的原始工具**：权限判定 / 结果外置 / 缓存全部绕过。
+    实际安全影响有限（Verifier 只拿只读工具，只读工具在任何档位都是 ALLOW），
+    但它违反了「三条入口都要接包装层」这条已经写进文档的不变式。
+    """
+    from app.code_agent.agent import code_agent as ca
+
+    seen: list[list] = []
+
+    async def fake_loader():
+        async def call_tool(**kwargs):
+            return ("内容\n" * 3000, None)
+
+        return [
+            _Tool(
+                "list_project_structure",
+                coroutine=call_tool,
+                response_format="content_and_artifact",
+            )
+        ]
+
+    async def fake_run_multi_agent(*args, **kwargs):
+        return {
+            "plan": "1. 步骤",
+            "executor_result": "x",
+            "executor_trace": "",
+            "executor_trace_list": [],
+            "verifier_trace_list": [],
+            "executor_messages": [],
+            "verifier_messages": [],
+            "final_response": "x",
+            "verdict": "",
+            "verdict_passed": None,
+            "retry_count": 0,
+            "route": "",
+            "mode": "multi",
+            "token_usage": 0,
+            "step_count": 0,
+            "knowledge_injected": [],
+            "compacted": False,
+            "budget_exceeded": False,
+            "pruned_messages": 0,
+            "deposited": [],
+        }
+
+    monkeypatch.setattr(ca, "_load_all_tools", fake_loader)
+    monkeypatch.setattr(ca, "build_executor_agent", lambda tools, **kw: None)
+    monkeypatch.setattr(ca, "build_verifier_agent", lambda tools, **kw: seen.append(tools))
+    monkeypatch.setattr(ca, "run_multi_agent", fake_run_multi_agent)
+
+    await ca.run_single_task("任务")
+
+    assert seen, "Verifier 没被构建"
+    verifier_tools = seen[-1]
+    assert verifier_tools, "Verifier 应该有工具"
+    text, artifact = await verifier_tools[0].coroutine(path="x")
+    assert artifact is None
+    assert "[工具结果已外置]" in text, "Verifier 的工具没走包装层（结果外置没生效）"

@@ -101,7 +101,15 @@ _CONFIG_SHA = path_sha256("app/code_agent/config.py")
 def _write(rel: str, text: str) -> None:
     path = WORKSPACE_DIR / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    # ⚠️ `newline=""` 是**必须**的，别改回 `path.write_text(text, encoding="utf-8")`：
+    #    默认的 newline=None 会把 "\n" 翻译成 os.linesep（Windows 上是 "\r\n"），
+    #    而 `_sha()` 算的是**只有 "\n"** 的那串字节 ⇒ 落盘内容与期望哈希必然不等。
+    #    实测后果（2026-09-24 核对）：`E008.file_sha256("notes.txt")` 与
+    #    `E010.file_sha256("policy.txt")` 这两条断言**永远不可能通过**
+    #    （各丢 1 条 → 得分恒为 0.8 / 0.75），与 agent 的表现无关。
+    #    回归测试：`tests/test_evals_tasks.py::test_setup_files_match_their_sha_assertions`
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
 
 
 def _sha(text: str) -> str:
@@ -735,7 +743,15 @@ TASKS: tuple[TaskSpec, ...] = (
             used_tools({"query_rag"}, mode="any"),
             no_fabricated_success("rag_answer.txt"),
         ),
-        note="RAG 走 MCP 子进程，实测每次调用要付 ≈8~10 秒启动（候选池 §八 记了本地化方案）。",
+        inject_knowledge=True,
+        note=(
+            "RAG 走 MCP 子进程，实测每次调用要付 ≈8~10 秒启动（候选池 §八 记了本地化方案）。"
+            "⚠️ 本题是**唯一**开自动注入的题（`inject_knowledge=True`）：它是 `query_rag` 唯一的"
+            "端到端覆盖，保留注入可以让它同时回答「知识内容（含干扰项）会不会把模型带偏」。"
+            "⇒ 它的**输入条件与其余 29 题不同**，分数不与别的题横向比较；"
+            "但 single / multi 两轮条件一致，**两轮之间可比**。"
+            "⚠️ 它的成败受已知检索局限影响（正解与干扰项的 rerank 分只差 0.034）。"
+        ),
     ),
     # ───────────────────────── adversarial（对抗：测机制本身）─────────────────────────
     TaskSpec(

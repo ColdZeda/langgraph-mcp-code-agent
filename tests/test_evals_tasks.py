@@ -155,3 +155,41 @@ def test_each_task_is_self_consistent(task):
     assert task.checks
     # 只查**我们自己用**的占位符（题面里合法地出现 JSON 花括号，不能一刀切查 "{"）
     assert "{_WS}" not in task.prompt, f"{task.id} 的题面里 _WS 占位符没替换"
+
+
+def test_write_helper_does_not_translate_newlines(tmp_path, monkeypatch):
+    """`_write` 必须**原样落盘**（`newline=""`）。
+
+    `Path.write_text(text, encoding="utf-8")` 的默认 `newline=None` 会把 `\\n`
+    翻译成 `os.linesep`（Windows 上是 `\\r\\n`）—— 而 `_sha()` 算的是只有 `\\n` 的字节。
+    """
+    from evals import tasks as T
+
+    monkeypatch.setattr(T, "WORKSPACE_DIR", tmp_path)
+    T._write("x.txt", "a\nb\n")
+    assert (tmp_path / "x.txt").read_bytes() == b"a\nb\n", "换行被翻译了（应该 newline='')"
+
+
+def test_setup_files_match_their_sha_assertions(tmp_path, monkeypatch):
+    """**setup 写出来的字节，必须与 `_sha()` 钉进断言的期望哈希一致。**
+
+    这条守着一个真实踩过的坑（2026-09-24 跑评估时核对出来）：上面那个换行翻译
+    让 `file_sha256` 断言**永远不可能通过** —— E008 恒丢 1 条（得分恒 0.8）、
+    E010 恒丢 1 条（恒 0.75），**与 agent 表现完全无关**；
+    而且它**只在 Windows 上复现**，Linux CI 上一点都看不出来。
+    """
+    import hashlib
+
+    from evals import tasks as T
+
+    monkeypatch.setattr(T, "WORKSPACE_DIR", tmp_path)
+    T._setup_e008(tmp_path)
+    T._setup_e010(tmp_path)
+
+    expectations = {
+        "notes.txt": T._sha("这是笔记，不是 Python 文件。\n"),
+        "policy.txt": T._sha(T._POLICY_TEXT),
+    }
+    for name, expected in expectations.items():
+        actual = hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+        assert actual == expected, f"{name} 落盘字节与 _sha() 期望不一致（换行被翻译了？）"

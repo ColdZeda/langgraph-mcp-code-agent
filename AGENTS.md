@@ -57,7 +57,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（505 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（521 个） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | 看评估题集（**不跑、不烧 token**） | `uv run python evals/run_e2e.py --list` |
 | 跑评估（单/多 Agent 各一轮，**必须换 run-id**） | `uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive` |
@@ -106,11 +106,12 @@ config/models.json               内置模型注册表（**显示名 key + 实�
 app/web/server.py                FastAPI：WS /ws/chat（含权限确认协议）+ REST + 静态托管 dist
 app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框）+ store.js + components/
                                  （ChatView / ResultCard / SettingsPanel / **PermissionDialog**〔阶段 5〕）
-evals/                           ★ 阶段 6 重建的评估体系（9 个文件，口径见「评估相关」）：
+evals/                           ★ 阶段 6 重建的评估体系（10 个文件，口径见「评估相关」）：
                                  tasks.py（30 题题集）/ verifiers.py（43 个判定器工厂，四档强度）
                                  runner.py（执行引擎）/ run_e2e.py（命令行入口）
                                  preflight.py（跑前环境预检）/ report.py（报告生成器，含 STAR）
                                  rag_bench.py（RAG 检索基准）/ rag_ablation.py（RAG 消融对照）
+                                 merge_runs.py（★ 逐题分片 → 合并成一轮；2026-09-24 新增，见「已知坑」）
                                  env.py（★ 语料隔离：use_eval_corpus() 把评估指到自己的
                                    runtime/eval_knowledge + chroma_db_eval，**不碰产品库**）
                                  fixtures/knowledge/（只读夹具：4 篇正解 + 3 篇干扰，7 文件 / 35 条）
@@ -120,13 +121,14 @@ scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           505 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           521 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
-                                 permissions / dangerous_commands / web_permission〔阶段 5 的三个〕/
+                                 permissions / dangerous_commands / **powershell_exec** /
+                                 web_permission〔阶段 5 的三个〕/
                                  web_model_settings + evals_verifiers / evals_tasks / evals_runner /
                                  evals_report / evals_rag_ablation / evals_preflight / evals_env /
-                                 prompt_model_name〔阶段 6 的八个〕）
+                                 **evals_merge_runs** / prompt_model_name〔阶段 6 的十个〕）
 ```
 
 ## 已知坑（务必先看）
@@ -188,6 +190,15 @@ tests/                           505 个测试（config / prompts / mysql_safe_i
   （而不是抛一段 WSL 报错）—— 因为 `~/nginx/` 只存在于 WSL，仓库里没有副本。
 - **搜索已不依赖浏览器**（阶段 2）：`browser_tools.py` 只调 SearXNG 的 JSON API，
   文件名是历史遗留；**Selenium / Edge / msedgedriver / 调试端口都不再需要**。
+- ⚠️ **`powershell_tools.py` 的三个缺陷（2026-09-24 修，订正 #39 —— 它们是 E016 事故的根因）**：
+  ① **`shell=True` + 列表** ⇒ Windows 上实际执行 `cmd.exe /c powershell -Command "<整条命令>"` ⇒
+  **多行命令在第一个换行处被截断**（且返回"成功但没有输出"，把人骗过去）；
+  ② 同一个原因 ⇒ **命令里的 `&` 被 cmd 当分隔符**（`?a=1&b=2` 里的 `b=2` 变成独立命令，返回码 255）；
+  ③ 固定 `encoding="gbk"` ⇒ PowerShell（GBK）与它启动的 **Python 子进程**（若继承
+  `PYTHONIOENCODING=utf-8` 就输出 UTF-8）**混在同一路流里** ⇒ 固定任何一种都乱码。
+  **修法**：`shell=False` + **逐行解码（先 UTF-8 失败退 GBK）** + stderr 回显兜异常。
+  ⚠️ 回归测试在 `tests/test_powershell_exec.py`，**其中 3 条必须真起子进程** ——
+  缺陷 ①②的破坏发生在 **cmd.exe 的解析阶段**，纯打桩证明不了"它真的不再被截断"。
 
 ### 上下文工程与分层记忆（阶段 4，四条都是实测结论）
 
@@ -231,7 +242,12 @@ tests/                           505 个测试（config / prompts / mysql_safe_i
   MCP 工具每次调用都要新起 python 子进程重新 import chromadb + torch，延迟从毫秒级变秒级。
   ⚠️ **评估时 `run_single_task` 强制关掉自动沉淀**（`auto_deposit=False`），
   否则评测过程产生的经验会写进知识库、改写后续题目的检索结果。
-  ⚠️ **但那只关了「应用自动沉淀」这一条路**（订正 #35，2026-09-23 smoke 实测）：
+  ⚠️ **2026-09-24 起，评估也默认关掉「自动注入」**（`auto_inject=False`，订正 #44）——
+  因为 `inject_relevant_knowledge()` **没有任何相关性阈值**（每题都注入 top-3），
+  而 8 个维度里**没有一个是"抵抗错误知识"**，开着等于给每题都加一个没打算测的变量。
+  **例外：`E022`**（`TaskSpec.inject_knowledge=True`）—— 它是 `query_rag` 唯一的端到端覆盖。
+  注入内容**会记进结果 JSON 的 `knowledge_injected`**（1 行改动，以前只返回不落盘）。
+  ⚠️ **另外「关掉自动沉淀」只关了「应用自动沉淀」这一条路**（订正 #35，2026-09-23 smoke 实测）：
   **模型自己会调 `save_knowledge` 工具**（E007 就把"MySQL 经验"写进去了，872 字符 / 3 块），
   这条路**关不掉** —— 工具是产品真实存在的，为评测摘掉它等于改口径（32 → 31 个工具）。
   所以评估改成：**每题开跑前把知识库复位**（`runner._reset_knowledge()`：清根目录散文件 +
@@ -242,10 +258,11 @@ tests/                           505 个测试（config / prompts / mysql_safe_i
 
 ### 评估相关（**阶段 6 已从零重建；准备件做完了，正式两轮还没跑**）
 
-**现状（2026-09-23）**：`evals/` **九个文件 + 一个夹具目录** ——
+**现状（2026-09-24）**：`evals/` **十个文件 + 一个夹具目录** ——
 `tasks.py`（30 题题集）/ `verifiers.py`（43 个判定器工厂）/ `runner.py`（执行引擎）/
 `run_e2e.py`（命令行入口）/ `rag_bench.py`（RAG 检索基准）/ `rag_ablation.py`（RAG 消融对照）/
 **`preflight.py`（跑前环境预检）** / **`report.py`（报告生成器，含 STAR 量化对比）** /
+**`merge_runs.py`（逐题分片 → 合并成一轮）** /
 **`env.py`（★ 语料隔离 `use_eval_corpus()`）** + `fixtures/knowledge/`（7 篇测试语料夹具）。
 **T6.1（评分器）/ T6.2（题集）已完成**（提交 `9aafa6b`，题集**已审阅通过**）；
 **T6.3 的准备件（含订正 #36 语料分家、#37 提示词模型名）全部完成**，
@@ -320,7 +337,8 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`（13 个文件），
   git 历史里也有（如 `git show 1ea2687^:docs/evidence/baseline-final.json` —— `1ea2687` 是**删除**这批存档的提交，
   所以要用它的父提交 `^`；拿删除之后的提交去 show 只会得到 `path ... does not exist in ...`）。
-  **阶段 6 起 `docs/evidence/` 重新只追加**：已入库 `rag_ablation_20260923_203822.json`（RAG 消融），
+  **阶段 6 起 `docs/evidence/` 重新只追加**：已入库 `rag_ablation_20260923_203822.json`（旧语料）
+  + `rag_ablation_20260924_053228.json`（2026-09-24 语料修订后）—— **两份都留，历史可追溯**，
   两轮结果与 `评估报告.md` 待入库。
 - **旧口径的两个坑（阶段 6 已按它重写；留档作教训）**：
   ① `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分 → 偏乐观；
@@ -394,7 +412,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - `docs/` 结构（2026-08-31 整理后）：`handover.md` + `evidence/`（存档，只追加）+ `archive/`（历史素材）。
   改造前那批旧存档**内容已被移出仓库**（用户决定，备份在 `backup/1new/backup/old-data/docs/`），
   `archive/` 仍是空目录；**`evidence/` 从阶段 6 起重新往里写**（只追加）——
-  已入库：`rag_ablation_20260923_203822.json`（RAG 消融正式结果）；
+  已入库：`rag_ablation_20260923_203822.json` + `rag_ablation_20260924_053228.json`（RAG 消融，新旧语料各一份）；
   待入库：两轮评估结果 + `评估报告.md`（由 `evals/report.py` 生成）。
 
 ## 当前进度（2026-09-23 更新）
@@ -459,29 +477,51 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > | # | 准备件 | 状态 |
 > |---|---|---|
 > | ① | 修 WSL 残留清理（订正 #33） | ✅ **已修**（默认值改成真实目录 + 返回值改成 `{attempted,ok,removed,left}`；7 条回归测试；真机验证删 2 个残留且保留 `.gitkeep`） |
-> | ② | `evals/rag_ablation.py`（**不用 LLM**） | ✅ 已写并跑出正式数字（**2×2 + 全量召回对照组 E**），归档到 `docs/evidence/rag_ablation_20260923_203822.json` |
+> | ② | `evals/rag_ablation.py`（**不用 LLM**） | ✅ 已写并跑出正式数字（**2×2 + 全量召回对照组 E**），归档到 `docs/evidence/`（**新旧语料各一份**：`…_20260923_203822.json` / `…_20260924_053228.json`） |
 > | ③ | 报告生成器（含 STAR） | ✅ `evals/report.py`（`--selftest` 用假数据自测；18 条单测） |
 > | ④ | 跑前预检 | ✅ `evals/preflight.py`（10 项检查 + `fix` 提示；17 条单测）——**它第一次跑就把我自己写错的探针抓出来了（订正 #34）** |
 > | ④.5 | **语料分家**（订正 #36） | ✅ 测试语料搬到 `evals/fixtures/knowledge/`，评估用 `runtime/eval_knowledge/` + `chroma_db_eval/`；**产品库默认空、不再被评测污染** |
 > | ④.6 | **提示词模型名运行期取**（订正 #37） | ✅ 用户实测 bug（换成 mimo 却说自己跑在 deepseek-flash）；现在跟生效模型走、按角色各取各的 |
-> | ⑤ | **两轮全量**（先 single 再 multi） | 🟢 **可以跑了**（30 题已审阅通过）；唯一贵的一步，命令见下方手册 |
+> | ④.7 | **跑正式轮前的核对与修复**（订正 **#38–#44**，2026-09-24） | ✅ 修 PowerShell 三缺陷（E016 事故根因）/ 修题集两条**永不可能通过**的断言（E008·E010）/ 修 Verifier 未包装工具 / 删 `verify_tools` 死代码 / **清掉语料里 5 条"危险指令"级干扰项** / **评估默认关注入（E022 例外）** / 改成**逐题跑 + 合并**。详见 `讨论结论汇总.md` |
+> | ⑤ | **两轮全量**（先 single 再 multi；**逐题跑**） | 🟢 **可以跑了**（30 题已审阅通过）；命令见下方手册 —— **先跑 smoke 停下汇报**，再逐题跑 |
 > | ⑥ | 正式报告 + 归档 + 更新活文档 | ⬜ 依赖 ⑤（STAR 需要两轮数据，**不许用单轮编**） |
 >
 > **⑤⑥ 跑两轮的手册（照做就行；别凭记忆操作）**
 >
+> ⚠️ **2026-09-24 改过一次跑法**：原来"一次进程跑一整轮"，但 E016 那次事故证明
+> **一杀就整轮全丢**（结果 JSON 只在整轮结束写一次）。现在改成**一题一进程 + 合并**
+> —— 每题各落一份 JSON ⇒ **天然的增量保存**（订正 #38）。
+>
 > ```powershell
 > # ① 预检（10 项；❌ 就别开跑。只读 + 清一次 WSL 上传目录，不起服务、不改配置）
 > uv run python evals/preflight.py --run-id v3-single
-> # ② 单 Agent 一轮（**用后台任务跑** —— 前台命令有超时上限，被掐断 = 整轮白跑）
-> uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive
-> # ③ 多 Agent 一轮（**必须换 run-id**）
-> uv run python evals/run_e2e.py --all --mode multi  --run-id v3-multi  --archive
-> # ④ 出报告（数字全部现算；缺哪个输入就如实写「未提供」，不编）
+>
+> # ② smoke：**先跑 2~3 题验证改动生效，然后停下向用户汇报**
+> uv run python evals/run_e2e.py --task E004 --mode single --run-id v3-single-E004  # 注入已关 → 应从 0.75 变 1.0
+> uv run python evals/run_e2e.py --task E011 --mode single --run-id v3-single-E011  # 中文不乱码
+> uv run python evals/run_e2e.py --task E016 --mode single --run-id v3-single-E016  # 多行 / & 不再截断
+>
+> # ③ single 轮：逐题跑（一题一个 run-id，**前缀必须是轮次名**）
+> foreach ($t in 1..30) { $id = "E{0:D3}" -f $t
+>   uv run python evals/run_e2e.py --task $id --mode single --run-id "v3-single-$id" }
+> #     ⚠️ 跑完前 5 题时**再停下汇报一次 RAG 环境**（块数 35 / 向量库指向 chroma_db_eval / 每题复位日志）
+>
+> # ④ 合并成一轮（**缺题会拒绝写出**，避免把残轮当整轮）+ 归档
+> uv run python evals/merge_runs.py --prefix v3-single --mode single --archive
+>
+> # ⑤ multi 轮：同样逐题，但**换前缀**（thread_id 里带 run-id + mode，复用会读到第一轮的 checkpoint）
+> foreach ($t in 1..30) { $id = "E{0:D3}" -f $t
+>   uv run python evals/run_e2e.py --task $id --mode multi --run-id "v3-multi-$id" }
+> uv run python evals/merge_runs.py --prefix v3-multi --mode multi --archive
+>
+> # ⑥ 出报告（数字全部现算；缺哪个输入就如实写「未提供」，不编）
 > uv run python evals/report.py --single runtime/runs/v3-single.json `
 >     --multi runtime/runs/v3-multi.json `
->     --rag docs/evidence/rag_ablation_20260923_203822.json `
+>     --rag docs/evidence/rag_ablation_20260924_053228.json `
 >     --out docs/evidence/评估报告.md
 > ```
+>
+> ⚠️ **逐题跑时只归档"合并后的那一份"**，不逐题加 `--archive`（否则 `docs/evidence/` 会被塞 30 个文件）。
 >
 > **四条不变量（违反哪条，那一轮数据就不可比/会白跑）**：
 > 1. **跑前必过预检**：它验 `.env` 的 key（**CLI/evals 不读界面设置**，界面里那个 key 帮不上忙）、
@@ -492,7 +532,11 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > 4. **评估只用 `runtime/eval_knowledge/` + `runtime/chroma_db_eval/`**（夹具在 `evals/fixtures/knowledge/`），
 >    **绝不碰产品的 `data/knowledge/`**（订正 #36）。跑评估时也别用 Web UI/CLI 干活（共用 `runtime/workspace/`）。
 >
-> ⚠️ **别中途 Ctrl+C、别关终端、别关后台任务**：结果 JSON **只在整轮跑完时写一次**，没有断点续跑。
+> ⚠️ **改成逐题跑之后，"被掐断"不再是灾难**（已完成的题各自落盘了），
+> 但**合并必须等 30 题都齐**（`merge_runs.py` 缺题会**拒绝写出**）——
+> 所以中途被打断时：**别丢分片，接着把剩下的题跑完再合并**。
+> ⚠️ **每个 run-id 都只能用一次**（thread_id 里带 run-id + mode）；重跑某题要换 id（如 `v3-single-E016-2`，
+> 合并时按文件修改时间取最新那份）。
 > ⚠️ 耗时参考：冒烟 3 题 **53~85 秒**（这 3 题偏简单，**不能外推**；30 题含长任务与对抗题，
 > 早期估算是 40–100 分钟/轮，单题上限 300–480 秒）。
 > ⚠️ 跑完把结果交回来做 ⑥：出报告 → 归档 `docs/evidence/` → 更新活文档（含 STAR 量化对比，**真实、不许编**）。
@@ -503,7 +547,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 >
 > **恢复入口**：① 本文件这一段；② `docs/handover.md` 的「阶段 6 现状」；
 > ③ `program-fix第八版\阶段6_evals重做.md` 顶部「执行中状态」；
-> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–**#37**）。
+> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–**#44**）。
 
 **已知遗留**：
 
@@ -518,11 +562,14 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 3. ~~**Web 端节点级实时推送**~~ → ✅ **已完成（阶段 5 · T5.6）**：`agent/events.py` + 四个节点 `emit()`，
    前端逐行显示 Planner/Executor 每步/Verifier；**用的是现有 WebSocket，没有引 SSE**。
 4. **RAG 检索会把干扰项排到第一** → ✅ **阶段 6 已量化**（`evals/rag_ablation.py`）：
-   改造前 top-1 落在 `distractors/` **0.80** → 生产配置 **0.40**、全量召回对照 **0.30**；
-   同一批查询里"top-1 命中正解文件" **0.20 → 0.60**（对照 0.70）。
+   改造前 top-1 落在 `distractors/` **0.60** → 生产配置 **0.40**、全量召回对照 **0.30**；
+   同一批查询里"top-1 命中正解文件" **0.40 → 0.60**（对照 0.70）。
+   ⚠️ **这是 2026-09-24 语料修订后的数字**：修订前语料含 5 条"危险指令"级干扰项，换掉之后
+   干扰项**变得不那么"高仿"** ⇒ 改造前基线从 **0.20 升到 0.40**（提升幅度 +0.40 → **+0.20**）。
+   **生产（D）与对照（E）两版数字逐位一致**，不受影响。两版归档都在 `docs/evidence/`。
    ⚠️ 仍是**已知局限**：语料只有 35 条原子，CrossEncoder 偏词汇匹配 —— 数字是真实下界，别外推。
    ✅ **用户 2026-09-23 决策：保持 `RAG_RECALL_K=10` 不动**，把对照组 E 的差异作为**局限**如实写进报告
-   （提到全量能 0.60 → 0.70，代价是延迟 95 → 306 ms）。**别再自作主张改这个默认值** ——
+   （提到全量能 0.60 → 0.70，代价是延迟 86 → 296 ms）。**别再自作主张改这个默认值** ——
    改了就得重跑消融、README/AGENTS.md 的表也要跟着改。想做的事在候选池 §十（含两阶段精排方案）。
 5. **`.coverage` 曾被误提交**（阶段 4 发现）：它是二进制覆盖率数据，不该进版本控制 ——
    已从索引移除并加进 `.gitignore`。
@@ -535,13 +582,13 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 505 | `uv run python -m pytest tests/ -q` |
-| 测试覆盖率 | 70%（2057 语句 / 615 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 81 条测试（424 → 505） |
+| 测试数 | 521 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 71%（2067 语句 / 598 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 97 条测试（424 → 521） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
 | 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
 | 知识库条目 | **测试语料** 35（7 文件 × 5 条，分块后 = 35 块）→ 在 `evals/fixtures/knowledge/`；**产品库默认 0** | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
-| **RAG 消融（阶段 6 正式数，2026-09-23）** | top-1 命中**正解文件**：改造前 **0.20** → 生产 **0.60** / 全量召回对照 **0.70**；top-1 落干扰项 0.80 → 0.40；同口径关键词（文件粒度）0.60 → 0.90；稳态延迟 14 → 95（生产）/ 306 ms（对照） | `uv run python evals/rag_ablation.py --reps 10`；结果归档 `docs/evidence/rag_ablation_20260923_203822.json` |
-| RAG 单轮快照（`rag_bench.py`，与上面的消融口径不同） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py` |
+| **RAG 消融（阶段 6 正式数；2026-09-24 语料修订后）** | top-1 命中**正解文件**：改造前 **0.40** → 生产 **0.60** / 全量召回对照 **0.70**；top-1 落干扰项 0.60 → 0.40；同口径关键词（文件粒度）0.70 → 0.90；稳态延迟 13 → 86（生产）/ 296 ms（对照）。⚠️ 旧语料基线是 **0.20**（含 5 条危险干扰项）⇒ 提升幅度 +0.40 → **+0.20**；**生产与对照两版一致** | `uv run python evals/rag_ablation.py --reps 10`；归档 `docs/evidence/rag_ablation_20260924_053228.json`（当前）、`…_20260923_203822.json`（旧语料） |
+| RAG 单轮快照（`rag_bench.py`，与上面的消融口径不同） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms | `uv run python evals/rag_bench.py` |
 | 评估指标（改造前旧口径，**当前不适用**） | 见 README「评估体系」一节 | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 1ea2687^:docs/evidence/<file>` |
 | 跟踪文件数 | `git ls-files` 计数 | `git ls-files \| Measure-Object` |

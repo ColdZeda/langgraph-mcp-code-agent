@@ -56,6 +56,41 @@ def _is_dangerous(command: str) -> str | None:
     return None
 
 
+def _decode_line(raw: bytes) -> str:
+    """按「先 UTF-8、失败退 GBK」解一行输出。
+
+    ⚠️ **不能固定一种编码**（2026-09-24 跑评估时实测出来的）：
+
+      - PowerShell **自己**的输出走**控制台代码页**（中文 Windows 上是 GBK/936）；
+      - 而它启动的 **Python 子进程**，只要继承了 `PYTHONIOENCODING=utf-8`
+        （评估 runner 就是这么起的），就会按 **UTF-8** 输出；
+      - 两者**混在同一路 stdout 里** ⇒ 固定任何一种编码，都会让另一种变成乱码。
+
+    实测症状：模型看到 `鎶ュ憡锛氳緭鍏ヤ负 3`（其实是「报告：输入为 3」），
+    于是花了好几轮去"确认文件编码"，还写了个脚本用 `repr()` 抓输出 —— 白烧 token。
+
+    按行解是安全的：`\\n`(0x0A) 既不是 UTF-8 多字节序列的组成部分，也不是 GBK 的尾字节。
+    """
+    for enc in ("utf-8", "gbk"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def _echo_to_stderr(line: str) -> None:
+    """把这一行同时写到 stderr（约定 2：MCP server 的日志只能走 stderr）。
+
+    ⚠️ 必须兜异常：写线程是 daemon 线程，它一崩就**静默丢输出**，而且没有任何报错。
+    """
+    try:
+        sys.stderr.write(line)
+        sys.stderr.flush()
+    except (UnicodeEncodeError, ValueError):  # pragma: no cover - 取决于终端编码
+        pass
+
+
 def run_powershell_command(command: str, capture_output: bool = True):
     """执行 PowerShell 命令。"""
     # 安全检查
@@ -67,24 +102,34 @@ def run_powershell_command(command: str, capture_output: bool = True):
         cmd = ["powershell", "-Command", command]
         # cwd 固定为项目根：命令的相对路径基准不再取决于"用户从哪个目录启动 Agent"。
         # （Agent 需要按相对路径读 app/…、跑 uv run pytest tests/、git status，基准都必须是项目根）
+        #
+        # ⚠️⚠️ **shell 必须是 False**（2026-09-24 修）。原先是 `shell=True` + 列表，
+        #    在 Windows 上 `subprocess` 会把列表拼成字符串交给 `cmd.exe /c`，
+        #    也就是实际执行的是 `cmd.exe /c powershell -Command "<整条命令>"` ——
+        #    **于是 cmd.exe 先解析一遍**，造成两个实测事故（都发生在 E016）：
+        #      ① **多行命令在第一个换行处被截断**：那条多行脚本只跑了第一行
+        #         `cd runtime/workspace`（静默成功）⇒ 工具返回"命令执行成功，但没有输出"，
+        #         模型据此判断"多行脚本未真正执行"（它判断对了，但白花了好几轮）。
+        #      ② **命令里的 `&` 被当成 cmd 的命令分隔符**：请求 `…/sum?a=1&b=2` 时，
+        #         `b=2` 变成一条独立命令（日志里 `'b' 不是内部或外部命令`），返回码 255。
+        #    回归测试：`tests/test_powershell_exec.py`。
         if capture_output:
             proc = subprocess.Popen(
                 cmd,
-                shell=True,
+                shell=False,
                 cwd=str(PROJECT_ROOT),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                encoding="gbk",
-                errors="replace",
+                # ⚠️ 刻意**不用** `text=True, encoding=…`：同一路流可能是混合编码，
+                #    交给 `_decode_line` 逐行判。见它的 docstring。
             )
             output_buffer = io.StringIO()
 
             def _read_output():
-                for line in proc.stdout:
-                    sys.stderr.write(line)
-                    sys.stderr.flush()
+                for raw in proc.stdout:
+                    line = _decode_line(raw)
+                    _echo_to_stderr(line)
                     output_buffer.write(line)
 
             reader = threading.Thread(target=_read_output, daemon=True)
@@ -101,11 +146,10 @@ def run_powershell_command(command: str, capture_output: bool = True):
             # 让子进程继承 stdout 会直接污染协议。
             result = subprocess.run(
                 cmd,
-                shell=True,
+                shell=False,
                 cwd=str(PROJECT_ROOT),
                 stdout=sys.stderr,
                 stderr=sys.stderr,
-                encoding="gbk",
             )
             return "", "", result.returncode
     except Exception as e:

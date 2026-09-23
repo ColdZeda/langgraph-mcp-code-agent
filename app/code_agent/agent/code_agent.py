@@ -320,6 +320,7 @@ async def run_single_task(
     approver: Any | None = None,
     timeout: float | None = None,
     tools: list | None = None,
+    auto_inject: bool = False,
 ) -> dict:
     """向多 Agent 架构发送单次任务，返回**完整结果字典**（阶段 6 起；此前是 6 元组）。
 
@@ -372,8 +373,15 @@ async def run_single_task(
         wrapped = wrap_tools(list(raw_tools), cache)
 
         executor_agent = build_executor_agent(wrapped, mode=mode)
+        # ⚠️ 必须传 `wrapped`（包装过的），**绝不能传 `tools`（原始列表）**。
+        #    阶段 4 就把「三条入口都要接包装层」写进了文档（CLI / Web / evals），
+        #    但阶段 6 重写本函数时，新加的 `build_verifier_agent(wrapped)` 上面**残留了一句
+        #    改造前基线（8d0ab78）里的 `build_verifier_agent(tools)`** —— 后者把结果覆盖了回去
+        #    ⇒ Verifier 走的是**未包装的工具**：权限判定 / 结果外置 / 缓存全被绕过。
+        #    （实际安全影响有限：Verifier 只拿只读工具，而只读工具在任何档位都是 ALLOW；
+        #      但它违反了那条不变式，而且结果外置失效会让 Verifier 读到超长内容。）
+        #    回归测试：`tests/test_tool_wrap.py::test_eval_entry_verifier_gets_wrapped_tools`
         verifier_agent = build_verifier_agent(wrapped)
-        verifier_agent = build_verifier_agent(tools)
 
         # ── 阶段 5：无人值守入口**必须显式指定权限档位**；阶段 6 起不再绕开闸门 ──
         # 这里是 `HEADLESS_PERMISSION_MODE`（=「需确认」）+ `AutoApprover`：
@@ -390,6 +398,14 @@ async def run_single_task(
                 # ⚠️ 评估必须关掉「自动沉淀」：否则评测过程产生的临时经验会写进知识库，
                 #    从而改变后续题目的检索结果（同一批数据前后不可比）。
                 auto_deposit=False,
+                # ⚠️ 默认**也关掉「自动注入」**（2026-09-24 用户决定）。
+                #    理由：① 8 个维度里**没有一个是"抵抗错误知识"** ⇒ 注入等于给每题
+                #    加了一个题集作者没打算测的变量；② 关掉后结果**可归因**；
+                #    ③ 测试语料里含"危险指令"级别的干扰条目（已清理，但风险归零更好）。
+                #    ⚠️ 这与产品默认**不同**（产品默认开着），报告里必须披露。
+                #    **例外**：`E022` 声明了 `inject_knowledge=True`（它是 `query_rag`
+                #    唯一的端到端覆盖题，保留注入以便观察"知识内容如何影响回答"）。
+                auto_inject=auto_inject,
             )
         await cache.aclose()
     except asyncio.CancelledError:

@@ -1,0 +1,831 @@
+{
+  "run_id": "rag_ablation_20260924_053228",
+  "kind": "rag_ablation",
+  "timestamp": "2026-09-24T05:32:28",
+  "env": {
+    "chunks_total": 35,
+    "whole_docs_indexed": 7,
+    "rerank_enabled": true,
+    "reranker_path": "E:\\agentstart\\work\\embedding-model\\cross-encoder\\ms-marco-MiniLM-L-6-v2",
+    "collection": "terminal_knowledge_v2",
+    "top_k": 3,
+    "recall_k": 10,
+    "full_recall_k": 35,
+    "reps": 10,
+    "queries": 10,
+    "cold_start_ms": 20.05
+  },
+  "combos": {
+    "A": {
+      "label": "整篇 + 无精排 = 改造前",
+      "correct_source_top1": 0.4,
+      "real_source_top1": 0.4,
+      "real_source_top3": 1.0,
+      "file_top1": 0.7,
+      "file_top3": 1.0,
+      "chunk_top1": null,
+      "chunk_top3": null,
+      "distractor_top1": 0.6,
+      "latency_ms_avg": 12.8,
+      "latency_ms_max": 18.1,
+      "queries": 10,
+      "details": [
+        {
+          "query": "Python 字符串格式化推荐用哪种方式",
+          "expected": "f-string",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt",
+            "real_knowledge/python_best_practices.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "Python 如何安全地打开文件",
+          "expected": "with",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt",
+            "distractors/irrelevant_notes.txt",
+            "real_knowledge/python_best_practices.txt"
+          ]
+        },
+        {
+          "query": "MySQL 表名拼接 SQL 时要注意什么",
+          "expected": "反引号",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt",
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "MySQL 查询参数怎么传",
+          "expected": "参数化",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt",
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "MCP server 调试日志输出到哪里",
+          "expected": "stderr",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "real_knowledge/mcp_protocol.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mcp_protocol.txt",
+            "distractors/irrelevant_notes.txt",
+            "distractors/bad_habits.txt"
+          ]
+        },
+        {
+          "query": "MCP 工具函数怎么注册",
+          "expected": "mcp.tool",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "real_knowledge/mcp_protocol.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mcp_protocol.txt",
+            "distractors/irrelevant_notes.txt",
+            "distractors/bad_habits.txt"
+          ]
+        },
+        {
+          "query": "WSL 命令怎么防止死循环",
+          "expected": "超时",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "distractors/irrelevant_notes.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": false,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/irrelevant_notes.txt",
+            "real_knowledge/wsl_safety.txt",
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "WSL 部署文件传到哪个目录",
+          "expected": "nginx/uploads",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "distractors/irrelevant_notes.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": false,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/irrelevant_notes.txt",
+            "real_knowledge/wsl_safety.txt",
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "Python 列表推导式有什么好处",
+          "expected": "列表推导",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt",
+            "real_knowledge/python_best_practices.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "MySQL 事务操作要注意什么",
+          "expected": "BEGIN",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "distractors/irrelevant_notes.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": false,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/irrelevant_notes.txt",
+            "real_knowledge/mysql_safety.txt",
+            "distractors/outdated_tips.txt"
+          ]
+        }
+      ],
+      "latency_ms_avg_warm": 12.92,
+      "stage_totals_ms_per_round": {
+        "embed_ms": 112.49,
+        "vector_ms": 15.08,
+        "rerank_ms": 0.0
+      }
+    },
+    "B": {
+      "label": "整篇 + 精排",
+      "correct_source_top1": 0.7,
+      "real_source_top1": 0.7,
+      "real_source_top3": 1.0,
+      "file_top1": 1.0,
+      "file_top3": 1.0,
+      "chunk_top1": null,
+      "chunk_top3": null,
+      "distractor_top1": 0.3,
+      "latency_ms_avg": 189.66,
+      "latency_ms_max": 208.75,
+      "queries": 10,
+      "details": [
+        {
+          "query": "Python 字符串格式化推荐用哪种方式",
+          "expected": "f-string",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt",
+            "real_knowledge/python_best_practices.txt",
+            "distractors/bad_habits.txt"
+          ]
+        },
+        {
+          "query": "Python 如何安全地打开文件",
+          "expected": "with",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt",
+            "real_knowledge/python_best_practices.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "MySQL 表名拼接 SQL 时要注意什么",
+          "expected": "反引号",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt",
+            "real_knowledge/python_best_practices.txt"
+          ]
+        },
+        {
+          "query": "MySQL 查询参数怎么传",
+          "expected": "参数化",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt",
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "MCP server 调试日志输出到哪里",
+          "expected": "stderr",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "real_knowledge/mcp_protocol.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mcp_protocol.txt",
+            "distractors/irrelevant_notes.txt",
+            "distractors/bad_habits.txt"
+          ]
+        },
+        {
+          "query": "MCP 工具函数怎么注册",
+          "expected": "mcp.tool",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "real_knowledge/mcp_protocol.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mcp_protocol.txt",
+            "distractors/irrelevant_notes.txt",
+            "real_knowledge/python_best_practices.txt"
+          ]
+        },
+        {
+          "query": "WSL 命令怎么防止死循环",
+          "expected": "超时",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "real_knowledge/wsl_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/wsl_safety.txt",
+            "distractors/irrelevant_notes.txt",
+            "distractors/bad_habits.txt"
+          ]
+        },
+        {
+          "query": "WSL 部署文件传到哪个目录",
+          "expected": "nginx/uploads",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "real_knowledge/wsl_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/wsl_safety.txt",
+            "distractors/irrelevant_notes.txt",
+            "distractors/bad_habits.txt"
+          ]
+        },
+        {
+          "query": "Python 列表推导式有什么好处",
+          "expected": "列表推导",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt",
+            "real_knowledge/python_best_practices.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "MySQL 事务操作要注意什么",
+          "expected": "BEGIN",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt",
+            "distractors/bad_habits.txt"
+          ]
+        }
+      ],
+      "latency_ms_avg_warm": 189.19,
+      "stage_totals_ms_per_round": {
+        "embed_ms": 139.32,
+        "vector_ms": 13.25,
+        "rerank_ms": 1743.48
+      }
+    },
+    "C": {
+      "label": "分块 + 无精排",
+      "correct_source_top1": 0.5,
+      "real_source_top1": 0.5,
+      "real_source_top3": 0.7,
+      "file_top1": 0.8,
+      "file_top3": 1.0,
+      "chunk_top1": 0.4,
+      "chunk_top3": 0.7,
+      "distractor_top1": 0.5,
+      "latency_ms_avg": 14.04,
+      "latency_ms_max": 15.84,
+      "queries": 10,
+      "details": [
+        {
+          "query": "Python 字符串格式化推荐用哪种方式",
+          "expected": "f-string",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "Python 如何安全地打开文件",
+          "expected": "with",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "MySQL 表名拼接 SQL 时要注意什么",
+          "expected": "反引号",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "MySQL 查询参数怎么传",
+          "expected": "参数化",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "MCP server 调试日志输出到哪里",
+          "expected": "stderr",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "real_knowledge/mcp_protocol.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mcp_protocol.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "MCP 工具函数怎么注册",
+          "expected": "mcp.tool",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "distractors/irrelevant_notes.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": false,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/irrelevant_notes.txt",
+            "real_knowledge/mcp_protocol.txt"
+          ]
+        },
+        {
+          "query": "WSL 命令怎么防止死循环",
+          "expected": "超时",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "real_knowledge/wsl_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/wsl_safety.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "WSL 部署文件传到哪个目录",
+          "expected": "nginx/uploads",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "distractors/irrelevant_notes.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": false,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/irrelevant_notes.txt",
+            "real_knowledge/wsl_safety.txt"
+          ]
+        },
+        {
+          "query": "Python 列表推导式有什么好处",
+          "expected": "列表推导",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "MySQL 事务操作要注意什么",
+          "expected": "BEGIN",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        }
+      ],
+      "latency_ms_avg_warm": 13.6,
+      "stage_totals_ms_per_round": {
+        "embed_ms": 120.79,
+        "vector_ms": 19.16,
+        "rerank_ms": 0.0
+      }
+    },
+    "D": {
+      "label": "分块 + 精排 = 现状（生产）",
+      "correct_source_top1": 0.6,
+      "real_source_top1": 0.6,
+      "real_source_top3": 0.8,
+      "file_top1": 0.9,
+      "file_top3": 1.0,
+      "chunk_top1": 0.7,
+      "chunk_top3": 0.9,
+      "distractor_top1": 0.4,
+      "latency_ms_avg": 86.68,
+      "latency_ms_max": 99.56,
+      "queries": 10,
+      "details": [
+        {
+          "query": "Python 字符串格式化推荐用哪种方式",
+          "expected": "f-string",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "Python 如何安全地打开文件",
+          "expected": "with",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt",
+            "real_knowledge/python_best_practices.txt"
+          ]
+        },
+        {
+          "query": "MySQL 表名拼接 SQL 时要注意什么",
+          "expected": "反引号",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "MySQL 查询参数怎么传",
+          "expected": "参数化",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt"
+          ]
+        },
+        {
+          "query": "MCP server 调试日志输出到哪里",
+          "expected": "stderr",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "real_knowledge/mcp_protocol.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mcp_protocol.txt"
+          ]
+        },
+        {
+          "query": "MCP 工具函数怎么注册",
+          "expected": "mcp.tool",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "distractors/irrelevant_notes.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": false,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/irrelevant_notes.txt",
+            "real_knowledge/mcp_protocol.txt"
+          ]
+        },
+        {
+          "query": "WSL 命令怎么防止死循环",
+          "expected": "超时",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "real_knowledge/wsl_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/wsl_safety.txt"
+          ]
+        },
+        {
+          "query": "WSL 部署文件传到哪个目录",
+          "expected": "nginx/uploads",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "real_knowledge/wsl_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/wsl_safety.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "Python 列表推导式有什么好处",
+          "expected": "列表推导",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "MySQL 事务操作要注意什么",
+          "expected": "BEGIN",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt"
+          ]
+        }
+      ],
+      "latency_ms_avg_warm": 86.09,
+      "stage_totals_ms_per_round": {
+        "total_ms": 866.68
+      }
+    },
+    "E": {
+      "label": "分块 + 精排 + 全量召回",
+      "correct_source_top1": 0.7,
+      "real_source_top1": 0.7,
+      "real_source_top3": 0.8,
+      "file_top1": 1.0,
+      "file_top3": 1.0,
+      "chunk_top1": 0.8,
+      "chunk_top3": 1.0,
+      "distractor_top1": 0.3,
+      "latency_ms_avg": 289.65,
+      "latency_ms_max": 300.42,
+      "queries": 10,
+      "details": [
+        {
+          "query": "Python 字符串格式化推荐用哪种方式",
+          "expected": "f-string",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "Python 如何安全地打开文件",
+          "expected": "with",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt",
+            "real_knowledge/python_best_practices.txt"
+          ]
+        },
+        {
+          "query": "MySQL 表名拼接 SQL 时要注意什么",
+          "expected": "反引号",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "MySQL 查询参数怎么传",
+          "expected": "参数化",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt"
+          ]
+        },
+        {
+          "query": "MCP server 调试日志输出到哪里",
+          "expected": "stderr",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "real_knowledge/mcp_protocol.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mcp_protocol.txt"
+          ]
+        },
+        {
+          "query": "MCP 工具函数怎么注册",
+          "expected": "mcp.tool",
+          "expected_source": "real_knowledge/mcp_protocol.txt",
+          "top1_source": "real_knowledge/mcp_protocol.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mcp_protocol.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "WSL 命令怎么防止死循环",
+          "expected": "超时",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "real_knowledge/wsl_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/wsl_safety.txt"
+          ]
+        },
+        {
+          "query": "WSL 部署文件传到哪个目录",
+          "expected": "nginx/uploads",
+          "expected_source": "real_knowledge/wsl_safety.txt",
+          "top1_source": "real_knowledge/wsl_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/wsl_safety.txt",
+            "distractors/irrelevant_notes.txt"
+          ]
+        },
+        {
+          "query": "Python 列表推导式有什么好处",
+          "expected": "列表推导",
+          "expected_source": "real_knowledge/python_best_practices.txt",
+          "top1_source": "distractors/outdated_tips.txt",
+          "correct_source_top1": false,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "distractors/outdated_tips.txt"
+          ]
+        },
+        {
+          "query": "MySQL 事务操作要注意什么",
+          "expected": "BEGIN",
+          "expected_source": "real_knowledge/mysql_safety.txt",
+          "top1_source": "real_knowledge/mysql_safety.txt",
+          "correct_source_top1": true,
+          "hit_top1_chunk": null,
+          "hit_top1_file": true,
+          "hit_top3_file": true,
+          "top3_sources": [
+            "real_knowledge/mysql_safety.txt"
+          ]
+        }
+      ],
+      "latency_ms_avg_warm": 296.17,
+      "stage_totals_ms_per_round": {
+        "total_ms": 2896.35
+      }
+    }
+  }
+}

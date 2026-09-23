@@ -86,6 +86,15 @@ class TaskSpec:
     permission_mode: str | None = None
     approver_factory: Callable[[], Any] | None = None
     note: str = ""
+
+    # 是否允许「自动注入」把知识库内容拼进 Executor 提示词。
+    # ⚠️ **评估默认关闭**（2026-09-24 用户决定）—— 8 个维度里没有一个是"抵抗错误知识"，
+    #    开着等于给每道题都加一个题集作者没打算测的变量，结果无法归因。
+    #    ⚠️ 目前只有 **E022** 声明为 True：它是 `query_rag` 唯一的端到端覆盖题，
+    #    保留注入可以观察"知识库内容（含干扰项）如何影响回答"。
+    #    ⚠️ 这会让 E022 的输入条件与其余 29 题**不同**，报告里必须披露；
+    #    但它在 single / multi 两轮里条件一致，所以两轮之间可比。
+    inject_knowledge: bool = False
     #: 这题会用到的 MySQL 库 / 表 —— 整轮开始前只清这些名字（**绝不扫全库乱删**）
     mysql_databases: tuple[str, ...] = ()
     mysql_tables: tuple[tuple[str, str], ...] = ()
@@ -362,6 +371,7 @@ async def run_one_task(
         permission_mode=spec.permission_mode or HEADLESS_PERMISSION_MODE,
         approver=approver,
         tools=tools,
+        auto_inject=spec.inject_knowledge,
     )
     try:
         result = await asyncio.wait_for(call, timeout=spec.timeout_sec)
@@ -464,6 +474,12 @@ async def run_one_task(
             "highRiskTools": [],
         },
         "audit": _audit_stats(audit),
+        # ── 自动注入「注了什么」（评估默认关闭；只有 inject_knowledge=True 的题会有内容）──
+        #    两个用处：① 万一某题挂了，能判断「是不是注入的知识导致的」——
+        #       E004 就是这么被定位的：它因为注入里的错误知识而去"核查知识库"，
+        #       多调了一次 query_rag，撞上 `used_no_tools()` 断言（0.75）；
+        #    ② 其余题记成空数组，本身就是「注入确实被关掉了」的证据。
+        "knowledge_injected": list(result.get("knowledge_injected") or []),
         "response": str(result.get("response") or "")[:4000],
     }
 
