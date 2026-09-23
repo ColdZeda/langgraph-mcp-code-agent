@@ -59,7 +59,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.config import (  # noqa: E402
-    KNOWLEDGE_DIR,
     RAG_COLLECTION,
     RAG_RECALL_K,
     RAG_TOP_K,
@@ -67,6 +66,7 @@ from app.code_agent.config import (  # noqa: E402
     RUNS_DIR,
 )
 from app.code_agent.rag import store  # noqa: E402
+from evals.env import knowledge_dir, use_eval_corpus  # noqa: E402
 from evals.rag_bench import EXPECTED_SOURCE, QUERIES  # noqa: E402
 
 #: 整篇索引用的 collection 名（建在**内存**里，不落盘 —— 见 `build_whole_doc_index`）
@@ -90,7 +90,9 @@ def _source_full_text(source: str) -> str:
     """读来源文件全文（小写）—— 复现改造前的**文件粒度**口径。"""
     if source not in _FILE_TEXT_CACHE:
         try:
-            _FILE_TEXT_CACHE[source] = (KNOWLEDGE_DIR / source).read_text(encoding="utf-8").lower()
+            _FILE_TEXT_CACHE[source] = (
+                (knowledge_dir() / source).read_text(encoding="utf-8").lower()
+            )
         except OSError:
             _FILE_TEXT_CACHE[source] = ""
     return _FILE_TEXT_CACHE[source]
@@ -120,10 +122,9 @@ def build_whole_doc_index() -> tuple[object, int]:
 
     collection = chromadb.EphemeralClient().get_or_create_collection(name=WHOLE_DOC_COLLECTION)
 
+    kd = knowledge_dir()
     files = sorted(
-        f
-        for f in list(KNOWLEDGE_DIR.rglob("*.txt")) + list(KNOWLEDGE_DIR.rglob("*.md"))
-        if "__pycache__" not in str(f)
+        f for f in list(kd.rglob("*.txt")) + list(kd.rglob("*.md")) if "__pycache__" not in str(f)
     )
     sources, texts = [], []
     for filepath in files:
@@ -467,6 +468,9 @@ def _print_report(payload: dict) -> None:
 
 
 def main() -> int:
+    # ⚠️ 第一步：切到评估专用语料与向量库（订正 #36）
+    use_eval_corpus()
+
     parser = argparse.ArgumentParser(description="RAG 消融对照（不需要 LLM）")
     parser.add_argument("--reps", type=int, default=5, help="预热轮数（默认 5）")
     parser.add_argument("--top-k", type=int, default=RAG_TOP_K)

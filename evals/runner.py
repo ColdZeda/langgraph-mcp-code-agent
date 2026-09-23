@@ -33,8 +33,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.agent.code_agent import run_single_task
 from app.code_agent.config import (
-    CHROMA_DIR,
-    KNOWLEDGE_DIR,
     MYSQL_DATABASE,
     PERMISSIONS_LOG,
     RUNS_DIR,
@@ -47,6 +45,7 @@ from app.code_agent.security.permissions import (
     mode_label,
 )
 from evals import verifiers as V
+from evals.env import chroma_dir
 
 #: 单题默认墙钟上限（秒）。超时不等于 0 分 —— 判定器照跑，产物照样验。
 DEFAULT_TASK_TIMEOUT = 300
@@ -123,10 +122,13 @@ def clean_workspace() -> int:
 
 def _clean_knowledge_root() -> int:
     """清掉知识库**根目录**下的散文件（Agent 自学习写进去的），保留 `real_knowledge/` 与 `distractors/`。"""
+    from evals.env import knowledge_dir
+
+    root = knowledge_dir()
     removed = 0
-    if not KNOWLEDGE_DIR.exists():
+    if not root.exists():
         return 0
-    for child in KNOWLEDGE_DIR.iterdir():
+    for child in root.iterdir():
         if child.is_dir():
             continue
         child.unlink(missing_ok=True)
@@ -279,7 +281,7 @@ def prepare_run(
         snapshot["chroma_error"] = f"{type(exc).__name__}: {exc}"
     snapshot["mysql_available"] = V.mysql_available()[0]
     snapshot["wsl_available"] = V.wsl_available()[0]
-    snapshot["chroma_dir"] = str(CHROMA_DIR)
+    snapshot["chroma_dir"] = str(chroma_dir())
     snapshot["database"] = MYSQL_DATABASE
     return snapshot
 

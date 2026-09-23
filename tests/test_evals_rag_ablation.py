@@ -13,8 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.code_agent.config import KNOWLEDGE_DIR  # noqa: E402
 from evals import rag_ablation as A  # noqa: E402
+from evals.env import FIXTURE_KNOWLEDGE_DIR  # noqa: E402   # 语料已挪进夹具（订正 #36）
 from evals.rag_bench import EXPECTED_SOURCE, QUERIES  # noqa: E402
 
 
@@ -48,7 +48,7 @@ def test_no_stale_expected_source_entries():
 
 def test_expected_source_files_exist():
     for query, source in EXPECTED_SOURCE.items():
-        assert (KNOWLEDGE_DIR / source).exists(), f"{query} 标注的来源不存在：{source}"
+        assert (FIXTURE_KNOWLEDGE_DIR / source).exists(), f"{query} 标注的来源不存在：{source}"
 
 
 def test_expected_source_actually_contains_the_keyword():
@@ -58,7 +58,7 @@ def test_expected_source_actually_contains_the_keyword():
     """
     needle_by_query = {q: e for q, e, _t in QUERIES}
     for query, source in EXPECTED_SOURCE.items():
-        text = (KNOWLEDGE_DIR / source).read_text(encoding="utf-8").lower()
+        text = (FIXTURE_KNOWLEDGE_DIR / source).read_text(encoding="utf-8").lower()
         needle = needle_by_query[query].lower()
         assert needle in text, f"「{query}」标注来源 {source}，但里面找不到关键词「{needle}」"
 

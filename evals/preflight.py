@@ -36,7 +36,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.config import (  # noqa: E402
-    KNOWLEDGE_DIR,
     MODEL_API_KEY,
     MODEL_BASE_URL,
     MODEL_NAME,
@@ -45,6 +44,7 @@ from app.code_agent.config import (  # noqa: E402
     WORKSPACE_DIR,
 )
 from evals import verifiers as V  # noqa: E402
+from evals.env import knowledge_dir, use_eval_corpus  # noqa: E402
 
 #: 期望的知识库块数（7 个文件 × 5 条原子）—— 与 `AGENTS.md` 的数字来源速查一致
 EXPECTED_CHUNKS = 35
@@ -221,9 +221,10 @@ def check_knowledge() -> dict:
     """知识库块数与根目录散文件（后者是上一轮 Agent 自学习写进去的，会污染检索）。"""
     from app.code_agent.rag import store
 
+    kd = knowledge_dir()
     stray = (
-        [p.name for p in KNOWLEDGE_DIR.iterdir() if p.is_file() and p.name != ".gitkeep"]
-        if KNOWLEDGE_DIR.exists()
+        [p.name for p in kd.iterdir() if p.is_file() and p.name != ".gitkeep"]
+        if kd.exists()
         else []
     )
     try:
@@ -358,6 +359,9 @@ def _print(payload: dict) -> None:
 
 
 def main() -> int:
+    # ⚠️ 第一步：切到评估专用语料与向量库（订正 #36）——产品库与评估库彻底分开
+    use_eval_corpus()
+
     parser = argparse.ArgumentParser(description="跑评估前的环境预检（不修任何东西）")
     parser.add_argument("--run-id", default=None, help="本次要用的 run-id（检查有没有重名）")
     parser.add_argument("--skip-rag", action="store_true", help="跳过知识库/精排检查（省十几秒）")

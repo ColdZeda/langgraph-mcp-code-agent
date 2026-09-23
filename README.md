@@ -218,7 +218,8 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 ## 上下文工程与分层记忆
 
 > **定位先说清楚**：这一层里的 RAG 是**语义记忆** —— 记录**使用过程中积累的经验/习惯**
-> （Agent 自学习闭环的存储端），**不是企业知识库问答**。所以它只预置了 35 条知识，
+> （Agent 自学习闭环的存储端），**不是企业知识库问答**。所以它只带一份 35 条的**测试语料**
+> （在 `evals/fixtures/`，只在评估时用；**产品库默认是空的**），
 > 也不追求"大而全"的检索指标：**够用即可**。
 
 长任务最容易失控的不是"模型不够聪明"，而是**上下文管理**：一次任务读 20 个文件、
@@ -264,7 +265,7 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
   语料极小会把"整篇 vs 分块"的差距压小 → 上表是**真实下界，不可外推到大语料**；
   精排模型（`ms-marco-MiniLM-L-6-v2`）是段落级语料训练的，B 组喂整篇文件属分布外输入；
   延迟为本机单进程数字（冷启动单独测，未混入稳态）。
-  原始结果（含每条查询的 top-1/top-3 明细）：`docs/evidence/rag_ablation_20260923_142743.json`。
+  原始结果（含每条查询的 top-1/top-3 明细）：`docs/evidence/rag_ablation_20260923_203822.json`。
 
 ## 安全设计
 
@@ -478,7 +479,8 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 │       ├── server.py              # FastAPI（WS + 权限确认协议 + REST + 静态托管）
 │       └── frontend/              # Vue3 + Vite（dist 已入库）；含 PermissionDialog（人工确认弹框）
 ├── config/models.json             # 模型注册表（显示名 + 实际调用名；**默认空** = 走 .env）+ 角色分配 + 降级链
-├── data/knowledge/                # 知识库源文件：35 条（7 个文件 × 每文件 5 条）
+├── data/knowledge/                # **产品**知识库目录：默认空（靠使用积累）。测试语料在
+│                                  #   evals/fixtures/knowledge/（35 条），评估时才用
 ├── scripts/                       # probe_mcp_server.py（手工发 JSON-RPC 探 MCP server 回没回）
 │   │                              #   + mysql-init/*.sql（被 docker-compose 当挂载目录用，别挪）
 │   └── run/                       # 启动/停止脚本：start-app.cmd / start-app.ps1（起 Web UI）
@@ -487,7 +489,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 ├── evals/                         # 阶段 6 重建的评估体系（8 个文件）：tasks.py(30 题) / verifiers.py(43 个判定器)
 │                                  #   / runner.py / run_e2e.py / preflight.py(跑前预检) / report.py(报告+STAR)
 │                                  #   / rag_bench.py(RAG 基准) / rag_ablation.py(RAG 消融对照)
-├── tests/                         # 485 个测试（单元 + 工具级 + 评估体系自检）
+├── tests/                         # 499 个测试（单元 + 工具级 + 评估体系自检）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 从阶段 6 起重新只追加；archive/ 仍空）
 ├── AGENTS.md                      # AI 助手约定与已知坑
@@ -499,12 +501,12 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 485 | `uv run python -m pytest tests/ -q` |
-| 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
+| 测试数 | 499 | `uv run python -m pytest tests/ -q` |
+| 知识库条目 | **测试语料** 35（7 文件 × 5 条）→ `evals/fixtures/knowledge/`；产品库默认空 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数） | top-1 命中正解文件 0.20 → 0.60（对照 0.70） | `uv run python evals/rag_ablation.py --reps 10` |
 | 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
-| 测试覆盖率 | **71%**（2049 语句 / 596 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
+| 测试覆盖率 | **70%**（2049 语句 / 613 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
 

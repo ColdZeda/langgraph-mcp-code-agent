@@ -85,9 +85,13 @@ def test_split_atoms_keeps_short_and_long_paragraphs():
     assert atoms == ["短", "长" * 100]
 
 
-def test_real_knowledge_files_shape():
-    """用**真实知识库文件**跑一遍：每个文件应切出 5 块（= 5 条独立知识）。"""
-    knowledge_dir = Path(__file__).resolve().parents[1] / "data" / "knowledge"
+def test_fixture_knowledge_files_shape():
+    """用**测试语料夹具**跑一遍：每个文件应切出 5 块（= 5 条独立知识）。
+
+    ⚠️ 夹具在 evals/fixtures/knowledge/（订正 #36：产品知识库 data/knowledge/ 不再是
+    测试语料的存放处 —— 混在一起会让评测跑完把错误知识灌进真实会话）。
+    """
+    knowledge_dir = Path(__file__).resolve().parents[1] / "evals" / "fixtures" / "knowledge"
     files = sorted(knowledge_dir.rglob("*.txt"))
 
     assert len(files) == 7, "预置知识库是 7 个文件"

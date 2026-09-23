@@ -20,8 +20,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.code_agent.config import KNOWLEDGE_DIR, RAG_RECALL_K  # noqa: E402
+from app.code_agent.config import RAG_RECALL_K  # noqa: E402
 from app.code_agent.rag import store  # noqa: E402
+from evals.env import knowledge_dir, use_eval_corpus  # noqa: E402
 
 # ── 测试查询集：每个问题对应真实答案的关键词 ──
 QUERIES = [
@@ -113,7 +114,7 @@ def _source_full_text(source: str) -> str:
     要公平对比就必须同样问"整个文件"，而不是问"召回到的那个块"。
     """
     if source not in _FILE_TEXT_CACHE:
-        path = Path(KNOWLEDGE_DIR) / source
+        path = knowledge_dir() / source
         try:
             _FILE_TEXT_CACHE[source] = path.read_text(encoding="utf-8").lower()
         except OSError:
@@ -255,6 +256,9 @@ def measure_ordering() -> tuple[str, str]:
 
 
 def main():
+    # ⚠️ 第一步：切到评估专用语料与向量库（订正 #36）
+    use_eval_corpus()
+
     print("=" * 55)
     print("RAG 工具性能基准测试")
     print("=" * 55)

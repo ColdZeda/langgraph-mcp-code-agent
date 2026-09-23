@@ -57,7 +57,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（485 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（499 个） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | 看评估题集（**不跑、不烧 token**） | `uv run python evals/run_e2e.py --list` |
 | 跑评估（单/多 Agent 各一轮，**必须换 run-id**） | `uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive` |
@@ -116,7 +116,7 @@ scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           485 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           499 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / web_permission〔阶段 5 的三个〕/
@@ -262,7 +262,7 @@ uv run python evals/report.py --single runtime/runs/v3-single.json \
 - `--archive` 另存一份到 `docs/evidence/`（纳入版本控制）；不加只落 `runtime/runs/`（gitignore）。
 - ⚠️ **每题开跑前会做两件复位**：清空 `runtime/workspace/`，**以及把知识库复位**
   （`runner._reset_knowledge()`，订正 #35 —— 模型会自己调 `save_knowledge` 写进去）。
-  整轮前还会清 `data/knowledge/` **根目录**散文件、
+  整轮前还会清**评估自己那份**知识库的根目录散文件（`runtime/eval_knowledge/`）、
   题集声明的 MySQL 库（`eval_shop`/`eval_lib`/`eval_metrics`/`eval_decoy`）、
   **以及 WSL 上传目录**（`/home/leprite/nginx/uploads/`，保留 `.gitkeep`）。
 - ✅ **WSL 上传目录的清理已经修好了**（2026-09-22 自查发现、2026-09-23 修完，见订正 #33/#34）：
@@ -303,15 +303,17 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 **每题至少 1 条状态断言，且不能只有 LLM 评分**。
 ⚠️ **对抗题不许让 Agent 真去执行危险命令** —— 危险命令拦截由 `tests/test_dangerous_commands.py`
 （打桩 subprocess）验证；评测里放真命令等于"防线一失效就把机器删了"（阶段 5 真踩过）。
-- **跑 RAG 基准前必须清残留**：`runtime/chroma_db/`、`data/knowledge/` **根目录**
-  （Agent 自学习写入的）、MySQL `agent_test` 表、WSL uploads（保留 `.gitkeep`）；
-  知识库预置是 **35 条（7 个文件 × 每文件 5 条）**，`real_knowledge/` 4 个 + `distractors/` 3 个。
+- **产品知识库与测试语料是分开的（订正 #36）**：产品的 `data/knowledge/` **默认是空的**，
+  靠使用慢慢积累；测试语料（**35 条 = 7 文件 × 5 条**，`real_knowledge/` 4 篇 + `distractors/` 3 篇）
+  放在 **`evals/fixtures/knowledge/`**（进版本控制），评估开跑时复制到 `runtime/eval_knowledge/`、
+  向量库用 `runtime/chroma_db_eval/` —— **评估绝不碰产品那份**（`evals/env.py` 的 `use_eval_corpus()`）。
+  ⚠️ 别把它们合回去：混在一起会让**评测跑完把错误知识灌进真实会话**（用户实测踩过，见订正 #36）。
 - `runtime/runs/` 被 gitignore；**正式结果才复制到 `docs/evidence/`** 纳入版本控制。
   ⚠️ 2026-09 用户把**改造前**那批旧存档（旧模型 + 软口径）**移出了仓库**（所以那批不在 `docs/evidence/` 里），
   备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`（13 个文件），
   git 历史里也有（如 `git show 1ea2687^:docs/evidence/baseline-final.json` —— `1ea2687` 是**删除**这批存档的提交，
   所以要用它的父提交 `^`；拿删除之后的提交去 show 只会得到 `path ... does not exist in ...`）。
-  **阶段 6 起 `docs/evidence/` 重新只追加**：已入库 `rag_ablation_20260923_142743.json`（RAG 消融），
+  **阶段 6 起 `docs/evidence/` 重新只追加**：已入库 `rag_ablation_20260923_203822.json`（RAG 消融），
   两轮结果与 `评估报告.md` 待入库。
 - **旧口径的两个坑（阶段 6 已按它重写；留档作教训）**：
   ① `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分 → 偏乐观；
@@ -385,7 +387,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - `docs/` 结构（2026-08-31 整理后）：`handover.md` + `evidence/`（存档，只追加）+ `archive/`（历史素材）。
   改造前那批旧存档**内容已被移出仓库**（用户决定，备份在 `backup/1new/backup/old-data/docs/`），
   `archive/` 仍是空目录；**`evidence/` 从阶段 6 起重新往里写**（只追加）——
-  已入库：`rag_ablation_20260923_142743.json`（RAG 消融正式结果）；
+  已入库：`rag_ablation_20260923_203822.json`（RAG 消融正式结果）；
   待入库：两轮评估结果 + `评估报告.md`（由 `evals/report.py` 生成）。
 
 ## 当前进度（2026-09-23 更新）
@@ -450,7 +452,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > | # | 准备件 | 状态 |
 > |---|---|---|
 > | ① | 修 WSL 残留清理（订正 #33） | ✅ **已修**（默认值改成真实目录 + 返回值改成 `{attempted,ok,removed,left}`；7 条回归测试；真机验证删 2 个残留且保留 `.gitkeep`） |
-> | ② | `evals/rag_ablation.py`（**不用 LLM**） | ✅ 已写并跑出正式数字（**2×2 + 全量召回对照组 E**），归档到 `docs/evidence/rag_ablation_20260923_142743.json` |
+> | ② | `evals/rag_ablation.py`（**不用 LLM**） | ✅ 已写并跑出正式数字（**2×2 + 全量召回对照组 E**），归档到 `docs/evidence/rag_ablation_20260923_203822.json` |
 > | ③ | 报告生成器（含 STAR） | ✅ `evals/report.py`（`--selftest` 用假数据自测；18 条单测） |
 > | ④ | 跑前预检 | ✅ `evals/preflight.py`（10 项检查 + `fix` 提示；17 条单测）——**它第一次跑就把我自己写错的探针抓出来了（订正 #34）** |
 > | ⑤ | **两轮全量**（先 single 再 multi） | ⬜ **等用户审阅 30 题之后再做**（唯一贵的一步，40–100 分钟 ×2 + token） |
@@ -496,13 +498,13 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 485 | `uv run python -m pytest tests/ -q` |
-| 测试覆盖率 | 71%（2049 语句 / 596 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 61 条测试（424 → 485） |
+| 测试数 | 499 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 70%（2049 语句 / 613 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 75 条测试（424 → 499） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
 | 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
-| 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
-| **RAG 消融（阶段 6 正式数，2026-09-23）** | top-1 命中**正解文件**：改造前 **0.20** → 生产 **0.60** / 全量召回对照 **0.70**；top-1 落干扰项 0.80 → 0.40；同口径关键词（文件粒度）0.60 → 0.90；稳态延迟 14 → 95（生产）/ 306 ms（对照） | `uv run python evals/rag_ablation.py --reps 10`；结果归档 `docs/evidence/rag_ablation_20260923_142743.json` |
+| 知识库条目 | **测试语料** 35（7 文件 × 5 条，分块后 = 35 块）→ 在 `evals/fixtures/knowledge/`；**产品库默认 0** | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
+| **RAG 消融（阶段 6 正式数，2026-09-23）** | top-1 命中**正解文件**：改造前 **0.20** → 生产 **0.60** / 全量召回对照 **0.70**；top-1 落干扰项 0.80 → 0.40；同口径关键词（文件粒度）0.60 → 0.90；稳态延迟 14 → 95（生产）/ 306 ms（对照） | `uv run python evals/rag_ablation.py --reps 10`；结果归档 `docs/evidence/rag_ablation_20260923_203822.json` |
 | RAG 单轮快照（`rag_bench.py`，与上面的消融口径不同） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py` |
 | 评估指标（改造前旧口径，**当前不适用**） | 见 README「评估体系」一节 | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 1ea2687^:docs/evidence/<file>` |
 | 跟踪文件数 | `git ls-files` 计数 | `git ls-files \| Measure-Object` |

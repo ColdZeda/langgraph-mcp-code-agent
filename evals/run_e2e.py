@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.config import PROJECT_ROOT  # noqa: E402
 from evals import verifiers as V  # noqa: E402
+from evals.env import use_eval_corpus  # noqa: E402
 from evals.runner import run_all, save_run, task_inventory  # noqa: E402
 from evals.tasks import TASKS  # noqa: E402
 
@@ -96,6 +97,9 @@ def _print_summary(payload: dict) -> None:
 
 
 def main() -> int:
+    # ⚠️ 第一步：切到评估专用语料与向量库（订正 #36）——产品库与评估库彻底分开
+    use_eval_corpus()
+
     parser = argparse.ArgumentParser(description="阶段 6 评估（题集 + 强断言评分器）")
     parser.add_argument("--all", action="store_true", help="跑全部题")
     parser.add_argument("--task", action="append", default=[], help="只跑指定题号（可重复）")
