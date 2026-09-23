@@ -35,8 +35,8 @@ from app.code_agent.agent.events import emit
 from app.code_agent.agent.memory import inject_relevant_knowledge, maybe_deposit_knowledge
 from app.code_agent.agent.prompts import (
     EXECUTOR_PLAN_PROMPT,
-    PROMPT_CONTEXT,
     SYSTEM_PROMPT_TEMPLATE,
+    prompt_context,
 )
 from app.code_agent.config import (
     CHECKPOINT_DB,
@@ -585,7 +585,9 @@ def build_executor_agent(tools: list, *, mode: str = "multi", llm: Any | None = 
         model=model,
         tools=tools,
         debug=False,
-        prompt=prompt.format(**PROMPT_CONTEXT),
+        # ⚠️ 走 prompt_context()：model_name 要**运行期**取（订正 #37），
+        #   直接用静态 PROMPT_CONTEXT 会 KeyError —— 故意让它响亮地失败
+        prompt=prompt.format(**prompt_context("executor")),
     )
 
 

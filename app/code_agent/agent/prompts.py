@@ -107,13 +107,11 @@ def build_user_prompt(user_input: str) -> str:
 4. 如果涉及代码修改，使用 generate_diff 展示变更。"""
 
 
-# 提供给 code_agent.py 调用时 format 的上下文
-# ⚠️ `name` 是**助手自称的名字**（阶段 5 起叫 novi，界面上的产品名是「Code Agent-novi」）；
-#    `model_name` 必须真实注入 —— 否则用户问"你是什么模型"时，模型只能含糊其辞
-#    （实测踩过：它答"我是 Bot，底层型号我看不到"，既没用又显得心虚；准确回答反而更好）。
+# 模板的**静态**上下文（给 `prompt_context()` 打底）。
+# ⚠️ `name` 是**助手自称的名字**（阶段 5 起叫 novi，界面上的产品名是「Code Agent-novi」）。
+# ⚠️ **这里故意没有 `model_name`**（订正 #37）：它必须**运行期**从注册表取 —— 见下面两个函数。
 PROMPT_CONTEXT = {
     "name": "novi",
-    "model_name": MODEL_NAME,
     "workspace_dir": str(WORKSPACE_DIR),
     "wsl_distro": WSL_DISTRO,
     "vm_uploads_dir": VM_UPLOADS_DIR,
@@ -121,3 +119,34 @@ PROMPT_CONTEXT = {
     "mysql_port": MYSQL_PORT,
     "mysql_database": MYSQL_DATABASE,
 }
+
+
+def effective_model_name(role: str = "executor") -> str:
+    """该角色**当前实际会用的调用名**（不是显示名）。
+
+    ⚠️ 为什么要运行期取（订正 #37，用户实测踩到）：`PROMPT_CONTEXT` 以前写的是
+    `MODEL_NAME`（来自 `.env`），而它是 **import 时**定死的 —— 用户在 Web 面板把生效模型
+    换成别的之后，`rebuild_agents()` 确实重建了 agent，**但提示词里还是旧名字**，
+    于是模型回答"我运行在 deepseek-flash 上"，而结果卡片显示的是新模型 —— 两处对不上。
+    用户实测就是"我明明换成 mimo 了，它为什么说自己是 deepseek-flash"。
+
+    这里走注册表的 `resolve_model()`：三层兜底（自定义 → 内置注册表 → `.env` 的系统默认）
+    与真正建 LLM 时的取值口径**完全一致**；`model` 字段是**实际发给 API 的名字**，
+    而不是下拉框里的显示名（显示名 ≠ 调用名，这条约定同样适用于提示词）。
+    """
+    try:
+        from app.code_agent.model.llm import registry
+
+        return str(registry.resolve_model(role).get("model") or MODEL_NAME)
+    except Exception:  # noqa: BLE001 —— 取不到就退回 .env，绝不让提示词构建失败
+        return MODEL_NAME
+
+
+def prompt_context(role: str = "executor") -> dict:
+    """给模板 `format()` 用的完整上下文（`model_name` 运行期解析）。
+
+    **所有要 format 提示词的地方都必须走这个函数**（`tests/test_prompt_model_name.py`
+    有源码级守卫）。直接用 `PROMPT_CONTEXT` 会 `KeyError: 'model_name'` ——
+    这是**故意的**：宁可响亮地失败，也不要静默地报错模型名。
+    """
+    return {**PROMPT_CONTEXT, "model_name": effective_model_name(role)}

@@ -9,6 +9,7 @@ from app.code_agent.agent.prompts import (
     PROMPT_CONTEXT,
     SYSTEM_PROMPT_TEMPLATE,
     build_user_prompt,
+    prompt_context,
 )
 
 
@@ -27,10 +28,18 @@ class TestSystemPrompt:
         assert "{name}" in SYSTEM_PROMPT_TEMPLATE
 
     def test_format_with_context(self):
-        """用 PROMPT_CONTEXT 格式化后不包含原始占位符。"""
-        formatted = SYSTEM_PROMPT_TEMPLATE.format(**PROMPT_CONTEXT)
+        """用 `prompt_context()` 格式化后不包含原始占位符。
+
+        ⚠️ 必须走 `prompt_context()` 而不是静态 `PROMPT_CONTEXT`（订正 #37）：
+        后者**故意不含 `model_name`** —— 那个值要运行期从注册表取，
+        否则切了模型提示词里还是旧名字（用户实测踩过）。
+        """
+        ctx = prompt_context("executor")
+        formatted = SYSTEM_PROMPT_TEMPLATE.format(**ctx)
         assert "{name}" not in formatted
-        assert PROMPT_CONTEXT["name"] in formatted
+        assert "{model_name}" not in formatted
+        assert ctx["name"] in formatted
+        assert ctx["model_name"] in formatted
 
 
 class TestUserPrompt:
