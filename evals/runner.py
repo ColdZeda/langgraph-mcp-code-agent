@@ -38,6 +38,7 @@ from app.code_agent.config import (
     MYSQL_DATABASE,
     PERMISSIONS_LOG,
     RUNS_DIR,
+    VM_UPLOADS_DIR,
     WORKSPACE_DIR,
 )
 from app.code_agent.security.permissions import (
@@ -171,32 +172,75 @@ def _clean_mysql(databases: Iterable[str], tables: Iterable[tuple[str, str]] = (
     return done
 
 
-def _clean_wsl_uploads(path: str) -> int:
-    """清 WSL 上传目录里的文件（保留 `.gitkeep`）。"""
-    ok, _ = V.wsl_available()
+def _clean_wsl_uploads(path: str | None) -> dict:
+    """清 WSL 上传目录里的文件（保留 `.gitkeep`），返回**可分辨的**执行记录。
+
+    ⚠️ 返回值故意不是 0/1（2026-09-22 订正 #33）：这个函数以前返回 `1` = "清了"、
+    `0` = **三种完全不同的情况**（没传路径 / WSL 不可用 / 命令失败），
+    于是"整整一轮都在跳过清理"被一个 `0` 盖住了、没人看得出来。
+    现在把"试没试（`attempted`）/ 成没成（`ok`）/ 删了几个（`removed`）"分开记。
+
+    删完再核一次目录——把"命令说成功了"升级成"目录**确实**空了"。
+    """
+    if not path:
+        return {"attempted": False, "skipped": True, "path": "", "removed": 0, "left": None}
+    ok, why = V.wsl_available()
     if not ok:
-        return 0
+        return {
+            "attempted": True,
+            "ok": False,
+            "path": path,
+            "removed": 0,
+            "left": None,
+            "error": why,
+        }
     q = V.shlex_quote(path)
-    rc, out = V.wsl_run(f"find {q} -maxdepth 1 -type f ! -name '.gitkeep' -delete && echo cleaned")
-    if rc != 0 or "cleaned" not in out:
-        return 0
-    return 1
+    # `-delete -print`：GNU find 会打印**真正删掉**的那些文件 → 一条命令同时得到"删了哪些"
+    rc, out = V.wsl_run(f"find {q} -maxdepth 1 -type f ! -name '.gitkeep' -delete -print")
+    if rc != 0:
+        return {
+            "attempted": True,
+            "ok": False,
+            "path": path,
+            "removed": 0,
+            "left": None,
+            "error": (out or "无输出")[:200],
+        }
+    removed = len([ln for ln in out.splitlines() if ln.strip()])
+    verify_rc, verify_out = V.wsl_run(f"find {q} -maxdepth 1 -type f ! -name '.gitkeep' | wc -l")
+    tail = verify_out.strip().splitlines()[-1].strip() if verify_out.strip() else ""
+    left = int(tail) if verify_rc == 0 and tail.isdigit() else -1
+    return {
+        "attempted": True,
+        "ok": left == 0,
+        "path": path,
+        "removed": removed,
+        "left": left,
+        **({"error": "删完仍有残留"} if left != 0 else {}),
+    }
 
 
 def prepare_run(
     *,
     mysql_databases: Iterable[str] = (),
     mysql_tables: Iterable[tuple[str, str]] = (),
-    wsl_uploads: str | None = None,
+    wsl_uploads: str | None = VM_UPLOADS_DIR,
 ) -> dict:
-    """整轮开始前的清残留 + 环境快照（快照会写进结果 JSON，报告里的"口径"靠它）。"""
+    """整轮开始前的清残留 + 环境快照（快照会写进结果 JSON，报告里的"口径"靠它）。
+
+    ⚠️ `wsl_uploads` **默认就是真实目录**（2026-09-22 订正 #33）：它原来的默认值是 `None`
+    = "不清"，而 `run_all()` 又没传 → **整整一轮都不清**，于是 E014 的两条 WSL 断言
+    （文件存在 + 内容一致）能被上一轮的残留蒙过 → **假阳性**。
+    **"默认不安全"的默认值本身就是要修的 bug** —— 现在默认清；真要跳过就显式传 `None`，
+    那时快照里会留下 `skipped: true`，一眼能看出"这一轮没清"。
+    """
     from app.code_agent.rag import store
 
     snapshot: dict[str, Any] = {}
     snapshot["workspace_cleaned"] = clean_workspace()
     snapshot["knowledge_root_cleaned"] = _clean_knowledge_root()
     snapshot["mysql_cleaned"] = _clean_mysql(mysql_databases, mysql_tables)
-    snapshot["wsl_uploads_cleaned"] = _clean_wsl_uploads(wsl_uploads) if wsl_uploads else 0
+    snapshot["wsl_uploads"] = _clean_wsl_uploads(wsl_uploads)
 
     # chroma 重建（增量：mtime 没变就跳过）—— 知识库根目录刚清过，这里保证索引与文件一致
     try:

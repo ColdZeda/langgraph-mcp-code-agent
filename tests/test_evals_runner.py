@@ -69,6 +69,115 @@ def test_clean_workspace_keeps_gitkeep(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# WSL 上传目录的清理（订正 #33：它曾经**一整轮都没清**）
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_wsl_cleanup_is_on_by_default():
+    """**"默认不清"就是要修的 bug**：默认值必须是真的目录，不是 `None`。
+
+    2026-09-22 之前 `prepare_run(wsl_uploads=None)` + `run_all` 没传 →
+    整整一轮都不清 `/home/leprite/nginx/uploads/`，E014 的两条 WSL 断言会被残留蒙过。
+    """
+    import inspect
+
+    from app.code_agent.config import VM_UPLOADS_DIR
+
+    default = inspect.signature(R.prepare_run).parameters["wsl_uploads"].default
+    assert default == VM_UPLOADS_DIR, (
+        "WSL 上传目录的清理必须是默认行为（否则调用方一忘就又静默跳过）"
+    )
+
+
+def test_wsl_cleanup_explicitly_skipped_is_recorded():
+    """真要跳过就必须**看得出来**（旧代码里它和"清过了""清理失败"都返回 0）。"""
+    record = R._clean_wsl_uploads(None)
+    assert record["skipped"] is True
+    assert record["attempted"] is False
+
+
+def test_wsl_cleanup_reports_unavailable(monkeypatch):
+    monkeypatch.setattr(V, "wsl_available", lambda: (False, "找不到 wsl.exe"))
+    record = R._clean_wsl_uploads("/home/x/uploads")
+    assert record["attempted"] is True
+    assert record["ok"] is False
+    assert "wsl.exe" in record["error"]
+
+
+def test_wsl_cleanup_counts_deleted_files(monkeypatch):
+    """`removed` 必须是**真删掉的数量**（0 表示"本来就是干净的"，与"跳过了"不同）。"""
+    calls: list[str] = []
+
+    def fake_run(script, timeout=30):
+        calls.append(script)
+        if "-delete" in script:
+            return 0, "/home/x/uploads/a.txt\n/home/x/uploads/b.txt\n"
+        return 0, "0\n"
+
+    monkeypatch.setattr(V, "wsl_available", lambda: (True, ""))
+    monkeypatch.setattr(V, "wsl_run", fake_run)
+
+    record = R._clean_wsl_uploads("/home/x/uploads")
+    assert record["ok"] is True
+    assert record["removed"] == 2
+    assert record["left"] == 0
+    assert len(calls) == 2, "删完必须再核一次目录（把'命令说成功了'升级成'目录确实空了'）"
+
+
+def test_wsl_cleanup_fails_when_leftovers_remain(monkeypatch):
+    """删完还有残留 → 必须记成失败，不能因为 find 返回 0 就当成清干净了。"""
+
+    def fake_run(script, timeout=30):
+        return (0, "/home/x/uploads/a.txt\n") if "-delete" in script else (0, "1\n")
+
+    monkeypatch.setattr(V, "wsl_available", lambda: (True, ""))
+    monkeypatch.setattr(V, "wsl_run", fake_run)
+
+    record = R._clean_wsl_uploads("/home/x/uploads")
+    assert record["ok"] is False
+    assert record["left"] == 1
+    assert "残留" in record["error"]
+
+
+def test_wsl_cleanup_reports_delete_failure(monkeypatch):
+    monkeypatch.setattr(V, "wsl_available", lambda: (True, ""))
+    monkeypatch.setattr(V, "wsl_run", lambda script, timeout=30: (1, "find: 权限不够"))
+    record = R._clean_wsl_uploads("/home/x/uploads")
+    assert record["ok"] is False
+    assert "权限" in record["error"]
+
+
+async def test_run_all_actually_cleans_wsl_uploads(monkeypatch, tmp_path):
+    """端到端：`run_all` → `prepare_run` 这条链上**真的**把路径传到了清理函数。
+
+    这是"文档说清了、代码没做"那类问题的机器守卫 —— 只测 `prepare_run` 自己不够，
+    因为原来的坑恰恰在**调用方**。
+    """
+    from app.code_agent.config import VM_UPLOADS_DIR
+    from app.code_agent.rag import store
+
+    seen: dict = {}
+
+    def spy(path):
+        seen["path"] = path
+        return {"attempted": bool(path), "ok": True, "path": path or "", "removed": 0, "left": 0}
+
+    monkeypatch.setattr(R, "_clean_wsl_uploads", spy)
+    monkeypatch.setattr(R, "_clean_mysql", lambda *a, **k: [])
+    monkeypatch.setattr(R, "_clean_knowledge_root", lambda: 0)
+    monkeypatch.setattr(store, "ensure_seeded", lambda *a, **k: None)
+    monkeypatch.setattr(store, "get_chunk_count", lambda *a, **k: 0)
+    monkeypatch.setattr(store, "get_reranker", lambda *a, **k: None)
+    monkeypatch.setattr(V, "mysql_available", lambda: (False, "测试不连库"))
+    monkeypatch.setattr(V, "wsl_available", lambda: (False, "测试不连 WSL"))
+
+    payload = await R.run_all([], mode="single", run_id="unit", reuse_tools=False)
+
+    assert seen["path"] == VM_UPLOADS_DIR, "run_all 必须清 WSL 上传目录（订正 #33）"
+    assert payload["env"]["wsl_uploads"]["attempted"] is True
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 线程隔离 / 判定器照跑
 # ═══════════════════════════════════════════════════════════════════
 

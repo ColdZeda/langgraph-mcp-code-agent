@@ -237,20 +237,30 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 > ⚠️ **自动沉淀在跑评估时关闭**（`run_single_task` 强制关）：否则评测过程产生的经验会写进知识库，
 > 让后续题目的检索结果改变、同一批数据前后不可比。
 
-**RAG 改造前 vs 改造后**（`uv run python evals/rag_bench.py`，同一批 10 个查询、同一套口径）：
+**RAG 改造前 vs 改造后**（`uv run python evals/rag_ablation.py`；**2×2 消融 + 全量召回对照组**，
+同一批 10 个查询、同一份知识库、同一个 embedding 模型 → 谁贡献了多少一目了然）：
 
-> ⚠️ **下表是阶段 4 自测的临时数字，阶段 6 会用新口径重测**（评分器与题集都在阶段 6 重做），
-> 所以请把它当作"改造方向对不对"的旁证，**不要当成正式结论**。
+| 组合 | 索引 | 精排 | 候选集 | top-1 命中**正解文件** | top-1 命中关键词（文件粒度） | top-1 落干扰项 | 稳态延迟 |
+|---|---|---|---|---|---|---|---|
+| **A** 改造前 | 整篇 | 否 | 全部 7 篇 | 0.20 | 0.60 | 0.80 | 14 ms |
+| **B** | 整篇 | 是 | 全部 7 篇 | 0.70 | 1.00 | 0.30 | 199 ms |
+| **C** | 分块 | 否 | 前 10 块 | 0.50 | 0.90 | 0.50 | 15 ms |
+| **D 现状（生产）** | 分块 | 是 | 前 10 块 | **0.60** | **0.90** | **0.40** | 95 ms |
+| **E** 对照 | 分块 | 是 | 全量 35 块 | **0.70** | **1.00** | **0.30** | 306 ms |
 
-| 指标 | 改造前（整篇一个向量） | 改造后（分块 + 精排） |
-|---|---|---|
-| top-1 命中（文件粒度，同口径） | 0.6 | **0.9** |
-| top-3 命中（文件粒度，同口径） | 1.0 | **1.0** |
-| Python 主题召回 | 0.4 | **1.0** |
-| 稳态查询延迟 | 13.2ms | **81ms**（精排 10 对约占 71ms） |
-
-> 另外单列两个更严的指标（关键词命中分不清「推荐 f-string」和「别用 f-string」这类**故意写错的干扰项**）：
-> top-1 来自正解文件 **0.6**、top-1 落在干扰项 **0.4** —— 测试集很小（35 块），这是**已知局限**。
+- **`correct_source_top1` 是主指标**：top-1 的来源*是不是这道题该去的那个文件*（正解文件是人工核对原文标注的）。
+  只报"关键词命中"会高估质量 —— `with` 这种词哪个文件里都可能有，而"推荐 f-string"和"别用 f-string"都命中关键词。
+- **A → D 是这次改造的真实变化**：正解文件命中 **0.20 → 0.60**，干扰项落到第一的比例 **0.80 → 0.40**。
+  同口径的"关键词命中（文件粒度）"是 0.60 → 0.90，与阶段 4 的临时数字一致。
+- **⚠️ B 看着比 D 好，但那不是"整篇更好"**：A/B 的候选集是全部 7 篇，而 D 走生产配置
+  `recall_k=10`，35 块里只有 10 块能进精排 —— **候选集大小不一样**。
+  **E 就是压掉这个差异的对照组**：正解文件命中回到 0.70（与 B 持平），
+  而且它还能把*命中的那条知识本身*排到第一（块粒度 0.80）—— 整篇索引根本表达不了这一档。
+  代价是延迟 95 ms → 306 ms。
+- **局限（如实说）**：知识库只有 **4 篇正解 + 3 篇干扰（35 条原子，每篇 140~370 字符）**，
+  语料极小会把"整篇 vs 分块"的差距压小 → 上表是**真实下界，不可外推到大语料**；
+  精排模型（`ms-marco-MiniLM-L-6-v2`）是段落级语料训练的，B 组喂整篇文件属分布外输入。
+  原始结果（含每条查询的 top-1/top-3 明细）：`docs/evidence/rag_ablation_20260923_142743.json`。
 
 ## 安全设计
 
@@ -359,7 +369,7 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 - 留着一把坏尺子，只会让后续开发（包括 AI 助手）继续拿它量东西 —— 所以删掉，而不是标注。
 - 备份：`E:\agentstart\work\backup\1new\backup\evals\`；也能从 git 历史取回（`git show 8d0ab78:evals/tasks.py`）。
 
-**新尺子长什么样**（`evals/`，5 个文件）：
+**新尺子长什么样**（`evals/`，8 个文件）：
 
 | 文件 | 职责 |
 |---|---|
@@ -367,7 +377,10 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 | `verifiers.py` | **43 个判定器工厂**，四档强度；30 题里共用了 **163 条**断言（**状态 124** / 轨迹 29 / 文本 10） |
 | `runner.py` | 执行引擎：清残留 → 跑题（超时也验分）→ 汇总 → 落盘 |
 | `run_e2e.py` | 命令行入口 |
-| `rag_bench.py` | RAG 检索基准（与题集无关，见下一节） |
+| `preflight.py` | **跑前环境预检**（容器 / WSL / `.env` key / 端口 / 知识库）—— 缺一条那一轮的数据就废了，还不会报错 |
+| `report.py` | **报告生成器**：把结果 JSON 变成能进 `docs/evidence/` 的 Markdown（含**算出来的 STAR 量化对比**） |
+| `rag_bench.py` | RAG 检索基准（单轮快照，与题集无关，见下一节） |
+| `rag_ablation.py` | RAG **消融对照**（2×2 + 全量召回对照组，不需要 LLM，见下一节） |
 
 **四条口径**（相对旧尺子的修正）：**通过 = 满分**（旧口径 `score >= 0.5` 就把"对一半"算通过）；
 **`skip` ≠ 0 分**（环境不可用记 `unavailable`、不进分母，别把"没测"记成"做错了"）；
@@ -375,18 +388,25 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 另外**每道题至少 1 条状态断言**（去查真实产物：文件/库表/WSL/接口），且由测试机械守着。
 
 ```bash
-uv run python evals/run_e2e.py --list                              # 只看题集结构（不执行、不烧 token）
+uv run python evals/preflight.py --run-id v3-single    # ① 先预检（修完它报的阻塞项再跑）
+uv run python evals/run_e2e.py --list                  # 只看题集结构（不执行、不烧 token）
 uv run python evals/run_e2e.py --all --mode single --run-id v3-single --archive
 uv run python evals/run_e2e.py --all --mode multi  --run-id v3-multi  --archive
+uv run python evals/report.py --single runtime/runs/v3-single.json \
+                             --multi  runtime/runs/v3-multi.json  \
+                             --rag    runtime/runs/rag_ablation_*.json \
+                             --out    docs/evidence/评估报告.md       # ② 再出报告
 ```
 
-> ⚠️ 两轮**必须换 `run-id`**（thread_id 里带 run-id 与 mode）；`--archive` 会把结果另存一份到
-> `docs/evidence/`（纳入版本控制）。跑之前确认 `.env` 的 key 有效 —— **CLI 与评估都不读界面设置**。
+> ⚠️ 两轮**必须换 `run-id`**（thread_id 里带 run-id 与 mode；复用会让第二轮读到第一轮的 checkpoint）。
+> `--archive` 会把结果另存一份到 `docs/evidence/`（纳入版本控制）。
+> 跑之前确认 `.env` 的 key 有效 —— **CLI 与评估都不读界面设置**（预检会替你验一次，只打 `GET /models`、不烧 token）。
 
-**RAG 检索基准**（`rag_bench.py`，阶段 4 新写、与题集无关）：
+**RAG 检索基准与消融对照**（与题集无关，**不需要 LLM**）：
 
 ```bash
-uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.json
+uv run python evals/rag_bench.py                        # 现状快照：延迟 / 准确率 / 召回 / 排序
+uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（结果归档进 docs/evidence/）
 ```
 
 ### 改造前的存档数字（**仅供说明「改造前长什么样」**）
@@ -460,9 +480,10 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 │   └── run/                       # 启动/停止脚本：start-app.cmd / start-app.ps1（起 Web UI）
 │                                  #   + start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
 ├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
-├── evals/                         # 阶段 6 重建的评估体系：tasks.py(30 题) / verifiers.py(43 个判定器)
-│                                  #   / runner.py / run_e2e.py / rag_bench.py(RAG 基准)
-├── tests/                         # 424 个测试（单元 + 工具级 + 评估体系自检）
+├── evals/                         # 阶段 6 重建的评估体系（8 个文件）：tasks.py(30 题) / verifiers.py(43 个判定器)
+│                                  #   / runner.py / run_e2e.py / preflight.py(跑前预检) / report.py(报告+STAR)
+│                                  #   / rag_bench.py(RAG 基准) / rag_ablation.py(RAG 消融对照)
+├── tests/                         # 481 个测试（单元 + 工具级 + 评估体系自检）
 ├── docs/
 │   └── handover.md                # 交接文档（evidence/ 与 archive/ 的内容已移出仓库）
 ├── AGENTS.md                      # AI 助手约定与已知坑
@@ -474,9 +495,10 @@ uv run python evals/rag_bench.py      # 结果写入 runtime/runs/rag_bench_*.js
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | 424 | `uv run python -m pytest tests/ -q` |
+| 测试数 | 481 | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | 35（7 文件 × 5 条）；分块后 = 35 块 | `Get-ChildItem data/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
+| RAG 消融（正式数） | top-1 命中正解文件 0.20 → 0.60（对照 0.70） | `uv run python evals/rag_ablation.py --reps 10` |
 | 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
 | 测试覆盖率 | **69%**（2049 语句 / 632 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 4 临时数**，阶段 6 重测） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 81ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |

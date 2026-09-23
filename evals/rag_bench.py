@@ -40,6 +40,23 @@ QUERIES = [
 
 _QUERY_FOR_ORDERING = "Python 字符串格式化"
 
+#: 每条查询**应该**命中的来源文件（人工核对 `data/knowledge/real_knowledge/` 原文写下的，
+#: 2026-09-22 逐条核过）。`rag_ablation.py` 用它算主指标 `correct_source_top1`
+#: —— 光看关键词命中会**高估**质量：比如"Python 如何安全地打开文件"的关键词是 `with`，
+#: 而 `with` 在别的文件里也可能出现；再比如"推荐 f-string"和"别用 f-string"都能命中关键词。
+EXPECTED_SOURCE = {
+    "Python 字符串格式化推荐用哪种方式": "real_knowledge/python_best_practices.txt",
+    "Python 如何安全地打开文件": "real_knowledge/python_best_practices.txt",
+    "MySQL 表名拼接 SQL 时要注意什么": "real_knowledge/mysql_safety.txt",
+    "MySQL 查询参数怎么传": "real_knowledge/mysql_safety.txt",
+    "MCP server 调试日志输出到哪里": "real_knowledge/mcp_protocol.txt",
+    "MCP 工具函数怎么注册": "real_knowledge/mcp_protocol.txt",
+    "WSL 命令怎么防止死循环": "real_knowledge/wsl_safety.txt",
+    "WSL 部署文件传到哪个目录": "real_knowledge/wsl_safety.txt",
+    "Python 列表推导式有什么好处": "real_knowledge/python_best_practices.txt",
+    "MySQL 事务操作要注意什么": "real_knowledge/mysql_safety.txt",
+}
+
 
 def measure_latency(n: int = 5) -> tuple[float, float, dict]:
     """查询延迟：跑 n 次取平均（毫秒）。走**与 query_rag 工具完全相同的检索路径**。
