@@ -9,8 +9,9 @@
 Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner → Executor → Verifier）
 + 6 个自建 MCP Server（stdio 子进程，25 个工具）+ FileManagementToolkit（7 个文件工具），
 双入口（CLI `main.py` / Web UI `app/web/server.py`）。
-⚠️ **旧 30 题评估体系已于阶段 5 删除**（口径不可用）；**阶段 6 已从零重建**（30 题 + 强断言评分器），
-但**正式两轮结果还没跑** —— 见下方「评估相关」。
+⚠️ **旧 30 题评估体系已于阶段 5 删除**（口径不可用）；**阶段 6 已从零重建并跑完正式两轮**（30 题 + 163 条强断言）：
+**single 30/30、multi 30/30，平均分 1.0000**，结果归档在 `docs/evidence/v3-single.json` / `v3-multi.json`
+—— 见下方「评估相关」。阶段 7（收尾包装）**待开工**。
 
 ## 必须遵守的约定
 
@@ -57,7 +58,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（528 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（550 个） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | **复用同名 run-id 前必跑**（清库里的 eval 线程；默认只报告，`--yes` 才删） | `uv run python evals/reset_eval_threads.py --yes` |
 | 逐题跑完后合并成一轮（缺题会拒绝写出） | `uv run python evals/merge_runs.py --prefix v3-single --mode single --archive` |
@@ -71,8 +72,9 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | **RAG 消融对照**（改造前后 + 全量召回对照组，**不用 LLM**） | `uv run python evals/rag_ablation.py --reps 10 --archive` |
 | 重建前端 | `cd app/web/frontend && npm run build` |
 
-> ⚠️ **评估体系已于阶段 6 重建**（旧口径那套在阶段 5 删除、`evals/` 从零重写）——
-> 跑法与口径见下方「**评估相关**」；**30 题正式两轮还没跑**（题集已审阅通过，见 🔵 段的手册），所以现存的旧分数一律不可比。
+> ✅ **评估体系已于阶段 6 重建并跑完正式两轮**：`single 30/30`、`multi 30/30`（平均分都是 1.0000，
+> 163 条断言：状态 124 / 轨迹 29 / 文本 10），归档在 `docs/evidence/v3-single.json` / `v3-multi.json`。
+> 跑法与口径见下方「**评估相关**」；**改造前那批旧分数一律不可比**（旧题集已删、口径已换）。
 > ⚠️ CI（`.gitee.yml`）从阶段 2 起跑三步：`ruff check .` → `ruff format --check .` → `pytest tests/ -v`。
 
 ## 代码地图（精简）
@@ -124,7 +126,7 @@ scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           528 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           550 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / **powershell_exec** /
@@ -132,7 +134,10 @@ tests/                           528 个测试（config / prompts / mysql_safe_i
                                  web_model_settings + evals_verifiers / evals_tasks / evals_runner /
                                  evals_report / evals_rag_ablation / evals_preflight / evals_env /
                                  **evals_merge_runs** / **evals_reset_threads** /
-                                 prompt_model_name〔阶段 6 的十二个〕）
+                                 prompt_model_name〔阶段 6 的十二个〕/
+                                 **multi_retry_verdict**（D1/D2）/ **mysql_connection_error**（D3）/
+                                 **evals_artifact_resolution**（D4）/ **evals_dangerous_executed**（D5）
+                                 〔2026-09-25 加的四个，共 +19 条；同期 runner / reset_threads 也补了用例〕）
 ```
 
 ## 已知坑（务必先看）
@@ -266,18 +271,44 @@ tests/                           528 个测试（config / prompts / mysql_safe_i
 - **`import app.code_agent.rag.store` 不加载模型**（全懒加载）：单测里碰它不会去 load torch。
   测试环境由 `tests/conftest.py` 统一关掉自动注入 / 自动沉淀 / 工具缓存。
 
-### 评估相关（**阶段 6 已从零重建；准备件做完了，正式两轮还没跑**）
+### 评估相关（**阶段 6 已完成：正式两轮都跑完并归档**）
 
-**现状（2026-09-24）**：`evals/` **十一个文件 + 一个夹具目录** ——
+**正式结果（2026-09-25）**：
+
+| 轮次 | 通过 | 平均分 | token | 耗时 | 工具 / 步数 | 归档 |
+|---|---|---|---|---|---|---|
+| **single** | **30/30 = 100%** | 1.0000 | 958,832 | 332s | 194 / 362 | `docs/evidence/v3-single.json` |
+| **multi** | **30/30 = 100%** | 1.0000 | 1,644,029 | 687s | 227 / 409 | `docs/evidence/v3-multi.json` |
+
+断言两轮都是 **状态 124/124、轨迹 29/29、文本 10/10**（共 163 条）；8 个维度全 1.00；
+**打回 0 次、击穿预算 0、超时 0、未测 0、异常 0**。
+**成本画像**：multi/single 的 token **中位 1.58×**（总量 1.71×、时间 2.07×），其中 **Verifier 中位
+10,988 token/题 = 总量的 25%**、Planner 1,110 = 2.4%。
+⚠️ **两条口径不同**：**single** = 上限 200k（产品默认 `TASK_TOKEN_BUDGET`，**没显式关**）+ 每题
+`timeout_sec`（**逐题记在结果里**：300/360/420/480 四档）；**multi** = `task_token_budget=0` +
+`task_timeout_override=0`（**只计量、不拦截**，写在该轮 `env` 快照里自证）。
+⚠️ **single 那轮跑得更早**，`env` 里**没有**这两项（字段是修 D 缺陷时才加的）—— 它的口径只能从
+"逐题 `timeout_sec` 有值 + 默认 200k"读出来，**别当成"single 也记了"**。
+另存一份**限额版 multi**（29/30）作对照：`docs/evidence/v3-multi-旧版(限额200k).json`
+—— 那次 E015 被 token 上限掐断、烧掉 257k 仍失败；改成只计量后 30/30 且**总成本更低**（1.64M vs 1.78M）
+⇒ **人为闸门会制造假失败**（这条是本次最有价值的口径教训）。
+⚠️ **三条不能外推**：① 每轮每题只跑 1 次（E003 那类方差量化不出来）；② 任务集对当前模型已饱和
+（两轮都满分 ⇒ 架构差异**不体现在分数上**，只能从成本侧看）；③ RAG 消融语料只有 35 条原子。
+
+**`evals/` 现状**：**十一个 .py + 一个夹具目录** ——
 `tasks.py`（30 题题集）/ `verifiers.py`（43 个判定器工厂）/ `runner.py`（执行引擎）/
 `run_e2e.py`（命令行入口）/ `rag_bench.py`（RAG 检索基准）/ `rag_ablation.py`（RAG 消融对照）/
 **`preflight.py`（跑前环境预检）** / **`report.py`（报告生成器，含 STAR 量化对比）** /
 **`merge_runs.py`（逐题分片 → 合并成一轮）** / **`reset_eval_threads.py`（清 eval 线程）** /
 **`env.py`（★ 语料隔离 `use_eval_corpus()`）** + `fixtures/knowledge/`（7 篇测试语料夹具）。
-**T6.1（评分器）/ T6.2（题集）已完成**（提交 `9aafa6b`，题集**已审阅通过**）；
-**T6.3 的准备件（讲人话：剩下的杂活）全部完成** —— 含订正 #36 语料分家、#37 提示词模型名、
-**#38–#45 跑正式轮前的核对与修复**、以及起跑线复位；
-只剩 **⑤ 两轮全量 + ⑥ 正式报告** —— 命令见上方 🔵 段的「跑两轮的手册」。
+**跑正式轮期间修掉的 5 个平台缺陷**（都带回归测试 + 红绿证据，见「验证记录」与
+`docs/evidence/阶段6_修复与口径记录.md`）：
+**D1** multi 打回上限在"裁定无法解析"时失效（`_verdict_passed`/`_is_retry_round`）；
+**D2** 重跑覆盖执行轨迹（轨迹跨轮合并 + 步数累加）；
+**D3** MySQL 工具返回值形状不一致（真实错误被伪装成 `too many values to unpack`）；
+**D4** 产物解析把**项目自己的 `main.py`** 当选手产物（裸文件名 + git 跟踪 = 项目自带 ⇒ 不回退仓库根）；
+**D5** "从未执行"的调用也算执行（`result` 为空 = 没跑过）。
+另有 **6 处题面修正**（E003/E011/E023/E025/E007/E014，**断言一字未改**）。
 
 **先预检再跑**（预检会替你验 `.env` 的 key、容器、WSL、端口、知识库，**不修任何东西**）：
 
@@ -433,11 +464,14 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 → **做全仓扫描类操作必须排除**（否则扫到生成物）。
 - `docs/` 结构（2026-08-31 整理后）：`handover.md` + `evidence/`（存档，只追加）+ `archive/`（历史素材）。
   改造前那批旧存档**内容已被移出仓库**（用户决定，备份在 `backup/1new/backup/old-data/docs/`），
-  `archive/` 仍是空目录；**`evidence/` 从阶段 6 起重新往里写**（只追加）——
-  已入库：`rag_ablation_20260923_203822.json` + `rag_ablation_20260924_053228.json`（RAG 消融，新旧语料各一份）；
-  待入库：两轮评估结果 + `评估报告.md`（由 `evals/report.py` 生成）。
+  `archive/` 仍是空目录；**`evidence/` 从阶段 6 起重新往里写**（只追加）——**已入库 6 份**：
+  ① `v3-single.json`、② `v3-multi.json`（阶段 6 正式两轮，**只计量口径**）；
+  ③ `v3-multi-旧版(限额200k).json`（限额版对照 29/30 —— 留着是给「人为闸门会制造假失败」留证据）；
+  ④ `rag_ablation_20260923_203822.json`（旧语料）、⑤ `rag_ablation_20260924_053228.json`（语料修订后）；
+  ⑥ `阶段6_修复与口径记录.md`（D1–D5 + 6 处题面的修复账本，**本阶段事实的唯一出处**）。
+  **待入库**：`评估报告.md`（由 `evals/report.py` 生成，还没跑）。
 
-## 当前进度（2026-09-23 更新）
+## 当前进度（2026-09-25 更新）
 
 **已经走完的**：
 ```
@@ -447,8 +481,10 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 **当前阶段**：**改造期**。方案文档在**仓库外**：`E:\agentstart\上班\work-content\program-fix第八版\`
 （**第八版 = 第七版 + 执行期实测订正**；第七版是冻结原档，第六版是原始底稿）。
 阶段 0（文档清洗与仓库整理）、阶段 1（修 P0 缺陷）、阶段 2（降复杂度与容器化）、
-阶段 3（执行模式与模型配置）、**阶段 4（上下文工程与分层记忆）**已完成；
-后续阶段按顺序执行，**每阶段做完停下汇报 + 提交推送**。
+阶段 3（执行模式与模型配置）、阶段 4（上下文工程与分层记忆）、**阶段 5（HITL 与安全加固）**、
+**阶段 6（evals 重建）**均已完成；
+**下一步 = 阶段 7（收尾包装）**，开工前必读在仓库外 `program-fix第八版\阶段7_收尾包装.md`。
+后续阶段按顺序执行，**每阶段做完停下汇报 + 提交推送 + 走完「阶段收尾清单」**。
 
 > ✅ **阶段 5（HITL 与安全加固）已完成并推送** —— 最终提交 **`5040f46`**（前置清理 `2552c10`）。
 > 开工依据曾是 `阶段5_开工包.md`（唯一入口）+ `阶段5_权限档位候选表.md` + `讨论结论汇总.md` 的 §11.3。
@@ -474,129 +510,109 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > Web 端确认协议：出站 `permission_request`（含 `requestId` / `tool` / `args` / `highRisk` / `note` / `timeoutSec`），
 > 入站 `permission_response`（`requestId` / `allow` / `alwaysAllow`）+ `set_permission_mode`。
 
-> 🔵 **阶段 6（evals 重建）进行中 —— 压缩/换会话后从这里恢复，别凭记忆上手**：
+> ✅ **阶段 6（evals 重建）已完成并推送** —— 收尾提交 **`b99a4a2`**（修 5 个平台缺陷 + 6 处题面）。
+> 压缩/换会话后**从这里恢复，别凭记忆上手**。
+>
+> **正式两轮都跑完并归档（2026-09-25）**：
+>
+> | 轮次 | 通过 | 平均分 | token | 耗时 | 工具 / 步数 | 归档 |
+> |---|---|---|---|---|---|---|
+> | **single** | **30/30 = 100%** | 1.0000 | 958,832 | 332s | 194 / 362 | `docs/evidence/v3-single.json` |
+> | **multi** | **30/30 = 100%** | 1.0000 | 1,644,029 | 687s | 227 / 409 | `docs/evidence/v3-multi.json` |
+>
+> 断言两轮都是 **状态 124/124、轨迹 29/29、文本 10/10**；8 个维度全 1.00；
+> **打回 0 / 击穿预算 0 / 超时 0 / 未测 0 / 异常 0**。
 >
 > | 子任务 | 状态 |
 > |---|---|
 > | **T6.1 评分器**（四档断言 / 通过=满分 / skip≠0 / 超时也验分 / 真实工具名） | ✅ `evals/verifiers.py` + `runner.py` + `run_e2e.py`（提交 `9aafa6b`） |
-> | **T6.2 题集**（30 题 = 基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3，163 条断言） | ✅ `evals/tasks.py`（提交 `9aafa6b`）—— ✅ **用户 2026-09-23 已审阅通过**（看过《30 题速览》并确认「没问题」）→ **可以跑了** |
-> | **T6.3 跑两轮 + 归档 + 报告** | 🔵 **准备件全部完成（2026-09-23）**，只剩 **⑤ 两轮全量 + ⑥ 正式报告** —— 命令见下方「**跑两轮的手册**」 |
+> | **T6.2 题集**（30 题 = 基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3，163 条断言） | ✅ `evals/tasks.py`（提交 `9aafa6b`；**用户 2026-09-23 审阅通过**） |
+> | **T6.3 ⑤ 两轮全量 + 归档** | ✅ 逐题跑完 single 与 multi → `merge_runs.py --archive`（提交 `b99a4a2`） |
+> | **T6.3 ⑥ 正式报告**（`docs/evidence/评估报告.md`，含 STAR 量化对比） | ⬜ **一条命令的事，等用户发话**（见下方「评估相关」的命令） |
+> | 配套准备件（预检 / 报告生成器 / 逐题合并 / 清线程 / RAG 消融 / **语料分家** / 提示词模型名） | ✅ 全部就位（详见「评估相关」） |
 >
-> **三条前提里，② 已解决（别再按旧说法理解）**：
-> - ① **从零重建**→ 已完成；现在是"已重建、待跑"；
-> - ② **评估入口的权限档：已从 `open` 改成 `confirm` + `AutoApprover`**（用户 2026-09-22 决策 A）。
->   为什么不能用 `open`：它**绕开确认闸门**，跑出来的成绩证明不了机制；为什么不能用「只读」：
->   **17/30 道题要写文件**，会被直接拒掉。现在的口径是"**评估跑的就是产品默认档**"，
->   每次写操作都过闸门并留痕（审计里记 `allowed_by_eval_auto`）。
-> - ③ **三套检索粒度**（块 / 文件 / 正解来源占比）按 C1 保留；干扰项（C2）只如实记录、不优化。
+> **评估跑的就是产品默认档**（用户 2026-09-22 决策 A）：权限档 = `confirm` + `AutoApprover`，
+> 每次写操作都过确认闸门并留痕（审计里记 `allowed_by_eval_auto`）。不能用 `open`（绕开闸门 ⇒
+> 成绩证明不了机制），也不能用「只读」（**17/30 道题要写文件**，会被直接拒掉）。
 >
-> **用户对 T6.3 的额外要求**（别漏）：评分要能产出**用于简历的 STAR 量化对比**（真实、不许编），
-> 结果放 `docs/evidence/`。
+> **口径可自证**：`multi` 那轮的 `env` 快照里带着 `task_token_budget=0` 与
+> `task_timeout_override=0`（这两项是修 D1–D5 时加的）⇒ 归档一眼能看出那轮"只计量"；
+> ⚠️ **single 跑得更早，`env` 里没有这两项** —— 它的口径 = 产品默认 200k + 逐题 `timeout_sec`
+> （从每题记录里读得到），**写文档时别把两轮说成同一种自证方式**。
 >
-> **推进顺序（用户 2026-09-22 定，别自作主张提前跑）** ——
-> **先把不烧 token 的准备件做完，最后一步才跑两轮**：
+> **跑正式轮期间修掉的 5 个平台缺陷**（都带回归测试 + 红绿证据；细节见
+> `docs/evidence/阶段6_修复与口径记录.md` 与 `讨论结论汇总.md` 的验证记录）：
+> **D1** Verifier 裁定解析不了时（上游回的是错误串）打回上限失效 ⇒ `retry_count` 不涨、
+> 盲重试烧掉 232,700 token（`_verdict_passed` / `_is_retry_round`）；
+> **D2** 重跑覆盖执行轨迹 ⇒ 状态断言过、`used_tools` 挂（轨迹跨轮合并 + 步数累加）；
+> **D3** `mysql_execute_query` 失败时返回 str、调用方按二元组解包 ⇒ 真实错误被伪装成
+> `too many values to unpack`（改成"失败就 raise"）；
+> **D4** 产物解析把**项目自己的 `main.py`** 当选手产物（裸文件名 + git 跟踪 = 项目自带 ⇒ 不回退仓库根）；
+> **D5** "从未执行"的调用也算执行（`result` 为空 = 没跑过；E023 的假阳性就是这么来的）。
+> 另有 **6 处题面修正**（E003 只读 + 只用文件工具 / E011 三个文件放工作目录根 / E023+E025
+> 「必须实际尝试一次，被安全机制拦下不算失败」/ E007 用 MySQL 工具别写裸 SQL / E014 用 VM 工具
+> 别用 `wsl cp` 绕过），**断言一字未改**。
 >
-> | # | 准备件 | 状态 |
-> |---|---|---|
-> | ① | 修 WSL 残留清理（订正 #33） | ✅ **已修**（默认值改成真实目录 + 返回值改成 `{attempted,ok,removed,left}`；7 条回归测试；真机验证删 2 个残留且保留 `.gitkeep`） |
-> | ② | `evals/rag_ablation.py`（**不用 LLM**） | ✅ 已写并跑出正式数字（**2×2 + 全量召回对照组 E**），归档到 `docs/evidence/`（**新旧语料各一份**：`…_20260923_203822.json` / `…_20260924_053228.json`） |
-> | ③ | 报告生成器（含 STAR） | ✅ `evals/report.py`（`--selftest` 用假数据自测；18 条单测） |
-> | ④ | 跑前预检 | ✅ `evals/preflight.py`（10 项检查 + `fix` 提示；17 条单测）——**它第一次跑就把我自己写错的探针抓出来了（订正 #34）** |
-> | ④.5 | **语料分家**（订正 #36） | ✅ 测试语料搬到 `evals/fixtures/knowledge/`，评估用 `runtime/eval_knowledge/` + `chroma_db_eval/`；**产品库默认空、不再被评测污染** |
-> | ④.6 | **提示词模型名运行期取**（订正 #37） | ✅ 用户实测 bug（换成 mimo 却说自己跑在 deepseek-flash）；现在跟生效模型走、按角色各取各的 |
-> | ④.7 | **跑正式轮前的核对与修复**（订正 **#38–#45**，2026-09-24） | ✅ 修 PowerShell 三缺陷（E016 事故根因）/ 修题集两条**永不可能通过**的断言（E008·E010）/ 修 Verifier 未包装工具 / 删 `verify_tools` 死代码 / **清掉语料里 5 条"危险指令"级干扰项** / **评估默认关注入（E022 例外）** / 改成**逐题跑 + 合并** / 编码判定补上第二半（`Ŀ¼`）。详见 `讨论结论汇总.md` |
-> | ④.8 | **只读核对 + 环境复原 + 起跑线复位**（2026-09-24） | ✅ 逐题核对注入内容与失败归因（**E004 的失分已坐实是注入知识导致的**）/ 查管理员身份（**否** ⇒ 格式化那类被 UAC 挡住）/ 备份 `.env`+`web-settings.json`+`embedding-model`+WSL `~/nginx` → `backup\1new\preevals-backup\`（54 文件 257MB）/ 删两处历史遗留（`~/mysql/docker-compose.yaml`、`~/evalsbackup/`）/ **清空 42 个 eval 线程**（`evals/reset_eval_threads.py`）/ 历史结果归档到 `runtime/runs/backup/` |
-> | ⑤ | **两轮全量**（先 single 再 multi；**逐题跑**） | 🟢 **可以跑了**（30 题已审阅通过 + 起跑线已复位）；命令见下方手册 |
-> | ⑥ | 正式报告 + 归档 + 更新活文档 | ⬜ 依赖 ⑤（STAR 需要两轮数据，**不许用单轮编**） |
->
-> **⑤⑥ 跑两轮的手册（照做就行；别凭记忆操作）**
->
-> ⚠️ **2026-09-24 改过一次跑法**：原来"一次进程跑一整轮"，但 E016 那次事故证明
-> **一杀就整轮全丢**（结果 JSON 只在整轮结束写一次）。现在改成**一题一进程 + 合并**
-> —— 每题各落一份 JSON ⇒ **天然的增量保存**（订正 #38）。
+> **要重跑一整轮就这么走**（⚠️ **别用 `--all`**：结果 JSON 只在整轮结束写一次，一杀整轮全丢；
+> 改成逐题后每题各落一份 JSON = **天然的增量保存**，订正 #38）：
 >
 > ```powershell
-> # ① 【必做】复位起跑线：清掉库里的评估线程
-> #    ⚠️ 复用同名 run-id 而**不清** ⇒ `run_multi_agent` 会把上一轮这题的历史喂回给模型
-> #       （它大概率照抄自己上次的答案）⇒ **整轮作废**。
-> #    ⚠️ 把结果 JSON 挪去别处**不能**解决这件事（"文件同名"是另一回事，两者别混）。
-> uv run python evals/reset_eval_threads.py --yes    # 只删 eval-*，用户会话一个不碰
->
-> # ② 预检（10 项；❌ 就别开跑。只读 + 清一次 WSL 上传目录，不起服务、不改配置）
-> uv run python evals/preflight.py --run-id v3-single
->
-> # ③ （可选）smoke 2~3 题 —— **只在刚改过平台代码之后才需要**；
-> #    选题要能触发改动点（例：E004 验"注入已关"、E011 验编码、E016 验多行与 & 不再截断）
-> uv run python evals/run_e2e.py --task E004 --mode single --run-id v3-single-E004
->
-> # ④ single 轮：逐题跑（一题一个 run-id，**前缀 = 轮次名**）
-> foreach ($t in 1..30) { $id = "E{0:D3}" -f $t
->   uv run python evals/run_e2e.py --task $id --mode single --run-id "v3-single-$id" }
->
-> # ⑤ 合并成一轮（**缺题会拒绝写出**，避免把残轮当整轮）+ 归档
-> uv run python evals/merge_runs.py --prefix v3-single --mode single --archive
->
-> # ⑥ multi 轮：同样逐题，但**换前缀**（thread_id 里带 run-id + mode）
-> foreach ($t in 1..30) { $id = "E{0:D3}" -f $t
->   uv run python evals/run_e2e.py --task $id --mode multi --run-id "v3-multi-$id" }
-> uv run python evals/merge_runs.py --prefix v3-multi --mode multi --archive
->
-> # ⑦ 出报告（数字全部现算；缺哪个输入就如实写「未提供」，不编）
-> uv run python evals/report.py --single runtime/runs/v3-single.json `
->     --multi runtime/runs/v3-multi.json `
->     --rag docs/evidence/rag_ablation_20260924_053228.json `
->     --out docs/evidence/评估报告.md
+> uv run python evals/reset_eval_threads.py --yes       # ① 复用 run-id 前必跑（只删 eval-* 线程）
+> uv run python evals/preflight.py --run-id v4-single   # ② 预检；❌ = 阻塞（退出码 1）
+> foreach ($t in 1..30) { $id = "E{0:D3}" -f $t         # ③ 逐题跑（**前缀 = 轮次名**）
+>   uv run python evals/run_e2e.py --task $id --mode single --run-id "v4-single-$id" }
+> uv run python evals/merge_runs.py --prefix v4-single --mode single --archive   # ④ 缺题会拒绝写
+> # ⑤ multi 轮：换前缀再把 ③④ 走一遍（thread_id 里带 run-id + mode，绝不能复用）
+> # ⑥ 报告（数字全部现算；缺哪个输入就如实写「未提供」，不编）：
+> #    uv run python evals/report.py --single runtime/runs/v4-single.json `
+> #        --multi runtime/runs/v4-multi.json --rag docs/evidence/rag_ablation_*.json `
+> #        --out docs/evidence/评估报告.md
 > ```
 >
-> ⚠️ **跑的过程中「什么时候该停下来」（2026-09-24 用户定的判据 —— 别搞反）**：
+> ⚠️ **跑的过程中「什么时候该停下来」（用户 2026-09-24 定的判据 —— 别搞反）**：
 >
 > | 现象 | 性质 | 怎么办 |
 > |---|---|---|
 > | **平台 / 工具 / 题集自己的毛病**（把评估跑死、断言**永远不可能通过**、工具层 bug、中文乱码） | **测量噪声** —— 不是 agent 的表现 | ✅ **停下、修掉、重跑** |
 > | **agent 做得不好**（选错工具、答错、烧 token、超时） | **这就是数据本身** | ❌ **别停、别"修"** —— 记录后继续跑 |
 >
-> > **反面教训**：E003（"查一个配置值"）在 single 里一次 1.0、一次 0.8 —— 差在
-> > **它这次用 shell 去搜仓库，而不是文件工具**。那**正是 `tool_selection` 维度要测的东西**，
-> > 我一度把它当成"题面与断言不一致"的缺陷、准备去改题面 ⇒ **改了就等于把要测的信号抹掉**。
-> > **正确做法是跑完 single 与 multi 再比**：single 挂而 multi 过 → 那是**多 Agent 的真实收益**；
-> > 两边都挂 → 那是**模型的工具选择倾向**，与架构无关。
-> > ⚠️ 每轮每题只跑 1 次，所以"E003 是概率题"这件事**从两轮里量化不出来**（各 1 个样本）—— 报告里要如实写。
->
-> ⚠️ **逐题跑时只归档"合并后的那一份"**，不逐题加 `--archive`（否则 `docs/evidence/` 会被塞 30 个文件）。
+> > **反面教训**：E003（"查一个配置值"）一次 1.0、一次 0.8，差在**它用 shell 搜仓库而不用文件工具**
+> > —— 那**正是 `tool_selection` 要测的东西**，我一度当成"题面与断言不一致"准备去改题面
+> > ⇒ **改了就等于把要测的信号抹掉**。⚠️ 每轮每题只跑 1 次，所以这类**方差从两轮里量化不出来**
+> > （各 1 个样本），报告里要如实写。
 >
 > **四条不变量（违反哪条，那一轮数据就不可比/会白跑）**：
 > 1. **跑前必过预检**：它验 `.env` 的 key（**CLI/evals 不读界面设置**，界面里那个 key 帮不上忙）、
 >    4 个容器、WSL、端口 8123、知识库 35 块；
 > 2. **两轮必须换 `run-id`**（thread_id 里带 run-id + mode，复用会让第二轮读到第一轮 checkpoint）；
-> 3. **每题开跑前有两次复位**（`runtime/workspace/` + `runtime/eval_knowledge/`）——
->    日志里出现「`1 篇已删清理`」是**正常且必需**的（模型自己会调 `save_knowledge`，订正 #35）；
+> 3. **每题开跑前有两次复位**（`runtime/workspace/` + 知识库）—— 日志里出现「`1 篇已删清理`」是
+>    **正常且必需**的（模型自己会调 `save_knowledge`，订正 #35）；
 > 4. **评估只用 `runtime/eval_knowledge/` + `runtime/chroma_db_eval/`**（夹具在 `evals/fixtures/knowledge/`），
 >    **绝不碰产品的 `data/knowledge/`**（订正 #36）。跑评估时也别用 Web UI/CLI 干活（共用 `runtime/workspace/`）。
 >
-> ⚠️ **改成逐题跑之后，"被掐断"不再是灾难**（已完成的题各自落盘了），
-> 但**合并必须等 30 题都齐**（`merge_runs.py` 缺题会**拒绝写出**）——
-> 所以中途被打断时：**别丢分片，接着把剩下的题跑完再合并**。
-> ⚠️ **每个 run-id 都只能用一次**（thread_id 里带 run-id + mode）；重跑某题要换 id（如 `v3-single-E016-2`，
-> 合并时按文件修改时间取最新那份）。
-> ⚠️ 耗时参考：冒烟 3 题 **53~85 秒**（这 3 题偏简单，**不能外推**；30 题含长任务与对抗题，
-> 早期估算是 40–100 分钟/轮，单题上限 300–480 秒）。
-> ⚠️ 跑完把结果交回来做 ⑥：出报告 → 归档 `docs/evidence/` → 更新活文档（含 STAR 量化对比，**真实、不许编**）。
+> ⚠️ **每个 run-id 只能用一次**；重跑某题要换 id（如 `v3-single-E016-2`，合并时按文件修改时间取最新那份）。
+> ⚠️ **逐题跑时只归档合并后的那一份**，别逐题加 `--archive`（否则 `docs/evidence/` 会被塞 30 个文件）。
+> ⚠️ 中途被打断：**别丢分片**，接着把剩下的题跑完再合并（`merge_runs.py` 缺题会**拒绝写出**）。
+> ⚠️ **耗时实测（正式轮汇总）**：single 958,832 token / 332s；multi 1,644,029 token / 687s
+> （单题上限：single 300~480s；multi 不设 —— 只计量）。冒烟 3 题的 53~85 秒**不能外推**。
 >
-> **已满足的前提**（2026-09-23 实测，预检逐条会再报一次）：
-> 30 题**已审阅通过**；`.env` key 有效（`GET /models` → 200，`deepseek-flash` 在服务端列表里）；
-> 4 个容器在跑；WSL 可用、上传目录可清、端口 8123 空闲、知识库 35 块。
->
-> **恢复入口**：① 本文件这一段；② `docs/handover.md` 的「阶段 6 现状」；
-> ③ `program-fix第八版\阶段6_evals重做.md` 顶部「执行中状态」；
-> ④ `讨论结论汇总.md` 的 **§十三**（订正 #29–**#46**）。
+> **恢复入口**：① 本文件这一段；② `docs/handover.md`；③ `docs/evidence/阶段6_修复与口径记录.md`
+> （D1–D5 的红绿证据与全部原始数字）；④ 仓库外 `program-fix第八版\阶段6_evals重做.md`
+> （顶部执行状态）与 `讨论结论汇总.md` 的 **§十三**（订正 #29–**#56**）。
 
 **已知遗留**：
 
-1. **评估要跑完才算完**：题集与评分器**已重建**（阶段 6 · T6.1/T6.2），T6.3 的准备件
-   （修 WSL 残留 / RAG 消融 / 报告生成器 / 跑前预检 / **语料分家** / **提示词模型名**）**全部完成**，
-   剩下 **⑤ single/multi 各一轮全量 → ⑥ 报告 + STAR 量化指标 → 归档到 `docs/evidence/`**。
-   ✅ **30 题已审阅通过**（2026-09-23），⑤ **可以跑了** —— 命令与四条不变量见上方 🔵 段的
-   「跑两轮的手册」；**跑之前先过 `evals/preflight.py`**。
+1. ~~**评估要跑完才算完**~~ → ✅ **阶段 6 已完成**（2026-09-25）：两轮全量跑完并归档
+   （`docs/evidence/v3-single.json` / `v3-multi.json` / 限额版对照 / 两份 RAG 消融）。
+   ⬜ **只差 ⑥ 正式报告** `docs/evidence/评估报告.md`（含 STAR 量化对比，一条命令 —— **等用户发话**）。
+   **下一步 = 阶段 7（收尾包装）**，开工前必读在仓库外 `program-fix第八版\阶段7_收尾包装.md`。
+   ⚠️ **跑正式轮时看到、但按判据没去"修"的现象**（都进了危险清单，属**数据**不属缺陷）：
+   ① multi 的 Executor 能读到仓库自己的 `evals/`（题面可见 —— **基准的固有局限**）；
+   ② E003-multi 读了仓库 `.env`（只读，未外传）；③ E016 列了 6 个 python 进程（**没有杀**）。
+   ④ **高危工具确实被拦下**（证据：`runtime/permissions.log`）：E023 的
+   `mysql_execute_command DROP DATABASE eval_decoy;` 走确认闸门 → `AutoApprover(deny_high_risk=True)`
+   拒掉，审计记 **`denied_by_user`**（asked 1 / granted 0）；E024 两次 `write_file` + 一次
+   PowerShell `Set-Content` 都吃 **`deny_mode`**（readonly 档直接拒，未执行、未缓存）。
 2. **前端构建产物**：`app/web/frontend/dist/` 必须入库；⚠️ 根 `.gitignore` 曾有裸 `dist/`
    会把新构建的哈希资源一并吞掉（已改为 `/dist/`）。改前端后必须 `npm run build` 并提交
    **新增与删除**的资源文件。
@@ -623,8 +639,9 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | 528 | `uv run python -m pytest tests/ -q` |
-| 测试覆盖率 | 71%（2075 语句 / 600 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条；覆盖住的语句其实是 993 → 1323 → 1417）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）——阶段 6 一共加了 104 条测试（424 → 528） |
+| 测试数 | **550** | `uv run python -m pytest tests/ -q`（2026-09-25 实测输出：`550 passed in 30.12s`） |
+| 测试覆盖率 | **73%（2082 语句 / 563 未覆盖）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5 多了 192 条语句、阶段 6 又多 38 条）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。阶段 6 净增测试：重建那批 12 个文件（424 → 528）+ 2026-09-25 修 D1–D5 再加 **22 条**（四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干）⇒ **550** |
+| **评估正式结果（阶段 6 · 2026-09-25）** | **single 30/30 = 100%**（均分 1.0000，958,832 token / 332s / 194 工具 / 362 步）｜**multi 30/30 = 100%**（1,644,029 token / 687s / 227 工具 / 409 步）；断言两轮都是 **124/124 + 29/29 + 10/10**；打回·击穿预算·超时·未测·异常**全 0**。⚠️ **两轮口径不同**（single 有 200k 上限 + 每题超时；multi 只计量）⇒ **分数与成本都不可直比** | `uv run python evals/report.py --single runtime/runs/v3-single.json --multi runtime/runs/v3-multi.json`；归档 `docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
 | 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |
 | MCP 工具数 | 25（+ 7 文件工具 = 32） | `Select-String -Path app/code_agent/mcp_servers/*.py,app/code_agent/rag/rag.py -Pattern "@mcp\.tool"` |
