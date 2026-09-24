@@ -514,3 +514,33 @@ def test_run_single_task_signature_has_tools_param():
 
 def test_paths_are_absolute_in_module():
     assert Path(R.WORKSPACE_DIR).is_absolute()
+
+
+def test_effective_timeout_honours_override(monkeypatch):
+    """`EVAL_TASK_TIMEOUT` 覆盖每题的墙钟上限；`0` = **不设超时（只计量）**。
+
+    背景（2026-09-24）：要回答"multi 到底能不能做完这道题"，就不能让人为闸门先把答案掐掉
+    —— multi 的 E015 当初就是被 token 上限终止的。预算与超时统一成"`<=0` = 只计量"，
+    并且**两个值都写进结果快照**，让归档数据能自证口径。
+    """
+    monkeypatch.setattr(R, "EVAL_TIMEOUT_OVERRIDE", None)
+    assert R.effective_timeout(420) == 420  # 没设覆盖 → 用题目自己的值
+
+    monkeypatch.setattr(R, "EVAL_TIMEOUT_OVERRIDE", 0)
+    assert R.effective_timeout(420) == 0  # 0 = 不限制
+
+    monkeypatch.setattr(R, "EVAL_TIMEOUT_OVERRIDE", 1800)
+    assert R.effective_timeout(420) == 1800  # 覆盖值优先
+
+    monkeypatch.setattr(R, "EVAL_TIMEOUT_OVERRIDE", None)
+    assert R.effective_timeout(0) == 0  # 题目自己写 0 也等于不设超时
+
+
+def test_uncapped_round_is_recorded_in_the_snapshot(monkeypatch):
+    """口径必须落进快照：归档的结果 JSON 要能自证"这一轮关没关上限"。"""
+    monkeypatch.setattr(R, "EVAL_TIMEOUT_OVERRIDE", 0)
+
+    snap = R.prepare_run(mysql_databases=(), wsl_uploads=None)
+
+    assert snap["task_timeout_override"] == 0
+    assert "task_token_budget" in snap

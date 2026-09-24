@@ -89,20 +89,28 @@ def get_connection(db, *, readonly: bool = False):
 
 
 def execute_query(command, database=None, params=None, commit=False, readonly=False):
+    """执行 SQL。**成功返回 `(rows, rowcount)` 二元组；失败一律抛异常**。
+
+    ⚠️ **不要改回"连接失败就 return 一个字符串"**（2026-09-24 修 D3，实测踩过两次）：
+    所有调用方都写成 `result, rowcount = execute_query(...)`，于是拿到字符串时会在**解包**处炸掉，
+    抛出 `ValueError: too many values to unpack (expected 2)`，
+    被外层包成 `query tables error: …` —— **真正的 `mysql connection error: …` 被彻底吃掉**，
+    模型只能看到一句莫名其妙的解包错误（E007 的 single 轮笔记、E009 的 multi 轮都撞上过，
+    后者为此反复自造诊断脚本、烧掉 214k token 仍没产出产物）。
+    """
     try:
         connection = get_connection(database, readonly=readonly)
         if not isinstance(connection, pymysql.Connection):
-            return connection
-        else:
-            with connection.cursor(pymysql.cursors.DictCursor) as cursor:
-                cursor.execute(command, params)
+            raise RuntimeError(str(connection))
+        with connection.cursor(pymysql.cursors.DictCursor) as cursor:
+            cursor.execute(command, params)
 
-                result = cursor.fetchall()
+            result = cursor.fetchall()
 
-                if commit:
-                    connection.commit()
+            if commit:
+                connection.commit()
 
-                return result, cursor.rowcount
+            return result, cursor.rowcount
     except Exception:
         raise
 

@@ -263,6 +263,32 @@ def _trace_to_text(trace: list[dict]) -> str:
     return "\n".join(lines) if lines else "（无工具调用）"
 
 
+def _verdict_passed(verdict_text: str) -> bool:
+    """裁定是否**通过** —— 这是全流程**唯一**的判据（2026-09-24 修 D1，别改回字符串猜法）。
+
+    ⚠️ **为什么不能用 `"FAIL" in verdict.upper()`**：Verifier 的输出**不保证是合法 JSON**。
+    上游抽风时会直接返回 `Sorry, need more steps to process this request.` 这类错误串（实测踩到），
+    那时字符串里既没有 `PASS` 也没有 `FAIL` ⇒ 旧写法判 `is_retry=False` ⇒
+    `retry_count` **永不增长** ⇒ `decide_after_verify` 里那条「最多打回 MAX_RETRY 次」**永不生效**
+    ⇒ 只能等 token 预算被烧穿（实测 E007：Executor 跑 3 次 / 232,700 token / 击穿 200k 预算，
+    而且因为 `is_retry=False`，**重跑时连"上一轮为什么没通过"都没告诉它** ⇒ 盲重试）。
+
+    语义：**只有明确解析出 `{"verdict": "PASS"}` 才算通过**；其余（含空、含错误串）一律算未通过。
+    """
+    parsed = _extract_json(verdict_text or "")
+    return str((parsed or {}).get("verdict", "")).upper() == "PASS"
+
+
+def _is_retry_round(prev_verdict: str) -> bool:
+    """本次 Executor 是不是**重跑**（上一轮裁定存在且未通过）。
+
+    ⚠️ 它就是 `retry_count` 的自增判据，而 `retry_count` 是「最多打回 MAX_RETRY 次」**唯一**的终止依据
+    —— 所以这里**绝不能**用 `"FAIL" in prev_verdict` 那种字符串猜法（修 D1，见 `_verdict_passed`）。
+    """
+    text = str(prev_verdict or "")
+    return bool(text.strip()) and not _verdict_passed(text)
+
+
 async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     """复用 create_react_agent 按计划执行。
 
@@ -302,7 +328,8 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
 
     plan_steps = _plan_to_text(state.get("plan", ""))
     prev_verdict = str(state.get("verdict") or "")
-    is_retry = "FAIL" in prev_verdict.upper()  # 上一轮验收失败 → 本次是重跑
+    # 上一轮**没通过**（含"裁定无法解析"）→ 本次是重跑。判据统一走 `_is_retry_round`（修 D1）。
+    is_retry = _is_retry_round(prev_verdict)
     # 自动注入的知识（T4.4 ②）：只在任务语义上拼一次，重跑时也保留
     knowledge = str(state.get("knowledge") or "")
     knowledge_prefix = f"{knowledge}\n\n" if knowledge else ""
@@ -322,6 +349,9 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
 
     last_content = ""
     trace: list[dict] = []
+    # ⚠️ **本轮之前已经发生过的执行轨迹**（修 D2）：被打回重跑时 state 里已经有上一轮的 trace，
+    #    这里先取出来，最后和本轮合并 —— 否则记录里只剩最后一次（见 D2 注释）。
+    prior_trace = list(state.get("executor_trace_list") or [])
     tokens = 0
     messages: list = []
     step_count = 0
@@ -403,10 +433,13 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
                 "如需继续，请缩小任务范围（例如只读需要的文件片段）后重试。"
             ),
             "budget_exceeded": True,
-            "executor_trace": _trace_to_text(trace),
-            "executor_trace_list": trace,
+            # ⚠️ **跨轮累积**（修 D2）：重跑被预算掐断时，若只返回本轮 trace，
+            #    前几轮真正干活的轨迹就被**覆盖**了 —— 实测 E007 因此"表建好了、3 行数据也插了，
+            #    但轨迹断言只看见 mysql_create_database 一条" ⇒ 计分假阴性。
+            "executor_trace": _trace_to_text(prior_trace + trace),
+            "executor_trace_list": prior_trace + trace,
             "executor_messages": messages,
-            "step_count": step_count,
+            "step_count": state.get("step_count", 0) + step_count,
             "token_usage": spent_before + tokens,
             "pruned_messages": state.get("pruned_messages", 0) + pruned,
         }
@@ -416,10 +449,12 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     )
     return {
         "executor_result": last_content or "（Executor 未产出最终回复）",
-        "executor_trace": _trace_to_text(trace),
-        "executor_trace_list": trace,
+        # ⚠️ **跨轮累积**（修 D2）：同一次任务的多次执行（被打回重跑）应当**合并**轨迹，
+        #    否则记录里只剩最后一次 —— 会漏掉前面几轮真正完成的动作。
+        "executor_trace": _trace_to_text(prior_trace + trace),
+        "executor_trace_list": prior_trace + trace,
         "executor_messages": messages,
-        "step_count": step_count,
+        "step_count": state.get("step_count", 0) + step_count,
         "retry_count": state.get("retry_count", 0) + (1 if is_retry else 0),
         "token_usage": spent_before + tokens,
         "pruned_messages": state.get("pruned_messages", 0) + pruned,
@@ -484,9 +519,7 @@ def decide_after_verify(state: AgentState) -> Literal["executor", "end"]:
     """
     if state.get("budget_exceeded"):
         return "end"
-    parsed = _extract_json(state["verdict"])
-    verdict = (parsed or {}).get("verdict", "")
-    if str(verdict).upper() == "PASS":
+    if _verdict_passed(state.get("verdict", "")):
         return "end"
     if state["retry_count"] >= MAX_RETRY:
         return "end"
@@ -757,9 +790,12 @@ async def run_multi_agent(
         )
 
         final_response = state["executor_result"]
-        if "FAIL" in str(state.get("verdict", "")).upper():
-            parsed = _extract_json(state["verdict"])
-            reason = (parsed or {}).get("reason", state["verdict"])
+        verdict_text = str(state.get("verdict") or "")
+        if verdict_text.strip() and not _verdict_passed(verdict_text):
+            # ⚠️ 判据走 `_verdict_passed`（修 D1）：裁定**无法解析**时也算"未通过"，
+            #    否则上游返回错误串时会被当成"没失败"，回复里既不提示、也照样算成功。
+            parsed = _extract_json(verdict_text)
+            reason = (parsed or {}).get("reason", verdict_text)
             final_response = (
                 f"任务执行完成，但验收未通过（已重试 {state['retry_count']} 次）：\n"
                 f"验收意见：{reason}\n\n执行结果：\n{state['executor_result']}"
@@ -784,7 +820,10 @@ async def run_multi_agent(
     #    不走 MCP 工具（一是对齐 memory.py 的 docstring，二是绕开订正 #27 那个死锁）。
     #    它也不再走三档权限的人工确认（用户决策 B），但仍受"只读档不写"约束。
     deposited: list[dict] = []
-    succeeded = "FAIL" not in str(state.get("verdict", "")).upper() and not state.get(
+    # ⚠️ 判据走 `_verdict_passed`（修 D1）：**没有裁定**（single / auto-simple 路径）算成功（保持原行为），
+    #    **有裁定就必须是 PASS** 才算成功 —— 裁定无法解析（上游错误串）时**不该沉淀经验**。
+    verdict_text = str(state.get("verdict") or "")
+    succeeded = (not verdict_text.strip() or _verdict_passed(verdict_text)) and not state.get(
         "budget_exceeded"
     )
     if succeeded:

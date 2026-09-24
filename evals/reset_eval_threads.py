@@ -43,6 +43,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# ⚠️ Windows 控制台默认是 GBK，而本脚本要打 ✅ / 中文 —— **不统一成 UTF-8 会直接崩**。
+# 2026-09-24 实测踩到：删完并 VACUUM 之后**崩在最后一行**（`UnicodeEncodeError: 'gbk' codec
+# can't encode character '\u2705'`）⇒ 看起来像"清理失败了"，实际早就成功了 —— 典型"静默误导"。
+# 与 `scripts/probe_mcp_server.py` / `agent/code_agent.py` 用同一种做法；
+# 多加 `errors="replace"`：控制台认不了的字降级成 `?`，绝不因为打印而改变退出码。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 from app.code_agent.config import RUNTIME_DIR  # noqa: E402
 
 DB_PATH = RUNTIME_DIR / "checkpoints.db"

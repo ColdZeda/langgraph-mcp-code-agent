@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import sys
 import time
@@ -36,6 +37,7 @@ from app.code_agent.config import (
     MYSQL_DATABASE,
     PERMISSIONS_LOG,
     RUNS_DIR,
+    TASK_TOKEN_BUDGET,
     VM_UPLOADS_DIR,
     WORKSPACE_DIR,
 )
@@ -49,6 +51,27 @@ from evals.env import chroma_dir
 
 #: 单题默认墙钟上限（秒）。超时不等于 0 分 —— 判定器照跑，产物照样验。
 DEFAULT_TASK_TIMEOUT = 300
+
+#: 整轮的墙钟上限**覆盖值**（秒）；`None` = 用每题的 `timeout_sec`。
+#: `0`（或任何 <=0）= **不设超时，只计量**（与任务级 token 预算的 `<=0 = 不限制` 对称）。
+#:
+#: ⚠️ 为什么要这个开关（2026-09-24）：要回答"multi 到底能不能做完这题"，
+#: 就不能让人为的闸门（token 上限 / 墙钟上限）先把答案掐掉。当时 multi 的 E015
+#: 就是被 token 上限终止的；改成"只计量"之后才测出它其实 60s / 114k token 就能做对。
+#: 用环境变量而不是改 30 个 TaskSpec：`EVAL_TASK_TIMEOUT=0` 一行就够，且**会写进结果快照**（可自证口径）。
+EVAL_TIMEOUT_OVERRIDE: int | None = (
+    int(os.environ["EVAL_TASK_TIMEOUT"])
+    if os.environ.get("EVAL_TASK_TIMEOUT", "").strip()
+    else None
+)
+
+
+def effective_timeout(timeout_sec: int) -> int:
+    """算这道题**实际生效**的墙钟上限：整轮覆盖值优先；`<=0` 一律表示"不设超时"。"""
+    if EVAL_TIMEOUT_OVERRIDE is not None:
+        return EVAL_TIMEOUT_OVERRIDE
+    return timeout_sec
+
 
 #: 判定器不参与"通过"，只记分数
 __all__ = [
@@ -292,6 +315,12 @@ def prepare_run(
     snapshot["wsl_available"] = V.wsl_available()[0]
     snapshot["chroma_dir"] = str(chroma_dir())
     snapshot["database"] = MYSQL_DATABASE
+    # 任务级 token 硬上限的**生效值**（`<=0` = 只计量不拦截，见 `context.over_task_budget`）。
+    # ⚠️ 必须写进快照：2026-09-24 的 multi 轮就是**关掉上限**跑的（为了区分"预算掐断"与"agent 跑偏"），
+    #    归档的结果 JSON 得能**自证**这件事 —— 否则读数据的人无从判断那轮的口径。
+    snapshot["task_token_budget"] = TASK_TOKEN_BUDGET
+    # 墙钟上限的**生效策略**：`None` = 每题用自己的 timeout_sec；`0` = 不设超时只计量。
+    snapshot["task_timeout_override"] = EVAL_TIMEOUT_OVERRIDE
     return snapshot
 
 
@@ -374,7 +403,13 @@ async def run_one_task(
         auto_inject=spec.inject_knowledge,
     )
     try:
-        result = await asyncio.wait_for(call, timeout=spec.timeout_sec)
+        timeout = effective_timeout(spec.timeout_sec)
+        if timeout > 0:
+            result = await asyncio.wait_for(call, timeout=timeout)
+        else:
+            # 不设超时（只计量）：`EVAL_TASK_TIMEOUT=0` 或题目自己的 timeout_sec <= 0。
+            # 内层仍有护栏：Executor 的 ReAct `recursion_limit=100` + 节点级 token 剪枝。
+            result = await call
     except TimeoutError:
         # ⚠️ 超时不等于"什么都没发生"：产物可能已经写出来了。
         #    旧口径 (run_e2e.py:219) 只在 status == "completed" 时才跑判定器 →
@@ -383,7 +418,7 @@ async def run_one_task(
         status = "timeout"
         result = {
             "ok": False,
-            "error": f"TimeoutError: 超过 {spec.timeout_sec}s",
+            "error": f"TimeoutError: 超过 {effective_timeout(spec.timeout_sec)}s",
             "response": "",
             "tool_trace": [],
             "conversation": [],
@@ -439,7 +474,7 @@ async def run_one_task(
         "difficulty": spec.difficulty,
         "mode": mode,
         "status": status,
-        "timeout_sec": spec.timeout_sec,
+        "timeout_sec": effective_timeout(spec.timeout_sec),
         "timeout_hit": timeout_hit,
         "ok": bool(result.get("ok")),
         "error": str(result.get("error") or ""),
