@@ -376,7 +376,7 @@ async def run_single_task(
         # ⚠️ 必须传 `wrapped`（包装过的），**绝不能传 `tools`（原始列表）**。
         #    阶段 4 就把「三条入口都要接包装层」写进了文档（CLI / Web / evals），
         #    但阶段 6 重写本函数时，新加的 `build_verifier_agent(wrapped)` 上面**残留了一句
-        #    改造前基线（8d0ab78）里的 `build_verifier_agent(tools)`** —— 后者把结果覆盖了回去
+        #    改造前基线（b251f68）里的 `build_verifier_agent(tools)`** —— 后者把结果覆盖了回去
         #    ⇒ Verifier 走的是**未包装的工具**：权限判定 / 结果外置 / 缓存全被绕过。
         #    （实际安全影响有限：Verifier 只拿只读工具，而只读工具在任何档位都是 ALLOW；
         #      但它违反了那条不变式，而且结果外置失效会让 Verifier 读到超长内容。）

@@ -1,7 +1,7 @@
 # Code Agent
 
 > **给谁看**：第一次接触这个项目的人（面试官 / 同行 / 想跑起来的人）。
-> 想了解内部约定与已知坑 → [`AGENTS.md`](AGENTS.md)；接手人的上下文与待办 → [`docs/handover.md`](docs/handover.md)。
+> 想了解内部约定与已知坑 → [`AGENTS.md`](AGENTS.md)。
 
 基于 **LangGraph + MCP** 的本地多 Agent 编程助手（Python 3.13）：**Planner → Executor → Verifier** 三阶段 StateGraph，
 通过 MCP stdio 子进程统一编排 6 类工具，提供**命令行**与**本地 Web UI** 两种使用方式。
@@ -477,7 +477,7 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
   `run_vm_shell_command` 根本不是 MCP 工具（`vm.py` 里它是普通函数，没挂 `@mcp.tool`）
   → 走 WSL 的路径它永远看不见，**恒定给满分**。
 - 留着一把坏尺子，只会让后续开发（包括 AI 助手）继续拿它量东西 —— 所以删掉，而不是标注。
-- 备份：`E:\agentstart\work\backup\1new\backup\evals\`；也能从 git 历史取回（`git show 8d0ab78:evals/tasks.py`）。
+- 备份：`E:\agentstart\work\backup\1new\backup\evals\`；也能从 git 历史取回（`git show b251f68:evals/tasks.py`）。
 
 **新尺子长什么样**（`evals/`，11 个文件 + 一个夹具目录）：
 
@@ -535,7 +535,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 ### 改造前的存档数字（**仅供说明「改造前长什么样」**）
 
 > 存档文件已移出仓库（备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`，
-> 也能用 `git show 1ea2687^:docs/evidence/<文件名>` 从历史取回）。
+> 也能用 `git show 97041aa^:docs/evidence/<文件名>` 从历史取回）。
 > **下表不是当前架构的成绩**；阶段 6 已用新评分器重建题集并**跑完正式两轮**，
 > **新结果已归档进 `docs/evidence/`**（见上一节「评估体系」）。
 
@@ -614,7 +614,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 │                                  #   / env.py(语料隔离) + fixtures/knowledge/(7 篇测试语料)
 ├── tests/                         # 550 个测试（单元 + 工具级 + 评估体系自检）
 ├── docs/
-│   └── handover.md                # 交接文档（evidence/ 从阶段 6 起重新只追加；archive/ 仍空）
+│   └── evidence/                  # 评估与修复存档（只追加：两轮结果 / RAG 消融 / 修复账本）+ archive/（空）
 ├── AGENTS.md                      # AI 助手约定与已知坑
 ├── docker-compose.yml             # mysql / searxng / redis 三个依赖服务（nginx 由 WSL 侧 compose 管）
 └── .gitee.yml                     # CI（ruff check → ruff format --check → pytest）
@@ -631,9 +631,9 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 | 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
 | **评估结果（正式两轮，2026-09-25）** | **single 30/30**、**multi 30/30**（平均分均 **1.0000**；两轮 163 条断言全过、8 维度全 1.00） | 结果文件：`docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
 | 多 Agent 成本画像（同上两轮） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；其中 **Verifier 中位 10,988 token/题 = 25%**；**打回 0 次** | 同上两份 JSON 的 `totals` / `node_timings` |
-| 测试覆盖率 | **73%**（2082 语句 / 563 未覆盖） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头是"要真环境才能跑到"的模块（连真库 / 起子进程 / 要真人输入）→ 集成测试挂在阶段 7 做 |
+| 测试覆盖率 | **73%（依赖容器在跑时）/ 74%（容器全停）** —— 2082 语句，未覆盖 563 / 545 | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **数字随环境波动**（那几条"要真环境"的测试走的分支不同）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头正是这些要连真库 / 起子进程 / 要真人输入的模块 → 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 6 重测**；阶段 4 自测的临时数是 13.2ms → 81ms） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
-| 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 1ea2687^:docs/evidence/<文件名>` |
+| 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 97041aa^:docs/evidence/<文件名>` |
 
 ## License
 

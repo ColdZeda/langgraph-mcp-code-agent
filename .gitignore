@@ -25,6 +25,11 @@ __pycache__/
 runtime/*
 !runtime/.gitkeep
 
+# 开发者内部交接文档：2026-09-27 起移出仓库（连历史一起剔除），放仓库外：
+#   E:\agentstart\上班\work-content\program-fix第八版\handover_交接文档.md
+# 这一条是防它被误加回来（公开仓库里不该有内部交接文档）
+docs/handover.md
+
 # Logs/cache
 *.log
 node_modules/
