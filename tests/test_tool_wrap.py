@@ -416,8 +416,8 @@ async def test_eval_entry_verifier_gets_wrapped_tools(externalize_into, monkeypa
     """**评估入口给 Verifier 的工具也必须是包装过的**（第三条入口的补漏）。
 
     来历（已用 git 核实，不是猜的）：
-      - `build_verifier_agent(tools)` 来自**改造前基线** `b251f68`；
-      - 阶段 6（`49d7793`）重写 `run_single_task` 时，在前面加了一句
+      - `build_verifier_agent(tools)` 来自**改造前基线** `f2f3bbb`；
+      - 阶段 6（`946e04c`）重写 `run_single_task` 时，在前面加了一句
         `build_verifier_agent(wrapped)`，**却没删掉旧的那句** —— 后者把结果覆盖了回去；
       - ⇒ Verifier 拿到的是**未包装的原始工具**：权限判定 / 结果外置 / 缓存全部绕过。
     实际安全影响有限（Verifier 只拿只读工具，只读工具在任何档位都是 ALLOW），

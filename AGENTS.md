@@ -174,7 +174,7 @@ tests/                           550 个测试（config / prompts / mysql_safe_i
   的目录方案遗留 —— 它每次启动都被 mkdir 回来，却和真正在用的 `runtime/checkpoints.db`
   只差一个 s。**2026-09-22 已按用户决定彻底移除**（常量 + mkdir + 那条断言 + 目录本身），
   并留了一条"不存在"的断言防它被加回来（`tests/test_config.py::test_legacy_checkpoint_dir_is_gone`）。
-- **改造前的历史不在 `master` 上**：`master` 的**地基** `b251f68`（"init: 导入改造前基线"）是**单提交重建**的，
+- **改造前的历史不在 `master` 上**：`master` 的**地基** `f2f3bbb`（"init: 导入改造前基线"）是**单提交重建**的，
   它下面没有历史；改造期的提交都直接追加在它上面（`git log --oneline` 看得到）。
   要找**改造前**的东西必须去 `refs/remotes/raw-origin/*`（旧仓库 master / phase1..phase5）→ 考古要用 **`git log --all -S '...'`**。
 - **依赖服务怎么起**（阶段 2 统一后，实测）：
@@ -389,7 +389,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - `runtime/runs/` 被 gitignore；**正式结果才复制到 `docs/evidence/`** 纳入版本控制。
   ⚠️ 2026-09 用户把**改造前**那批旧存档（旧模型 + 软口径）**移出了仓库**（所以那批不在 `docs/evidence/` 里），
   备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`（13 个文件），
-  git 历史里也有（如 `git show 97041aa^:docs/evidence/baseline-final.json` —— `97041aa` 是**删除**这批存档的提交，
+  git 历史里也有（如 `git show 73dd4e6^:docs/evidence/baseline-final.json` —— `73dd4e6` 是**删除**这批存档的提交，
   所以要用它的父提交 `^`；拿删除之后的提交去 show 只会得到 `path ... does not exist in ...`）。
   **阶段 6 起 `docs/evidence/` 重新只追加**：已入库 `rag_ablation_20260923_203822.json`（旧语料）
   + `rag_ablation_20260924_053228.json`（2026-09-24 语料修订后）—— **两份都留，历史可追溯**，
@@ -398,7 +398,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   ① `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 部分分 → 偏乐观；
   ② 安全题的判定器要按 **MCP 工具名 + 真实参数名**写（`make_dir_in_vm` 的参数叫 `dir_path`，
   没有 `command`）—— 否则判定器看不见东西还恒给满分。
-  另外旧题集**没有备份就找不到的**东西都在 git 里：`git show b251f68:evals/tasks.py`；
+  另外旧题集**没有备份就找不到的**东西都在 git 里：`git show f2f3bbb:evals/tasks.py`；
   文件级备份在 `E:\agentstart\work\backup\1new\backup\evals\`。
 - **MCP 工具没有"需要关闭的 client"**（实测，langchain-mcp-adapters 0.1.1）：
   `MultiServerMCPClient.get_tools()` 的 docstring 明写
@@ -466,16 +466,30 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - `docs/` 结构（2026-08-31 整理后）：`evidence/`（存档，只追加）+ `archive/`（历史素材，当前为空）。
   ⚠️ **`handover.md` 已于 2026-09-27 移出仓库**（理由是它是开发者内部交接文档，不该进公开仓库）：
   现在在仓库外 `E:\agentstart\上班\work-content\program-fix第八版\handover_交接文档.md` —— **今后只在那里更新**。
-- ⚠️ **git 历史已于 2026-09-27 用 `git filter-repo` 重写**（公开前脱敏）。从**所有提交**里剔除了两条路径：
-  `docs/archive/interview/`（旧简历，含手机号/邮箱）与 `docs/handover.md`。连带后果，**读旧文档时要记住**：
-  1. **旧 hash 全部失效**（例：地基提交 `8d0ab78` 现在是 **`b251f68`**）；完整「旧 → 新」映射表在
-     `E:\agentstart\work\backup\1new\prepublic-backup\commit-map.tsv`（重写前的整份备份也在同目录）；
+- ⚠️ **git 历史已于 2026-09-27 用 `git filter-repo` 重写**（公开前脱敏），**分两次跑**，剔除的路径共 4 条：
+  `docs/archive/interview/`（归档后的旧简历）、`docs/handover.md`（第一次）、
+  **`docs/interview/`（归档改名前的同一批旧简历 —— 第一次漏了它）**、`docs/resume-star.md`（第二次）。
+  🔴 **为什么会漏**：第一次是按**路径串**核对的（拿 `docs/archive/interview` 去查对象清单），
+  而同一批简历在改名前的路径叫 `docs/interview/` ⇒ 地基提交 `f2f3bbb` 的树里**还留着 8 个简历文件**，
+  `git show f2f3bbb:docs/interview/resume.md` 能直接读出手机号与邮箱。
+  第二次改用**原值核对**才查出来：把简历里的手机号/邮箱原文取出，再
+  `git grep -F -e <手机号> -e <邮箱> $(git rev-list --all)`（**跨全部 150 个提交**，0.25 秒跑完）——
+  **结论：核对脱敏不能只对路径，要对"值"**。
+  连带后果，**读旧文档时要记住**：
+  1. **旧 hash 全部失效**（例：地基提交 `8d0ab78` 现在是 **`f2f3bbb`** —— 本段凡"例"里的旧 hash 都只作对照，
+     拿去 `git show` 只会报找不到）；
+     **累积**（原始 → 最终）映射表在 `E:\agentstart\work\backup\1new\prepublic-backup\commit-map-pass2.tsv`，
+     第一次那份 `commit-map-pass1.tsv`（原始 → 第一次结果）也留着；重写前的整份备份（bundle + mirror）同目录；
      本文件与 `docs/evidence/` 里引用过的 hash **已按映射表批量更新**；
-  2. `origin` remote 曾被 filter-repo 摘掉 → 已重新 `git remote add`；
+  2. `origin` remote 两次都被 filter-repo 摘掉 → 已重新 `git remote add`；
   3. `refs/remotes/raw-origin/*` 也被重写（hash 变了）：**改造前考古仍可用**（`git log --all -S '...'`），
      只是对不上旧记录里的 hash；
-  4. 有一个只改了 handover 的提交被剪掉（`d143202`，映射表里记作全 `0`）—— **无信息损失**
-     （它的内容已并入仓库外那份 handover，且阶段 6 手册另有记录）。
+  4. **一共 8 个提交被剪掉**（映射表里记作全 `0`）—— 全是"只改了那 4 条路径"的提交：
+     master 线上只有 1 个（`d143202`，只改 handover；内容已并入仓库外那份 handover，**无信息损失**），
+     另外 7 个都在 `raw-origin` 那条考古线上（**5 个只改旧简历 / STAR 稿，2 个只改 handover**）——
+     ⚠️ 那 7 个的**提交历史**没了，但**改的内容本身**（7 份简历 + STAR 稿）在重写前的备份里都还在，
+     且磁盘上另有一份：`backup\1new\backup\old-data\docs\archive\interview\`（7 个文件，
+     缺 `project-evolution.md`，那份只在备份的 git 里）。
   改造前那批旧存档**内容已被移出仓库**（用户决定，备份在 `backup/1new/backup/old-data/docs/`），
   `archive/` 仍是空目录；**`evidence/` 从阶段 6 起重新往里写**（只追加）——**已入库 6 份**：
   ① `v3-single.json`、② `v3-multi.json`（阶段 6 正式两轮，**只计量口径**）；
@@ -499,13 +513,13 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 **下一步 = 阶段 7（收尾包装）**，开工前必读在仓库外 `program-fix第八版\阶段7_收尾包装.md`。
 后续阶段按顺序执行，**每阶段做完停下汇报 + 提交推送 + 走完「阶段收尾清单」**。
 
-> ✅ **阶段 5（HITL 与安全加固）已完成并推送** —— 最终提交 **`313d404`**（前置清理 `1dbf93f`）。
+> ✅ **阶段 5（HITL 与安全加固）已完成并推送** —— 最终提交 **`c73ac99`**（前置清理 `f8fbdc2`）。
 > 开工依据曾是 `阶段5_开工包.md`（唯一入口）+ `阶段5_权限档位候选表.md` + `讨论结论汇总.md` 的 §11.3。
 > **下面是本轮做完的清单（留档，别当成"还没做"）**：
 >
 > | 子任务 | 状态 |
 > |---|---|
-> | 前置：删除旧口径 30 题集 | ✅ `1dbf93f` |
+> | 前置：删除旧口径 30 题集 | ✅ `f8fbdc2` |
 > | 前置：修内容级黑名单漏拦（订正 #24） | ✅ `vm.py` / `powershell_tools.py` 模式字符串 + `tests/test_dangerous_commands.py`（87 条） |
 > | **T5.1** 三档权限档位表 | ✅ `app/code_agent/security/permissions.py`（32 工具：只读 14 / 写执行 18 / 高危 6） |
 > | **T5.2** `tool_wrap._process` 拦截（**必须在缓存查询之前**） | ✅ + `tests/test_permissions.py`（44 条） |
@@ -523,7 +537,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > Web 端确认协议：出站 `permission_request`（含 `requestId` / `tool` / `args` / `highRisk` / `note` / `timeoutSec`），
 > 入站 `permission_response`（`requestId` / `allow` / `alwaysAllow`）+ `set_permission_mode`。
 
-> ✅ **阶段 6（evals 重建）已完成并推送** —— 收尾提交 **`ca54435`**（修 5 个平台缺陷 + 6 处题面）。
+> ✅ **阶段 6（evals 重建）已完成并推送** —— 收尾提交 **`4cd1574`**（修 5 个平台缺陷 + 6 处题面）。
 > 压缩/换会话后**从这里恢复，别凭记忆上手**。
 >
 > **正式两轮都跑完并归档（2026-09-25）**：
@@ -538,9 +552,9 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 >
 > | 子任务 | 状态 |
 > |---|---|
-> | **T6.1 评分器**（四档断言 / 通过=满分 / skip≠0 / 超时也验分 / 真实工具名） | ✅ `evals/verifiers.py` + `runner.py` + `run_e2e.py`（提交 `49d7793`） |
-> | **T6.2 题集**（30 题 = 基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3，163 条断言） | ✅ `evals/tasks.py`（提交 `49d7793`；**用户 2026-09-23 审阅通过**） |
-> | **T6.3 ⑤ 两轮全量 + 归档** | ✅ 逐题跑完 single 与 multi → `merge_runs.py --archive`（提交 `ca54435`） |
+> | **T6.1 评分器**（四档断言 / 通过=满分 / skip≠0 / 超时也验分 / 真实工具名） | ✅ `evals/verifiers.py` + `runner.py` + `run_e2e.py`（提交 `946e04c`） |
+> | **T6.2 题集**（30 题 = 基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3，163 条断言） | ✅ `evals/tasks.py`（提交 `946e04c`；**用户 2026-09-23 审阅通过**） |
+> | **T6.3 ⑤ 两轮全量 + 归档** | ✅ 逐题跑完 single 与 multi → `merge_runs.py --archive`（提交 `4cd1574`） |
 > | **T6.3 ⑥ 正式报告**（`docs/evidence/评估报告.md`，含 STAR 量化对比） | ⬜ **一条命令的事，等用户发话**（见下方「评估相关」的命令） |
 > | 配套准备件（预检 / 报告生成器 / 逐题合并 / 清线程 / RAG 消融 / **语料分家** / 提示词模型名） | ✅ 全部就位（详见「评估相关」） |
 >
@@ -661,7 +675,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 | 数字 | 值 | 命令 |
 |---|---|---|
 | 测试数 | **550** | `uv run python -m pytest tests/ -q`（2026-09-25 实测输出：`550 passed in 30.12s`） |
-| 测试覆盖率 | **73~74%（2082 语句 / 563~545 未覆盖）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **会随环境波动**：4 个依赖容器**在跑**时实测 73%（563 未覆盖）、**全停**时 74%（545）—— 那几条"要真环境"的测试走的分支不同（2026-09-27 实测）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5、阶段 6 各涨过一次）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。测试条数的**可核对链条**（用 `git worktree` + `pytest --collect-only` 数的）：阶段 5 末 `313d404` = **308** → 阶段 6 重建后 `ca54435^` = **528** → 修完 D1–D5 = **550**（最后这批 **+22**：四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干） |
+| 测试覆盖率 | **73~74%（2082 语句 / 563~545 未覆盖）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **会随环境波动**：4 个依赖容器**在跑**时实测 73%（563 未覆盖）、**全停**时 74%（545）—— 那几条"要真环境"的测试走的分支不同（2026-09-27 实测）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5、阶段 6 各涨过一次）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。测试条数的**可核对链条**（用 `git worktree` + `pytest --collect-only` 数的）：阶段 5 末 `c73ac99` = **308** → 阶段 6 重建后 `4cd1574^` = **528** → 修完 D1–D5 = **550**（最后这批 **+22**：四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干） |
 | **评估正式结果（阶段 6 · 2026-09-25）** | **single 30/30 = 100%**（均分 1.0000，958,832 token / 332s / 194 工具 / 362 步）｜**multi 30/30 = 100%**（1,644,029 token / 687s / 227 工具 / 409 步）；断言两轮都是 **124/124 + 29/29 + 10/10**；打回·击穿预算·超时·未测·异常**全 0**。⚠️ **两轮口径不同**（single 有 200k 上限 + 每题超时；multi 只计量）⇒ **分数与成本都不可直比** | `uv run python evals/report.py --single runtime/runs/v3-single.json --multi runtime/runs/v3-multi.json`；归档 `docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
 | 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |
@@ -669,5 +683,5 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 | 知识库条目 | **测试语料** 35（7 文件 × 5 条，分块后 = 35 块）→ 在 `evals/fixtures/knowledge/`；**产品库默认 0** | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | **RAG 消融（阶段 6 正式数；2026-09-24 语料修订后）** | top-1 命中**正解文件**：改造前 **0.40** → 生产 **0.60** / 全量召回对照 **0.70**；top-1 落干扰项 0.60 → 0.40；同口径关键词（文件粒度）0.70 → 0.90；稳态延迟 12.8 → 86.7（生产）/ 289.7 ms（对照）。⚠️ 旧语料基线是 **0.20**（含 5 条危险干扰项）⇒ 提升幅度 +0.40 → **+0.20**；**生产与对照两版一致** | `uv run python evals/rag_ablation.py --reps 10`；归档 `docs/evidence/rag_ablation_20260924_053228.json`（当前）、`…_20260923_203822.json`（旧语料） |
 | RAG 单轮快照（`rag_bench.py`，与上面的消融口径不同） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms | `uv run python evals/rag_bench.py` |
-| 评估指标（改造前旧口径，**当前不适用**） | 见 README「评估体系」一节 | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 97041aa^:docs/evidence/<file>` |
+| 评估指标（改造前旧口径，**当前不适用**） | 见 README「评估体系」一节 | 旧存档已移出仓库 → 备份 `backup/1new/backup/old-data/docs/evidence/` 或 `git show 73dd4e6^:docs/evidence/<file>` |
 | 跟踪文件数 | `git ls-files` 计数 | `git ls-files \| Measure-Object` |
