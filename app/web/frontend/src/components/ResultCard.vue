@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+import MarkdownText from './MarkdownText.vue'
 
 const props = defineProps({ result: { type: Object, required: true } })
 
@@ -26,6 +27,17 @@ const verdictObj = (() => {
 //    后端是对的（run_multi_agent 只在 verdict 含 FAIL 时才当失败），错的是这个标签。
 const hasVerdict = Boolean(verdictObj?.verdict)
 const passed = verdictObj?.verdict?.toUpperCase() === 'PASS'
+
+/** 没有裁定时的说明（阶段 7 · T7.5 修正）。
+ *  以前写的是「`mode === 'single'` ? 'single' : **'简单任务直通'**」——
+ *  于是**任何非 single 的情况都被说成"简单任务直通"**：multi 模式里 Verifier 没产出可解析裁定
+ *  （上游抽风返回一整句错误文本是实测发生过的）也会被显示成"设计如此"，把"少验收了一次"粉饰掉。
+ *  现在按**真实原因**分三种说：single 没有验收环节 / auto 路由判为简单任务 / 其余 = 未产出裁定。 */
+const noVerdictLabel = (() => {
+  if (props.result.mode === 'single') return 'single 模式，无验收环节'
+  if (props.result.route === 'simple') return 'auto 判为简单任务，直通 Executor'
+  return `${props.result.mode || '未知'} 模式未产出裁定`
+})()
 const showTrace = ref(false)
 
 /** 阶段 6：**本轮实际使用的模型**（服务端在响应里回报的那个名字）。
@@ -58,7 +70,9 @@ const modelsUsed = (() => {
 
     <div class="card answer">
       <div class="card-head">🤖 Executor 结果</div>
-      <div class="answer-text">{{ result.finalResponse }}</div>
+      <!-- 阶段 7（T7.5）：以前这里是纯文本（`pre-wrap`），`##` / `**` / 表格全是源码。
+           现在走 MarkdownText（marked + DOMPurify，见该组件注释）。 -->
+      <MarkdownText :text="result.finalResponse" />
     </div>
 
     <div v-if="result.toolTrace?.length" class="card trace">
@@ -78,7 +92,7 @@ const modelsUsed = (() => {
       <span v-if="hasVerdict" class="badge" :class="passed ? 'pass' : 'fail'">
         {{ passed ? '✓ 验收通过' : '✗ 验收未通过' }}
       </span>
-      <span v-else class="badge none">— 本轮未验收（{{ result.mode === 'single' ? 'single' : '简单任务直通' }}）</span>
+      <span v-else class="badge none">— 本轮未验收（{{ noVerdictLabel }}）</span>
       <span v-if="verdictObj?.reason && !passed" class="reason">{{ verdictObj.reason }}</span>
       <span v-if="modelsUsed.all.length" class="models" :title="modelsUsed.roles">
         🧠 本轮实际使用：{{ modelsUsed.all.join('、') }}
@@ -94,7 +108,6 @@ const modelsUsed = (() => {
 .card-head { font-size: 13px; font-weight: 600; color: #93c5fd; margin-bottom: 8px; }
 .card-head.toggle { cursor: pointer; user-select: none; }
 .steps { padding-left: 20px; font-size: 13px; line-height: 1.8; color: #cbd5e1; }
-.answer-text { font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; color: #e2e8f0; }
 .trace-list { display: flex; flex-direction: column; gap: 6px; }
 .trace-item { display: flex; gap: 8px; align-items: baseline; font-size: 12px; }
 .trace-idx { color: #64748b; min-width: 18px; }

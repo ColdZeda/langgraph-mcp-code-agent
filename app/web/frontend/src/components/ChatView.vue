@@ -2,6 +2,7 @@
 import { nextTick, ref } from 'vue'
 import { newSession, sendChat, store } from '../store'
 import ResultCard from './ResultCard.vue'
+import MarkdownText from './MarkdownText.vue'
 
 const input = ref('')
 const listEl = ref(null)
@@ -61,7 +62,9 @@ defineExpose({ newSession: newSessionAndClear })
                以前这里什么都不渲染，表现成"点历史会话只看到自己发的消息"。
                补一条纯文本回退分支即可。 -->
           <div v-else-if="m.text" class="bubble assistant-bubble">
-            <span v-if="m.fromHistory" class="history-tag">历史</span>{{ m.text }}
+            <span v-if="m.fromHistory" class="history-tag">历史</span>
+            <!-- 阶段 7（T7.5）：历史回放的答案以前也是纯文本 ⇒ 这里同样走 Markdown 渲染 -->
+            <MarkdownText :text="m.text" />
           </div>
         </div>
       </template>
