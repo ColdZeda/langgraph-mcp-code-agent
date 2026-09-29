@@ -59,7 +59,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（584 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（589 个） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | **复用同名 run-id 前必跑**（清库里的 eval 线程；默认只报告，`--yes` 才删） | `uv run python evals/reset_eval_threads.py --yes` |
 | 逐题跑完后合并成一轮（缺题会拒绝写出） | `uv run python evals/merge_runs.py --prefix v3-single --mode single --archive` |
@@ -135,7 +135,7 @@ scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           584 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           589 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / **powershell_exec** /
@@ -149,7 +149,9 @@ tests/                           584 个测试（config / prompts / mysql_safe_i
                                  〔2026-09-25 加的四个，共 +19 条；同期 runner / reset_threads 也补了用例〕/
                                  **web_sessions**（侧车库：标题/置顶/回收站/系统线程，25 条）+
                                  **web_sessions_api**（那组接口与"活会话不许删"，9 条）
-                                 〔阶段 7 · T7.5 加的两个，共 +34 条〕）
+                                 〔阶段 7 · T7.5 加的两个，共 +34 条〕/
+                                 **web_no_model**（T7.6：import 期不许建 LLM / 缺 key 不致命 /
+                                   第一个模型接管四个角色，5 条）〔阶段 7 · T7.6，共 +5 条〕）
 ```
 
 ## 已知坑（务必先看）
@@ -471,6 +473,37 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - **排查工具**：`scripts/probe_mcp_server.py` —— 从 Agent 那侧看，"服务端不回"和"客户端读不到"是**同一种症状**，
   只有手工发 JSON-RPC 才能分清。用它看 stdout 上有没有响应、stderr 上执行到哪一步。
 
+### Web 端：会话管理与模型设置（阶段 7 · T7.5 / T7.6）
+
+- **会话列表是"两张表拼出来的"**：`checkpoints`（langgraph 的 saver 在管，提供时间与条数）
+  + **侧车库 `app/web/sessions.py`（`runtime/sessions.db`）**（标题 / 置顶 / 软删除）。
+  ⚠️ **别把侧车表并进 `checkpoints.db`**：那是 `AsyncSqliteSaver` 的地盘，混进去两边抢同一把
+  sqlite 锁、排查时分不清谁写的。
+- **删除永远是先软删除**：`deleted_at` 一置 → 进回收站（可从界面「恢复」）；只有回收站里
+  再点「彻底删除」才真删 `writes → checkpoints`（顺序不能反：`writes` 引用 `checkpoint`）。
+- ⚠️ **"这个会话正被使用"不能用 `_session_locks` 判断** —— 它按设计**不回收**（连接断了空 Lock
+  还留着），拿它当判据会把早已断开的会话当成活的、**永远删不掉**。用的是 `_active_threads`
+  （**计数**，同一会话可能被多个标签页打开），在 WS 建立 / `new_session` / `load_session` /
+  消息带 `threadId` / 断开 五处维护；对活会话一律 `409`（前端先自动新开再删）。
+- **系统线程**（`eval-` / `probe-` / `smoke` / `nowrap-`，见 `sessions.SYSTEM_THREAD_PREFIXES`）
+  默认**不在列表里显示**，底部一行小字可展开 + 「清空系统线程」；两行小字（回收站 / 系统线程）
+  在计数为 0 时**一个字都不显示**。
+- ⚠️ **`llm.py` 里不许再出现模块级 `llm = get_llm()`**（T7.6 已把它改成 PEP 562 惰性
+  `__getattr__`）：那行会在 **import 期**建 LLM 对象 ⇒ 没配 key 时 `import` 直接抛，
+  **服务起不来、pytest 收集阶段也炸**（CI 全新容器必红）。守卫：
+  `tests/test_web_no_model.py::test_llm_module_has_no_module_level_instantiation`（源码级）。
+- ⚠️ **"还没有可用模型"不是错误状态**（T7.6）：`AgentRuntime.rebuild_agents()` 与
+  `apply_settings()` 都**捕获缺 key 的 `ValueError`**（只警告 + 把 agent 置空），
+  启动顺序也改成**先 `apply_settings()` 再 `runtime.load()`**（否则第一遍建 agent 时注册表还是空的）。
+  前端据 `session` 消息里的 `modelReady` 显示引导并禁用发送。**别在 WS 层拦 `chat`** ——
+  实测踩过：多一条"提前回错"的分支会让按协议等消息的测试（`test_web_permission.py`）**直接卡死**。
+- **用户添加的第一个自定义模型 = 四个角色的默认模型**（`POST /api/settings/custom-model` 里补的）：
+  不这么做的话，没被指定的角色会回落 `.env` 的 `MODEL_NAME`，而面向用户的 `.env` 往往是空的
+  ⇒ 报"key 未配置"。
+- **`/api/settings` 那套"系统默认模型"（`base_url`/`api_key`）仍保留在后端，但界面不再露出来**
+  （T7.6 用户化改造）：它只影响 Web 进程，**CLI 与 evals 完全不读**。界面里只剩
+  「角色模型 + 我的模型 + 测试当前模型 + 保存并生效」。
+
 ### 仓库整理
 
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 → **做全仓扫描类操作必须排除**（否则扫到生成物）。
@@ -685,8 +718,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | **584** | `uv run python -m pytest tests/ -q`（2026-09-29 实测输出：`584 passed in 34.17s`） |
-| 测试覆盖率 | **73~74%（2082 语句 / 563~545 未覆盖）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **会随环境波动**：4 个依赖容器**在跑**时实测 73%（563 未覆盖）、**全停**时 74%（545）—— 那几条"要真环境"的测试走的分支不同（2026-09-27 实测）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5、阶段 6 各涨过一次）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。测试条数的**可核对链条**（用 `git worktree` + `pytest --collect-only` 数的）：阶段 5 末 `c73ac99` = **308** → 阶段 6 重建后 `4cd1574^` = **528** → 修完 D1–D5 = **550**（最后这批 **+22**：四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干） |
+| 测试数 | **589** | `uv run python -m pytest tests/ -q`（2026-09-29 实测输出：`589 passed in 27.96s`） |
+| 测试覆盖率 | **73~75%（语句 2081~2082，未覆盖 545~561）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **会随环境波动**：4 个依赖容器**在跑**时实测 73%（563 未覆盖）、**全停**时 74%（545）—— 那几条"要真环境"的测试走的分支不同（2026-09-27 实测）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5、阶段 6 各涨过一次）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。测试条数的**可核对链条**（用 `git worktree` + `pytest --collect-only` 数的）：阶段 5 末 `c73ac99` = **308** → 阶段 6 重建后 `4cd1574^` = **528** → 修完 D1–D5 = **550**（最后这批 **+22**：四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干） |
 | **评估正式结果（阶段 6 · 2026-09-25）** | **single 30/30 = 100%**（均分 1.0000，958,832 token / 332s / 194 工具 / 362 步）｜**multi 30/30 = 100%**（1,644,029 token / 687s / 227 工具 / 409 步）；断言两轮都是 **124/124 + 29/29 + 10/10**；打回·击穿预算·超时·未测·异常**全 0**。⚠️ **两轮口径不同**（single 有 200k 上限 + 每题超时；multi 只计量）⇒ **分数与成本都不可直比** | `uv run python evals/report.py --single runtime/runs/v3-single.json --multi runtime/runs/v3-multi.json`；归档 `docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
 | 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |

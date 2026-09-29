@@ -338,5 +338,19 @@ def with_fallback(llms: list[ChatOpenAI]):
     return llms[0].with_fallback(llms[1:])
 
 
-# 向后兼容别名（模块导入期快照；运行期热切换请用 get_llm()）
-llm = get_llm()
+# 向后兼容别名（阶段 3 留下的一句 `llm = get_llm()`）。
+# ⚠️ **阶段 7（T7.6）改成了惰性**，原因有两个，都不是洁癖：
+#   1. **import 期副作用**：模块级 `llm = get_llm()` 会在**被 import 的那一刻**建 LLM 对象，
+#      而 `build_llm()` 要求 key 非空 ⇒ 没有 `.env`（或没配 key）时
+#      `import app.code_agent.model.llm` 直接抛 `ValueError`。后果：
+#      ① `pytest` 在**收集阶段**就炸（CI 全新容器必红，见 conftest 里的假 key 兜底）；
+#      ② `server.py:45` 顶部就 import 它 ⇒ **没配 key 时服务根本起不来**，
+#         用户也就永远看不到界面里那个"添加你的 API Key"的引导。
+#   2. **热切换后它是个过期快照**：注释自己都写着"运行期热切换请用 get_llm()"，
+#      界面上换过模型之后，这个名字仍指着旧对象。
+# 全仓**没有任何地方引用它**（只有 `invoke_with_fallback` 里一个同名局部变量），
+# 但为了兼容外部脚本仍然保留这个名字 —— 只是改成"用到时才建"（PEP 562）。
+def __getattr__(name: str):  # pragma: no cover - 只有真去取 `llm` 这个名字时才会走到
+    if name == "llm":
+        return get_llm()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

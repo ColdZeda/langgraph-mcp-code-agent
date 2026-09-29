@@ -70,14 +70,26 @@ defineExpose({ newSession: newSessionAndClear })
       </template>
     </div>
 
+    <!-- 阶段 7 · T7.6：**还没有可用的模型**时的引导（新用户 clone 下来的默认状态）。
+         以前这种情况服务在 import 期就崩了，用户根本看不到这个界面。 -->
+    <div v-if="!store.modelReady" class="no-model">
+      <b>还没有可用的模型</b> —— 点左下角「⚙ 模型设置」，在「我的模型」里填一个 API Key 就能开始。
+    </div>
+
     <div class="input-area">
       <textarea
         v-model="input"
-        :placeholder="store.sending ? '任务执行中...' : '描述任务，Enter 发送，Shift+Enter 换行'"
-        :disabled="store.wsStatus !== 'open'"
+        :placeholder="
+          !store.modelReady
+            ? '先去「模型设置」里添加你的 API Key'
+            : store.sending
+              ? '任务执行中...'
+              : '描述任务，Enter 发送，Shift+Enter 换行'
+        "
+        :disabled="store.wsStatus !== 'open' || !store.modelReady"
         @keydown.enter.exact.prevent="send"
       ></textarea>
-      <button :disabled="store.sending || !input.trim()" @click="send">
+      <button :disabled="store.sending || !store.modelReady || !input.trim()" @click="send">
         {{ store.sending ? '执行中' : '发送' }}
       </button>
     </div>
@@ -110,6 +122,8 @@ defineExpose({ newSession: newSessionAndClear })
 .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid #64748b; border-top-color: #93c5fd; border-radius: 50%; margin-right: 8px; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .input-area { display: flex; gap: 10px; padding: 14px 20px; border-top: 1px solid #334155; }
+.no-model { margin: 0 20px 10px; padding: 10px 14px; border-radius: 10px; font-size: 13px;
+  background: #422006; color: #fde68a; border: 1px solid #a16207; }
 textarea { flex: 1; resize: none; height: 64px; padding: 10px 12px; border-radius: 10px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; font-size: 14px; font-family: inherit; }
 textarea:focus { outline: none; border-color: #3b82f6; }
 .input-area button { width: 90px; border: none; border-radius: 10px; background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; }

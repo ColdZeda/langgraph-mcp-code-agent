@@ -82,6 +82,9 @@ class AgentRuntime:
         self.tools: list = []
         self.executor_agent = None
         self.verifier_agent = None
+        # 阶段 7 · T7.6：**还没有可用模型**时记下原因（界面要提示"去添加你的 API Key"）。
+        # 以前没这个字段：缺 key 会在 import 期或启动期直接把进程掀掉，用户看不到界面。
+        self.model_error = ""
         # 阶段 4：工具包装层用的缓存（进程级作用域，见 load() 的说明）
         self.tool_cache = ToolCache(scope="web")
 
@@ -104,8 +107,24 @@ class AgentRuntime:
         logger.info(f"Web 服务加载 {len(tools)} 个工具（已包装），Executor/Verifier 构建完成")
 
     def rebuild_agents(self) -> None:
-        self.executor_agent = build_executor_agent(self.tools)
-        self.verifier_agent = build_verifier_agent(self.tools)
+        """重建 Executor / Verifier。
+
+        阶段 7 · T7.6：**"还没有可用的模型"不再致命**。
+        以前缺 key 时这里会抛 `ValueError("模型 API key 未配置…")`，把启动链
+        （`lifespan → load() → rebuild_agents()`）整条掀掉 ⇒ 用户连界面都打不开，
+        也就没法在界面里填 key（而"填完 key 自动生效"正是现在的产品路径：
+        保存设置 → `apply_settings()` → 这里重建）。
+        现在改成：记下原因、把两个 agent 置空，前端据此显示「添加你的 API Key」。
+        """
+        try:
+            self.executor_agent = build_executor_agent(self.tools)
+            self.verifier_agent = build_verifier_agent(self.tools)
+            self.model_error = ""
+        except ValueError as e:  # 典型：还没有模型 / key 未配置
+            self.executor_agent = None
+            self.verifier_agent = None
+            self.model_error = str(e)
+            logger.warning(f"还没有可用的模型（等用户在「模型设置」里添加）：{e}")
 
 
 runtime = AgentRuntime()
@@ -272,12 +291,21 @@ def apply_settings(settings: dict) -> None:
 
     ⚠️ 启动时也要走这里 —— 改造前 lifespan 只传了 model/base_url、**漏传 api_key**，
     导致在界面里填的 Key 重启后失效。
+
+    阶段 7 · T7.6：**没有可用模型时不再致命**。
+    这里那句 `set_llm()` 会立刻去建一个 LLM 实例，于是"全新用户还没配 key"时
+    会在启动阶段抛 `ValueError` 把服务掀掉（实测：`rebuild_agents()` 已经容错了，
+    但 lifespan 里这一步又把整个进程带崩）。现在只记警告 ——
+    用户界面里填完 key 保存后，`/api/settings` 会再走一次这个函数，那时就正常建起来了。
     """
-    set_llm(
-        model=settings.get("model") or None,
-        base_url=settings.get("base_url") or None,
-        api_key=settings.get("api_key") or None,
-    )
+    try:
+        set_llm(
+            model=settings.get("model") or None,
+            base_url=settings.get("base_url") or None,
+            api_key=settings.get("api_key") or None,
+        )
+    except ValueError as e:  # 典型：还没有任何可用的 key
+        logger.warning(f"暂时建不起模型（等用户在「模型设置」里填写）：{e}")
     roles = settings.get("roles") or {}
     # ⚠️ 这里必须**覆盖全部四个角色**（缺的用空串 = 恢复配置默认），不能只传文件里有的那几个：
     #    否则"删掉一个自定义模型"这种会让某个角色**从文件里消失**，
@@ -290,12 +318,16 @@ def apply_settings(settings: dict) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await runtime.load()
+    # ⚠️ 顺序要紧（阶段 7 · T7.6 调整）：**先把本机设置灌进注册表，再建 agent**。
+    #    以前是先 `runtime.load()`（里面就 rebuild 一次）再 `apply_settings()` ——
+    #    于是第一次建 agent 时注册表还是空的：有 `.env` key 时靠兜底能过，
+    #    而没有 `.env`、只有界面里配的模型时，第一遍必然失败并打一条吓人的警告
+    #    （要等第二次 rebuild 才成功）。
     settings = load_settings()
     if settings:
         apply_settings(settings)  # 含 api_key 与各角色模型（改造前漏了 api_key）
-        runtime.rebuild_agents()
         logger.info(f"已应用本地模型设置: {masked_settings(settings)}")
+    await runtime.load()
     yield
 
 
@@ -418,6 +450,15 @@ async def upsert_custom_model(body: dict):
         item["api_key"] = prev["api_key"]  # 留空 = 保持原密钥
 
     settings["custom_models"] = [it for it in items if str(it.get("id")) != mid] + [item]
+
+    # 阶段 7 · T7.6：**用户添加的第一个模型 = 四个角色的默认模型**。
+    # 为什么必须做：`roles` 为空时，每个角色都会回落到 `.env` 的 `MODEL_NAME`
+    # （`llm.py:104-110`），而面向用户的场景里 `.env` 往往是空的 ⇒
+    # 只把 Executor 指到新模型的话，其余三个角色会报"key 未配置"（实测踩过）。
+    # ⚠️ 只在**完全没配过角色**时补：用户自己选过角色模型就别动它。
+    if not (settings.get("roles") or {}):
+        settings["roles"] = dict.fromkeys(ROLE_NAMES, mid)
+
     save_settings(settings)
     apply_settings(load_settings())
     runtime.rebuild_agents()
@@ -821,6 +862,9 @@ async def ws_chat(ws: WebSocket):
             "permissionModeLabel": mode_label(state["permission_mode"]),
             "permissionModes": [{"value": v, "label": lbl} for v, lbl in MODE_LABELS.items()],
             "confirmTimeoutSec": state["confirm_timeout"],
+            # 阶段 7 · T7.6：界面要据此显示"还没有可用的模型 —— 去添加你的 API Key"
+            "modelReady": runtime.executor_agent is not None,
+            "modelError": runtime.model_error,
         }
 
     # 连接建立后**主动**把当前 threadId 推给前端 —— 否则界面一直显示"(连接后自动生成)"，
@@ -923,6 +967,11 @@ async def ws_chat(ws: WebSocket):
                 )
                 continue
 
+            # 阶段 7 · T7.6：**没有可用模型**这件事由**前端**处理（`session` 消息里带
+            # `modelReady` / `modelError`：界面显示引导 + 禁用发送）。
+            # ⚠️ **不要在这里拦 `chat`** —— 实测踩过：WS 层多一条"提前回错"的分支，
+            #    会让"按协议等某条消息"的测试（`tests/test_web_permission.py`）直接卡死，
+            #    而且那条分支对"Agent 能否运行"的判断是多余的（图自己会报错）。
             state["run_task"] = asyncio.create_task(
                 _run_chat(ws, state, user_input, exec_mode, state["permission_mode"])
             )

@@ -14,6 +14,10 @@ export const store = reactive({
     { value: 'open', label: '放开' },
   ],
   confirmTimeoutSec: 120,
+  // 阶段 7 · T7.6：**有没有可用的模型**（后端在 session 消息里给）。
+  // 没有 ⇒ 界面显示"去添加你的 API Key"并禁用发送（新用户 clone 下来的默认状态）。
+  modelReady: true,
+  modelError: '',
   // 当前待人工确认的请求（有值 → 弹框）。结构见后端 permission_request 消息。
   permissionRequest: null,
   // ⚠️ 阶段 5 修：**待确认请求要排队**。以前只存一个槽位 ——
@@ -84,6 +88,10 @@ function handleWsMessage(msg) {
       store.permissionModes = msg.permissionModes
     }
     if (msg.confirmTimeoutSec) store.confirmTimeoutSec = msg.confirmTimeoutSec
+    // 阶段 7 · T7.6：后端告诉我们"现在到底有没有可用的模型"——
+    // 没有的话界面要显示引导并禁用发送（全新用户 clone 下来就是这个状态）。
+    if (typeof msg.modelReady === 'boolean') store.modelReady = msg.modelReady
+    if (typeof msg.modelError === 'string') store.modelError = msg.modelError
     return
   }
   // 人工确认（阶段 5）：后端要求确认某个工具调用 → 弹框（多个请求排队，逐个问）

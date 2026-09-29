@@ -182,9 +182,14 @@ async function doPurgeSystem() {
            不显示的话用户不知道现在到底是谁在干活。点一下直接进模型设置。 -->
       <div class="model-row" :title="modelTitle" @click="store.showSettings = true">
         <span class="session-title">当前生效模型</span>
-        <span class="model-name">{{ executorModel ? executorModel.model : '读取中…' }}</span>
-        <span v-if="executorModel?.custom" class="model-tag">我的模型</span>
-        <span v-if="rolesDiffer" class="model-warn">四个角色配置不同（悬停查看）</span>
+        <!-- 阶段 7 · T7.6：没有可用模型时**别显示一个用不了的名字** ——
+             以前这里会显示 `.env` 里的 fallback 名字（用户会以为能直接开聊）。 -->
+        <span v-if="!store.modelReady" class="model-none">未配置 —— 点这里添加</span>
+        <template v-else>
+          <span class="model-name">{{ executorModel ? executorModel.model : '读取中…' }}</span>
+          <span v-if="executorModel?.custom" class="model-tag">我的模型</span>
+          <span v-if="rolesDiffer" class="model-warn">四个角色配置不同（悬停查看）</span>
+        </template>
       </div>
       <div class="session-title">历史会话（checkpoint）</div>
       <div class="session-list">
@@ -307,6 +312,7 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f17
   border: 1px solid #334155; border-radius: 8px; cursor: pointer; }
 .model-row:hover { border-color: #3b82f6; }
 .model-name { font-family: Consolas, monospace; font-size: 12px; color: #93c5fd; word-break: break-all; }
+.model-none { font-size: 12px; color: #fbbf24; }
 .model-tag { align-self: flex-start; font-size: 10px; color: #86efac; background: #14532d;
   border-radius: 999px; padding: 1px 6px; }
 .model-warn { font-size: 10px; color: #fbbf24; }
