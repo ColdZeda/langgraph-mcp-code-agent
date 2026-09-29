@@ -13,6 +13,17 @@
 不能因为 shell 里恰好设了 `CODE_AGENT_RAG_AUTO_INJECT=1` 就变成慢测。
 需要测这些开关**打开时**的行为时，用 `monkeypatch.setattr` 改模块级常量
 （见 tests/test_memory.py）。
+
+⚠️ 另有一条**必须非空**的环境变量：`MODEL_API_KEY`（阶段 7 补的，见下面那行）。
+根因是 `app/code_agent/model/llm.py` **末尾**有一句模块级 `llm = get_llm()`
+（阶段 3 留下的"向后兼容别名"）—— 它在**被 import 的那一刻**就去建 LLM 对象，
+而建对象要求 key 非空 ⇒ 任何 `from app.code_agent.model.llm import ...`
+的测试文件都会在 **pytest 收集阶段**炸掉（实测：没有 key 时
+`300 tests collected, 15 errors during collection`，退出码 2），
+CI（`.gitee.yml`）在全新容器里没有 `.env`，于是流水线必红。
+这里兜一把**假 key**：测试全部打桩、这串值永远发不出去（实测：无 `.env` +
+假 key ⇒ **550 passed**）。用 `setdefault` 而不是强制赋值，是为了**不覆盖**
+你自己在 `.env` 里填的真 key。
 """
 
 import os
@@ -22,6 +33,7 @@ import pytest
 os.environ["CODE_AGENT_RAG_AUTO_INJECT"] = "0"
 os.environ["CODE_AGENT_RAG_AUTO_DEPOSIT"] = "0"
 os.environ["CODE_AGENT_TOOL_CACHE"] = "0"
+os.environ.setdefault("MODEL_API_KEY", "test-dummy-key")  # 见模块 docstring：只要"非空"
 
 
 @pytest.fixture(autouse=True)

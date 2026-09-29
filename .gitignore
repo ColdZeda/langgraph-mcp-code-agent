@@ -25,6 +25,13 @@ __pycache__/
 runtime/*
 !runtime/.gitkeep
 
+# 产品知识库的**内容**：它是运行期"自学习"沉淀出来的（用一次任务可能就多一条），
+# 属于本机数据、不是仓库内容 —— 只保留 .gitkeep 占位（阶段 7 补，之前没有规则，
+# `git add -A` 会把用户自己积累的知识一起提交上去）。
+# ⚠️ 测试语料在 evals/fixtures/knowledge/（那个要进仓库，别混）。
+data/knowledge/*
+!data/knowledge/.gitkeep
+
 # 开发者内部交接文档：2026-09-27 起移出仓库（连历史一起剔除），放仓库外：
 #   E:\agentstart\上班\work-content\program-fix第八版\handover_交接文档.md
 # 这一条是防它被误加回来（公开仓库里不该有内部交接文档）

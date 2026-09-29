@@ -11,6 +11,7 @@
 | **入口忘了在 import app 配置之前调用**（环境变量晚一步就不生效） | `test_entrypoints_call_it_before_app_import` |
 """
 
+import hashlib
 import sys
 from pathlib import Path
 
@@ -43,14 +44,39 @@ def test_fixture_is_the_documented_7_files():
     assert len(real) == 4 and len(dist) == 3
 
 
-def test_product_knowledge_dir_has_no_fixture_files():
-    """**产品知识库目录里不许再有测试语料** —— 这是订正 #36 的核心不变量。"""
+def test_product_knowledge_dir_has_no_fixture_corpus():
+    """**产品知识库里不许出现测试语料的副本** —— 订正 #36 的核心不变量。
+
+    ⚠️ 断言的是"**夹具的副本**不在产品库里"，**不是**"产品库必须是空的"（阶段 7 订正）。
+    以前写的是 `leftovers == []`，比它要守的不变量更严：产品库本来就是**靠使用慢慢积累**的
+    —— 用户跑一次任务，应用可能就沉淀了一条经验进去（实测就撞到过：
+    `data/knowledge/天气查询用wttr.in接口而非搜索.txt`）。那不是 bug，那正是设计意图，
+    拿"目录必须为空"去卡它 = **假阳性**。
+
+    判据取两条，任一条命中即失败（比"空目录"更贴题，也更强）：
+      ① **同名**：`*.txt` 文件名与夹具撞名；
+      ② **同内容**：sha256 撞上夹具里任意一篇 —— 防"改名搬运"。
+    """
     from app.code_agent.config import KNOWLEDGE_DIR
 
-    leftovers = [p.name for p in KNOWLEDGE_DIR.rglob("*.txt")] if KNOWLEDGE_DIR.exists() else []
-    assert leftovers == [], (
-        f"产品知识库 {KNOWLEDGE_DIR} 里还有语料：{leftovers} —— "
-        "测试语料必须待在 evals/fixtures/knowledge/ 里，产品库要靠使用慢慢积累"
+    fixtures = list(E.FIXTURE_KNOWLEDGE_DIR.rglob("*.txt"))
+    fixture_names = {p.name for p in fixtures}
+    fixture_hashes = {hashlib.sha256(p.read_bytes()).hexdigest() for p in fixtures}
+
+    if not KNOWLEDGE_DIR.exists():
+        return
+
+    same_name, same_content = [], []
+    for path in KNOWLEDGE_DIR.rglob("*.txt"):
+        if path.name in fixture_names:
+            same_name.append(path.name)
+        if hashlib.sha256(path.read_bytes()).hexdigest() in fixture_hashes:
+            same_content.append(path.name)
+
+    assert not same_name and not same_content, (
+        f"产品知识库 {KNOWLEDGE_DIR} 里出现了测试语料的副本："
+        f"同名 {same_name} / 同内容 {same_content} —— "
+        "测试语料必须待在 evals/fixtures/knowledge/ 里，产品库要靠使用慢慢积累（订正 #36）"
     )
 
 
