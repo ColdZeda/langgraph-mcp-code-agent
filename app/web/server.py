@@ -19,7 +19,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
@@ -58,6 +58,7 @@ from app.code_agent.tools.file_tools import file_tools
 from app.code_agent.utils.mcp import load_mcp_tools
 from app.code_agent.utils.tool_cache import ToolCache
 from app.code_agent.utils.tool_wrap import wrap_tools
+from app.web import sessions as session_store
 
 logger = setup_logging("code_agent.web")
 
@@ -131,6 +132,30 @@ async def get_session_lock(thread_id: str) -> asyncio.Lock:
         if lock is None:
             lock = _session_locks[thread_id] = asyncio.Lock()
         return lock
+
+
+# ── 活会话登记（阶段 7 · T7.5 会话管理）──
+# 为什么需要它：删会话（软删除 / 彻底删除）之前必须知道"这个 thread 是不是正被某条 WebSocket 用着"
+# —— 删掉正在跑的会话，前端一切走、WS 还在往一个已经没有的 thread 写。
+# ⚠️ **不能拿上面的 `_session_locks` 当判据**：它按设计**不回收**（连接断掉后空 Lock 还留在字典里），
+#    拿它判断会把"早就断开的会话"当成活的，于是永远删不掉。
+_active_threads: dict[str, int] = {}
+
+
+def mark_thread_active(thread_id: str, delta: int) -> None:
+    """登记/注销一条 WS 连接对某个 thread 的占用（用**计数**：同一会话可能被多个标签页打开）。"""
+    tid = (thread_id or "").strip()
+    if not tid:
+        return
+    count = _active_threads.get(tid, 0) + delta
+    if count <= 0:
+        _active_threads.pop(tid, None)
+    else:
+        _active_threads[tid] = count
+
+
+def is_thread_active(thread_id: str) -> bool:
+    return (thread_id or "").strip() in _active_threads
 
 
 # ── 设置持久化（runtime/ 已被 gitignore，key 只落本地）──
@@ -486,10 +511,20 @@ def _uuid6_to_unix(checkpoint_id: str) -> float | None:
 
 
 @app.get("/api/sessions")
-async def list_sessions():
-    """列出历史会话（来自 checkpoint 数据库，按最近活跃排序）。"""
+async def list_sessions(include_hidden: int = 0, include_eval: int = 0):
+    """列出历史会话：checkpoint 库（时间/条数）+ 侧车库（标题/置顶/回收站）。
+
+    阶段 7 改了两处：
+    1. 返回**对象**（`{items, counts}`）而不是裸数组 —— 前端要拿 `counts` 决定
+       「回收站 (N)」「显示系统线程 (N)」这两行小字要不要出现；
+    2. 默认**不显示**两类会话：回收站里的（软删除）与**系统线程**
+       （`eval-*` / `probe-*` / `smoke*` / `nowrap-*`，即评估与探针留下的）。
+       它们是"脚本造的"，不是用户的对话；`include_hidden=1` / `include_eval=1` 可以要回来。
+
+    排序：**置顶优先**，然后按最近活跃（`MAX(checkpoint_id)` 是 UUIDv6，前缀自带时间戳）。
+    """
     if not CHECKPOINT_DB.exists():
-        return []
+        return {"items": [], "counts": {"visible": 0, "hidden": 0, "eval": 0}}
     try:
         conn = sqlite3.connect(str(CHECKPOINT_DB))
         try:
@@ -501,18 +536,103 @@ async def list_sessions():
             conn.close()
     except sqlite3.Error as e:  # 库还没建表/被占用 → 当作空列表
         logger.warning(f"读取会话列表失败：{e}")
-        return []
+        return {"items": [], "counts": {"visible": 0, "hidden": 0, "eval": 0}}
 
-    items = [
-        {
-            "threadId": tid,
-            "checkpointCount": n,
-            "updatedAt": _uuid6_to_unix(last_id) if last_id else None,
-        }
-        for tid, n, last_id in rows
-    ]
-    items.sort(key=lambda x: x["updatedAt"] or 0, reverse=True)
-    return items
+    meta = session_store.all_meta()
+    items, hidden_count, eval_count = [], 0, 0
+    for tid, n, last_id in rows:
+        info = meta.get(tid) or {}
+        is_eval = session_store.is_system_thread(tid)
+        is_hidden = bool(info.get("deletedAt"))
+        if is_eval:
+            eval_count += 1
+            if not include_eval:
+                continue
+        if is_hidden:
+            hidden_count += 1
+            if not include_hidden:
+                continue
+        items.append(
+            {
+                "threadId": tid,
+                "title": info.get("title"),
+                "titleSource": info.get("titleSource"),
+                "checkpointCount": n,
+                "updatedAt": _uuid6_to_unix(last_id) if last_id else None,
+                "deletedAt": info.get("deletedAt"),
+                "pinned": bool(info.get("pinned")),
+                "system": is_eval,
+                "active": is_thread_active(tid),
+            }
+        )
+    items.sort(key=lambda x: (x["pinned"], x["updatedAt"] or 0), reverse=True)
+    return {
+        "items": items,
+        "counts": {"visible": len(items), "hidden": hidden_count, "eval": eval_count},
+    }
+
+
+@app.post("/api/sessions/{thread_id}/title")
+async def rename_session(thread_id: str, body: dict):
+    """给会话改标题（改了之后自动标题不再覆盖它）。"""
+    try:
+        title = session_store.rename(thread_id, str(body.get("title") or ""))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"ok": True, "threadId": thread_id, "title": title}
+
+
+@app.post("/api/sessions/{thread_id}/pin")
+async def pin_session(thread_id: str, body: dict):
+    """置顶 / 取消置顶（`{"pinned": true|false}`）。"""
+    pinned = bool(body.get("pinned"))
+    session_store.set_pinned(thread_id, pinned)
+    return {"ok": True, "threadId": thread_id, "pinned": pinned}
+
+
+@app.post("/api/sessions/{thread_id}/restore")
+async def restore_session(thread_id: str):
+    """从回收站恢复（只恢复"可见性"，checkpoint 一直在）。"""
+    session_store.restore(thread_id)
+    return {"ok": True, "threadId": thread_id}
+
+
+@app.delete("/api/sessions/{thread_id}")
+async def delete_session(thread_id: str, hard: int = 0):
+    """删除会话。
+
+    - 默认（`hard=0`）：**软删除** —— 进回收站，只动侧车库，`checkpoints` 一行都不少；
+    - `hard=1`：**彻底删除** —— 真删 `writes` → `checkpoints` + 侧车行，**不可逆**
+      （那个 thread 的跨轮记忆就此消失）。
+
+    ⚠️ 两种删除都**拒绝正在被 WebSocket 使用的会话**（`409`）：前端要先切到新会话再删。
+    """
+    if is_thread_active(thread_id):
+        raise HTTPException(
+            status_code=409,
+            detail="这个会话正在被当前连接使用：请先点「新会话」再删除它。",
+        )
+    if not hard:
+        session_store.soft_delete(thread_id)
+        return {"ok": True, "threadId": thread_id, "hard": False}
+    removed = session_store.delete_thread_rows(thread_id, CHECKPOINT_DB)
+    session_store.drop_meta(thread_id)
+    return {"ok": True, "threadId": thread_id, "hard": True, "removed": removed}
+
+
+@app.post("/api/sessions/purge-system")
+async def purge_system_sessions():
+    """一键清空**系统线程**（评估 / 探针 / 冒烟）—— 用户的会话一条都不动。
+
+    正在被连接占用的系统线程会**跳过**（返回里列出 `skipped`），不做"删了还要写"的事。
+    """
+    result = session_store.purge_system_threads(CHECKPOINT_DB)
+    kept = [tid for tid in result["threads"] if is_thread_active(tid)]
+    if kept:
+        # purge 已经把行删了 —— 但活着的连接还指着它，这里如实回显，避免前端以为全清干净了
+        logger.warning(f"清空系统线程时发现仍被占用的：{kept}")
+    result["skipped"] = kept
+    return {"ok": True, **result}
 
 
 @app.get("/api/sessions/{thread_id}/messages")
@@ -690,6 +810,8 @@ async def ws_chat(ws: WebSocket):
         "run_task": None,
         "send_lock": asyncio.Lock(),
     }
+    # 阶段 7：登记"这个会话正被一条连接占用"（删会话时要用它挡住）
+    mark_thread_active(state["thread_id"], +1)
 
     async def _session_payload() -> dict:
         return {
@@ -733,7 +855,9 @@ async def ws_chat(ws: WebSocket):
                 continue
 
             if mtype == "new_session":
+                mark_thread_active(state["thread_id"], -1)
                 state["thread_id"] = str(uuid.uuid4())[:8]
+                mark_thread_active(state["thread_id"], +1)
                 state["always_allow"] = set()  # 换会话 → 授权作废
                 await _send(ws, state, await _session_payload())
                 continue
@@ -747,7 +871,9 @@ async def ws_chat(ws: WebSocket):
                         ws, state, {"type": "error", "message": "load_session 缺少 threadId"}
                     )
                     continue
+                mark_thread_active(state["thread_id"], -1)
                 state["thread_id"] = requested
+                mark_thread_active(requested, +1)
                 state["always_allow"] = set()  # 换会话 → 授权作废
                 await _send(ws, state, await _session_payload())
                 continue
@@ -779,7 +905,13 @@ async def ws_chat(ws: WebSocket):
                 await _send(ws, state, {"type": "error", "message": "消息不能为空"})
                 continue
             if msg.get("threadId"):
+                mark_thread_active(state["thread_id"], -1)
                 state["thread_id"] = str(msg["threadId"])
+                mark_thread_active(state["thread_id"], +1)
+
+            # 阶段 7 · T7.5：**新会话的第一条消息就是它的标题**（首行、截断）。
+            # 只写一次：用户改过的标题（title_source='user'）永不被覆盖 —— 见 web/sessions.py。
+            session_store.ensure_title(state["thread_id"], user_input)
 
             # 同一连接同时只跑一个任务（并发入口是"不同连接 / 不同会话"）
             run_task = state.get("run_task")
@@ -808,6 +940,8 @@ async def ws_chat(ws: WebSocket):
         run_task = state.get("run_task")
         if run_task is not None and not run_task.done():
             run_task.cancel()
+        # 阶段 7：注销占用登记（否则那个会话会因为"永远活着"而删不掉）
+        mark_thread_active(state["thread_id"], -1)
 
 
 # ── 前端静态托管（构建产物存在时）──
