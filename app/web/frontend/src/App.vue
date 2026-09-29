@@ -2,15 +2,23 @@
 import ChatView from './components/ChatView.vue'
 import PermissionDialog from './components/PermissionDialog.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   connectWs,
+  hardDeleteSession,
   loadModels,
   loadSession,
+  purgeSystemSessions,
   refreshSessions,
+  renameSession,
+  restoreSession,
   setPermissionMode,
+  softDeleteSession,
   store,
+  togglePinSession,
 } from './store'
+
+const chat = ref(null)
 
 onMounted(() => {
   connectWs()
@@ -53,6 +61,90 @@ const modelTitle = computed(() => {
   )
   return rows.length ? rows.join('\n') : '读取中…'
 })
+
+// ── 会话管理（阶段 7 · T7.5）─────────────────────────────────────────
+// 交互一律用**行内二次确认**（不弹 `window.confirm`）：和设置面板里"确认删除？"的写法保持一致，
+// 也不会被浏览器/WebView 拦掉。
+const editing = ref(null) // { threadId, title } —— 正在行内重命名哪一条
+const confirmingDelete = ref('') // 软删除的二次确认
+const confirmingHard = ref('') // 回收站里"彻底删除"的二次确认
+const confirmingPurge = ref(false) // 清空系统线程的二次确认
+const sessionNotice = ref('') // 操作失败时的提示（例如"正在被另一个标签页使用"）
+
+/** 侧栏时间：`今天 19:17` / `昨天 21:04` / `09-23 13:19`。
+ *  原来是 `2026/9/27 19:17:46` 一长串 —— 一屏十几条时不好扫。 */
+function shortTime(ts) {
+  if (!ts) return '时间未知'
+  const d = new Date(ts * 1000)
+  const now = new Date()
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  const sameDay = (a, b) => a.toDateString() === b.toDateString()
+  if (sameDay(d, now)) return `今天 ${hm}`
+  if (sameDay(d, new Date(now.getTime() - 86400000))) return `昨天 ${hm}`
+  const md = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return `${md} ${hm}`
+}
+
+/** 列表里显示什么：有标题用标题；还没有标题的（先建了会话没说话 / 老会话）回落成短 ID。 */
+function sessionLabel(s) {
+  return s.title || s.threadId
+}
+
+function startRename(s) {
+  sessionNotice.value = ''
+  editing.value = { threadId: s.threadId, title: s.title || '' }
+}
+
+async function commitRename() {
+  const target = editing.value
+  editing.value = null
+  const title = (target?.title || '').trim()
+  if (target && title) await renameSession(target.threadId, title)
+}
+
+async function toggleHidden() {
+  store.showHidden = !store.showHidden
+  await refreshSessions()
+}
+
+async function toggleEval() {
+  store.showEval = !store.showEval
+  await refreshSessions()
+}
+
+/** 软删除（进回收站）。⚠️ **当前正在用的会话**要先自动新开一条 —— 否则删完就没地方说话了。 */
+async function doSoftDelete(s) {
+  sessionNotice.value = ''
+  if (s.threadId === store.threadId) {
+    chat.value?.newSession()
+    await new Promise((r) => setTimeout(r, 200)) // 等后端把 thread_id 切过去
+  }
+  const res = await softDeleteSession(s.threadId)
+  confirmingDelete.value = ''
+  if (res && !res.ok) {
+    sessionNotice.value =
+      res.status === 409 ? '这个会话正被另一个标签页使用，先在那里切走再删。' : '删除失败'
+  }
+}
+
+async function doHardDelete(s) {
+  sessionNotice.value = ''
+  const res = await hardDeleteSession(s.threadId)
+  confirmingHard.value = ''
+  if (res && !res.ok) sessionNotice.value = '彻底删除失败（可能正被其它标签页使用）'
+}
+
+async function doPurgeSystem() {
+  sessionNotice.value = ''
+  const res = await purgeSystemSessions()
+  confirmingPurge.value = false
+  if (res && !res.ok) {
+    sessionNotice.value = '清空系统线程失败'
+    return
+  }
+  const skipped = (await res.json().catch(() => ({}))).skipped || []
+  if (skipped.length) sessionNotice.value = `有 ${skipped.length} 条仍被连接占用，已跳过`
+}
 </script>
 
 <template>
@@ -62,7 +154,7 @@ const modelTitle = computed(() => {
         <span class="brand-dot" :class="store.wsStatus"></span>
         <span class="brand-name">Code Agent-novi</span>
       </div>
-      <button class="btn-new" @click="$refs.chat?.newSession()">＋ 新会话</button>
+      <button class="btn-new" @click="chat?.newSession()">＋ 新会话</button>
       <label class="mode-row">
         <span class="session-title">执行模式</span>
         <select v-model="store.mode" class="mode-select" :disabled="store.sending">
@@ -100,15 +192,88 @@ const modelTitle = computed(() => {
           v-for="s in store.sessions"
           :key="s.threadId"
           class="session-item"
-          :class="{ active: s.threadId === store.threadId }"
+          :class="{
+            active: s.threadId === store.threadId,
+            gone: !!s.deletedAt,
+            system: s.system,
+          }"
           @click="switchSession(s.threadId)"
         >
-          <span class="session-id">{{ s.threadId }}</span>
+          <div class="session-head">
+            <!-- 行内重命名：点铅笔就地改，回车保存、Esc 取消（失焦也保存） -->
+            <input
+              v-if="editing && editing.threadId === s.threadId"
+              v-model="editing.title"
+              class="rename-input"
+              maxlength="24"
+              @click.stop
+              @keydown.enter.prevent="commitRename"
+              @keydown.esc="editing = null"
+              @blur="commitRename"
+            />
+            <span v-else class="session-label" :title="`thread_id: ${s.threadId}`">
+              {{ sessionLabel(s) }}
+            </span>
+            <span class="session-actions" @click.stop>
+              <button
+                class="mini"
+                :title="s.pinned ? '取消置顶' : '置顶'"
+                @click="togglePinSession(s.threadId, !s.pinned)"
+              >
+                📌
+              </button>
+              <button class="mini" title="重命名" @click="startRename(s)">✏️</button>
+              <template v-if="s.deletedAt">
+                <button class="mini" title="恢复（回到列表）" @click="restoreSession(s.threadId)">
+                  ↩︎
+                </button>
+                <button
+                  class="mini danger"
+                  :title="'彻底删除（不可逆：会话记忆一起没）'"
+                  @click="
+                    confirmingHard === s.threadId
+                      ? doHardDelete(s)
+                      : (confirmingHard = s.threadId)
+                  "
+                >
+                  {{ confirmingHard === s.threadId ? '确认彻底删除？' : '彻底删除' }}
+                </button>
+              </template>
+              <button
+                v-else
+                class="mini danger"
+                title="删除（进回收站，可恢复）"
+                @click="
+                  confirmingDelete === s.threadId ? doSoftDelete(s) : (confirmingDelete = s.threadId)
+                "
+              >
+                {{ confirmingDelete === s.threadId ? '确认删除？' : '🗑' }}
+              </button>
+            </span>
+          </div>
           <span class="session-meta">
-            {{ s.updatedAt ? new Date(s.updatedAt * 1000).toLocaleString() : '时间未知' }}
+            <span v-if="s.system" class="tag-system">系统</span>
+            <span v-if="s.pinned" class="tag-pin">置顶</span>
+            {{ shortTime(s.updatedAt) }} · {{ s.checkpointCount }} 步
           </span>
         </div>
         <div v-if="!store.sessions.length" class="session-empty">暂无历史会话</div>
+
+        <!-- 下面两行小字**只在有东西时出现**（counts 为 0 时一个字都不显示） -->
+        <button v-if="store.sessionCounts.hidden" class="link-row" @click="toggleHidden">
+          回收站 ({{ store.sessionCounts.hidden }}){{ store.showHidden ? ' ▾' : ' ▸' }}
+        </button>
+        <button v-if="store.sessionCounts.eval" class="link-row" @click="toggleEval">
+          {{ store.showEval ? '隐藏' : '显示' }}系统线程 ({{ store.sessionCounts.eval }})
+        </button>
+        <button
+          v-if="store.showEval && store.sessionCounts.eval"
+          class="link-row danger"
+          @click="confirmingPurge ? doPurgeSystem() : (confirmingPurge = true)"
+        >
+          {{ confirmingPurge ? '确认清空系统线程？' : '清空系统线程' }}
+        </button>
+        <p v-if="sessionNotice" class="notice">{{ sessionNotice }}</p>
       </div>
       <button class="btn-settings" @click="store.showSettings = true">⚙ 模型设置</button>
     </aside>
@@ -149,8 +314,38 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f17
 .session-item { padding: 8px 10px; background: #0f172a; border-radius: 8px; border: 1px solid #334155; display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
 .session-item:hover { border-color: #3b82f6; }
 .session-item.active { border-color: #3b82f6; background: #172554; }
-.session-id { font-family: Consolas, monospace; font-size: 12px; color: #93c5fd; }
+/* 回收站里的 / 系统线程：灰一点，一眼能看出"这不是我的日常会话" */
+.session-item.gone { opacity: 0.6; border-style: dashed; }
+.session-item.system .session-label { color: #94a3b8; }
+.session-head { display: flex; align-items: center; gap: 6px; }
+.session-label {
+  flex: 1; min-width: 0; font-size: 12.5px; color: #e2e8f0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.session-actions { display: none; align-items: center; gap: 2px; flex-shrink: 0; }
+.session-item:hover .session-actions { display: flex; }
+.mini {
+  border: none; background: transparent; cursor: pointer; font-size: 11px;
+  padding: 1px 3px; border-radius: 5px; color: #94a3b8; line-height: 1.4;
+}
+.mini:hover { background: #334155; color: #e2e8f0; }
+.mini.danger { color: #fca5a5; }
+.mini.danger:hover { background: #450a0a; }
+.rename-input {
+  flex: 1; min-width: 0; font-size: 12.5px; padding: 2px 6px; border-radius: 6px;
+  border: 1px solid #3b82f6; background: #0b1220; color: #e2e8f0; font-family: inherit;
+}
+.rename-input:focus { outline: none; }
 .session-meta { font-size: 11px; color: #64748b; }
+.tag-system { background: #334155; color: #cbd5e1; border-radius: 999px; padding: 0 6px; margin-right: 4px; }
+.tag-pin { background: #422006; color: #fbbf24; border-radius: 999px; padding: 0 6px; margin-right: 4px; }
+.link-row {
+  border: none; background: transparent; color: #93c5fd; font-size: 11.5px;
+  text-align: left; padding: 4px 2px; cursor: pointer;
+}
+.link-row:hover { text-decoration: underline; }
+.link-row.danger { color: #fca5a5; }
+.notice { font-size: 11px; color: #fca5a5; margin: 2px 0 0; }
 .session-empty { font-size: 12px; color: #64748b; padding: 8px; }
 .btn-settings { padding: 9px; border: 1px solid #334155; background: transparent; color: #cbd5e1; border-radius: 8px; cursor: pointer; font-size: 13px; }
 .btn-settings:hover { background: #334155; }

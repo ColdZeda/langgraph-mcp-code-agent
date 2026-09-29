@@ -25,6 +25,11 @@ export const store = reactive({
   messages: [], // {id, role: 'user'|'assistant', text?, result?|error?}
   sending: false,
   sessions: [],
+  // 阶段 7（会话管理）：`counts` = {visible, hidden, eval}，决定两行小字的显隐；
+  // 两个开关是"要不要把回收站 / 系统线程也拉下来"（默认都不显示）。
+  sessionCounts: { visible: 0, hidden: 0, eval: 0 },
+  showHidden: false,
+  showEval: false,
   showSettings: false,
   // 「当前生效模型」：四个角色**解析后**各自会用哪个（后端算好给前端 —— 兜底链有三层，
   // 前端自己拼容易算错）。阶段 6 加的：模型是全局配置、不随会话保存，
@@ -107,8 +112,10 @@ function handleWsMessage(msg) {
     // 任务结束 → 弹框与队列都该清掉（后端不会再等它们了）
     store.permissionRequest = null
     store.permissionQueue = []
-    const running = [...store.messages].reverse().find((m) => m.phase === 'running')
-    if (running) running.phase = 'done'
+    // ⚠️ 阶段 7（T7.5 走查发现）：**那条"协作中…"占位气泡要删掉**，不能只把 phase 改成 done。
+    //    改 phase 的话它还留在列表里，而 ChatView 的最后一条分支要求 `m.text` ——
+    //    于是任务跑完后永远挂着一句"Planner → Executor → Verifier 协作中…"（实测截图里就是）。
+    store.messages = store.messages.filter((m) => m.phase !== 'running')
     store.messages.push({
       id: `r_${Date.now()}`, role: 'assistant', phase: 'done', result: msg,
     })
@@ -119,12 +126,18 @@ function handleWsMessage(msg) {
     store.sending = false
     store.permissionRequest = null
     store.permissionQueue = []
+    // 同上的理由：把**那一条**占位气泡改成错误气泡（以前是"改 phase + 再 push 一条"，
+    // 结果是两条错误气泡叠在一起）。
     const running = [...store.messages].reverse().find((m) => m.phase === 'running')
-    if (running) running.phase = 'error'
-    store.messages.push({
-      id: `e_${Date.now()}`, role: 'assistant', phase: 'error',
-      text: `出错：${msg.message}`,
-    })
+    if (running) {
+      running.phase = 'error'
+      running.text = `出错：${msg.message}`
+    } else {
+      store.messages.push({
+        id: `e_${Date.now()}`, role: 'assistant', phase: 'error',
+        text: `出错：${msg.message}`,
+      })
+    }
   }
 }
 
@@ -166,9 +179,68 @@ export function newSession() {
 
 export async function refreshSessions() {
   try {
-    const res = await fetch('/api/sessions')
-    store.sessions = await res.json()
+    // 阶段 7：接口返回**对象**（items + counts）—— counts 决定"回收站 (N)"
+    // 与"显示系统线程 (N)"这两行小字要不要出现（都是 0 时一个字都不显示）。
+    const params = new URLSearchParams()
+    if (store.showHidden) params.set('include_hidden', '1')
+    if (store.showEval) params.set('include_eval', '1')
+    const qs = params.toString()
+    const res = await fetch(`/api/sessions${qs ? `?${qs}` : ''}`)
+    const data = await res.json()
+    store.sessions = data.items || []
+    store.sessionCounts = data.counts || { visible: 0, hidden: 0, eval: 0 }
   } catch { /* 服务未就绪时静默 */ }
+}
+
+/** 改会话标题（后端会把 title_source 记为 user —— 之后自动标题不再覆盖它）。 */
+export async function renameSession(threadId, title) {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(threadId)}/title`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  await refreshSessions()
+  return res.ok
+}
+
+/** 置顶 / 取消置顶。 */
+export async function togglePinSession(threadId, pinned) {
+  await fetch(`/api/sessions/${encodeURIComponent(threadId)}/pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pinned }),
+  })
+  await refreshSessions()
+}
+
+/** 软删除：进回收站（checkpoint 一行都不少，可「恢复」）。 */
+export async function softDeleteSession(threadId) {
+  const res = await fetch(`/api/sessions/${encodeURIComponent(threadId)}`, { method: 'DELETE' })
+  await refreshSessions()
+  return res
+}
+
+/** 从回收站恢复。 */
+export async function restoreSession(threadId) {
+  await fetch(`/api/sessions/${encodeURIComponent(threadId)}/restore`, { method: 'POST' })
+  await refreshSessions()
+}
+
+/** 彻底删除（不可逆：那个会话的跨轮记忆一起没了）。 */
+export async function hardDeleteSession(threadId) {
+  const res = await fetch(
+    `/api/sessions/${encodeURIComponent(threadId)}?hard=1`,
+    { method: 'DELETE' },
+  )
+  await refreshSessions()
+  return res
+}
+
+/** 一键清空系统线程（评估 / 探针 / 冒烟）—— 用户会话一条都不动。 */
+export async function purgeSystemSessions() {
+  const res = await fetch('/api/sessions/purge-system', { method: 'POST' })
+  await refreshSessions()
+  return res
 }
 
 /** 切换到一个历史会话：告诉后端改用它，并把历史消息拉回来回放。 */

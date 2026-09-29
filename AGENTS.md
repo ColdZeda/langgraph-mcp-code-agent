@@ -59,7 +59,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（550 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（584 个） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | **复用同名 run-id 前必跑**（清库里的 eval 线程；默认只报告，`--yes` 才删） | `uv run python evals/reset_eval_threads.py --yes` |
 | 逐题跑完后合并成一轮（缺题会拒绝写出） | `uv run python evals/merge_runs.py --prefix v3-single --mode single --archive` |
@@ -109,8 +109,16 @@ config/models.json               内置模型注册表（**显示名 key + 实�
                                  加内置预设的格式写在它的 `_readme` 里。**进版本控制**，不要放 runtime/；
                                  用户自定义模型不在这里（见 web-settings.json 的 custom_models）
 app/web/server.py                FastAPI：WS /ws/chat（含权限确认协议）+ REST + 静态托管 dist
-app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框）+ store.js + components/
-                                 （ChatView / ResultCard / SettingsPanel / **PermissionDialog**〔阶段 5〕）
+                                 + 阶段 7：`/api/sessions` 一组（列表 / 改标题 / 置顶 / 回收站 / 恢复 /
+                                   彻底删除 / 清空系统线程）+ `_active_threads` 活会话登记（删会话前的保护）
+app/web/sessions.py              ★ 阶段 7：会话元数据**侧车库**（`runtime/sessions.db`）——
+                                 标题（新会话第一条用户消息；**用户改过就不再被覆盖**）/ 置顶 /
+                                 软删除（回收站）/ 彻底删除（真删 `writes → checkpoints`）/
+                                 系统线程前缀（`eval-` `probe-` `smoke` `nowrap-`）与一键清空
+app/web/frontend/src/            Vue3 源码：App.vue（执行/权限两个下拉框 + **会话列表：标题、相对时间、
+                                 📌 置顶、✏️ 重命名、🗑 回收站、系统线程折叠**）+ store.js + components/
+                                 （ChatView / ResultCard / **MarkdownText**〔阶段 7：marked + DOMPurify〕
+                                 / SettingsPanel / **PermissionDialog**〔阶段 5〕）
 evals/                           ★ 阶段 6 重建的评估体系（11 个文件，口径见「评估相关」）：
                                  tasks.py（30 题题集）/ verifiers.py（43 个判定器工厂，四档强度）
                                  runner.py（执行引擎）/ run_e2e.py（命令行入口）
@@ -127,7 +135,7 @@ scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           550 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           584 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / **powershell_exec** /
@@ -138,7 +146,10 @@ tests/                           550 个测试（config / prompts / mysql_safe_i
                                  prompt_model_name〔阶段 6 的十二个〕/
                                  **multi_retry_verdict**（D1/D2）/ **mysql_connection_error**（D3）/
                                  **evals_artifact_resolution**（D4）/ **evals_dangerous_executed**（D5）
-                                 〔2026-09-25 加的四个，共 +19 条；同期 runner / reset_threads 也补了用例〕）
+                                 〔2026-09-25 加的四个，共 +19 条；同期 runner / reset_threads 也补了用例〕/
+                                 **web_sessions**（侧车库：标题/置顶/回收站/系统线程，25 条）+
+                                 **web_sessions_api**（那组接口与"活会话不许删"，9 条）
+                                 〔阶段 7 · T7.5 加的两个，共 +34 条〕）
 ```
 
 ## 已知坑（务必先看）
@@ -674,7 +685,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | **550** | `uv run python -m pytest tests/ -q`（2026-09-25 实测输出：`550 passed in 30.12s`） |
+| 测试数 | **584** | `uv run python -m pytest tests/ -q`（2026-09-29 实测输出：`584 passed in 34.17s`） |
 | 测试覆盖率 | **73~74%（2082 语句 / 563~545 未覆盖）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **会随环境波动**：4 个依赖容器**在跑**时实测 73%（563 未覆盖）、**全停**时 74%（545）—— 那几条"要真环境"的测试走的分支不同（2026-09-27 实测）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5、阶段 6 各涨过一次）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。测试条数的**可核对链条**（用 `git worktree` + `pytest --collect-only` 数的）：阶段 5 末 `c73ac99` = **308** → 阶段 6 重建后 `4cd1574^` = **528** → 修完 D1–D5 = **550**（最后这批 **+22**：四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干） |
 | **评估正式结果（阶段 6 · 2026-09-25）** | **single 30/30 = 100%**（均分 1.0000，958,832 token / 332s / 194 工具 / 362 步）｜**multi 30/30 = 100%**（1,644,029 token / 687s / 227 工具 / 409 步）；断言两轮都是 **124/124 + 29/29 + 10/10**；打回·击穿预算·超时·未测·异常**全 0**。⚠️ **两轮口径不同**（single 有 200k 上限 + 每题超时；multi 只计量）⇒ **分数与成本都不可直比** | `uv run python evals/report.py --single runtime/runs/v3-single.json --multi runtime/runs/v3-multi.json`；归档 `docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
