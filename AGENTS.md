@@ -504,7 +504,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - **`/api/settings` 那套"系统默认模型"（`base_url`/`api_key`）仍保留在后端，但界面不再露出来**
   （T7.6 用户化改造）：它只影响 Web 进程，**CLI 与 evals 完全不读**。界面里只剩
   「角色模型 + 我的模型 + 测试当前模型 + 保存并生效」。
-- ⚠️ **界面第二轮反馈有 6 条待修**（2026-09-30）：测试要覆盖**四个角色**（不能只测 Executor）/ 侧栏文案改「有角色使用了不同的模型」/ **会话行按钮要常显**（现在是 hover 才出现，用户找不到）/ 精简解释性小字 / `index.html` 加 `no-store` /
+- ⚠️ **界面第二轮反馈有 6 条待修**（2026-09-30）：~~测试覆盖四个角色~~ ✅ 已完成（`POST /api/settings/test-roles`：按模型去重 + 按角色分组）/ 侧栏文案改「有角色使用了不同的模型」/ **会话行按钮要常显**（现在是 hover 才出现，用户找不到）/ 精简解释性小字 / `index.html` 加 `no-store` /
   两个测试会话去留待定 —— 清单在 `docs/evidence/阶段7_WEB端走查与修复.md` §七。
 
 ### 仓库整理

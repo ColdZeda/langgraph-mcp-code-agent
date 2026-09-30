@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -328,6 +329,12 @@ async def lifespan(app: FastAPI):
         apply_settings(settings)  # 含 api_key 与各角色模型（改造前漏了 api_key）
         logger.info(f"已应用本地模型设置: {masked_settings(settings)}")
     await runtime.load()
+    # 阶段 7：启动脚本会在拉起进程前设好这个环境变量 —— 这样"已就绪"这句话正好出现在
+    # **能打开界面**的那一刻。脚本自己打的那句 URL 只能打在启动前（那时点开是打不开的），
+    # 用户会以为项目坏了（界面第二轮反馈里就是这么踩的）。
+    web_url = os.getenv("CODE_AGENT_WEB_URL", "").strip()
+    if web_url:
+        logger.info(f"[OK] 已就绪 —— 在浏览器打开：{web_url}")
     yield
 
 
@@ -533,6 +540,45 @@ async def test_settings(body: dict):
             "error": f"{type(e).__name__}: {e}",
             "testedModel": model or MODEL_NAME,
         }
+
+
+@app.post("/api/settings/test-roles")
+async def test_roles():
+    """**当前配置里实际用到的每个模型**各测一次（自动去重 + 并发），并说明哪些角色在用它。
+
+    为什么要单开这个接口（阶段 7 · 界面第二轮反馈）：
+    - 用户四个角色可能配成不同模型（multi 模式下 Planner / Executor / Verifier / Router
+      各干各的活），只测 Executor 说明不了"整条链路通不通"；
+    - 但**盲目四个角色各测一次**又会浪费：`/api/settings/test` 是**真的发一次 completion**
+      （`ainvoke("回复两个字：正常")`），而四个角色常常共用同一个模型 ⇒ 白跑三次。
+    ⇒ 这里按"模型键"去重，一次拿到分组结果：`2 个模型分给 4 个角色` = 发 **2** 次请求。
+    """
+    roles_by_key: dict[str, list[str]] = {}
+    for role in ROLE_NAMES:
+        roles_by_key.setdefault(registry.model_key(role), []).append(role)
+
+    effective = registry.effective_models()
+    # ⚠️ 角色没单独指定模型时，`model_key()` 返回的是 `.env` 的 `MODEL_NAME`
+    #    （一个"裸模型名"，**不在注册表里**）。那种情况要测的是**全局凭据**，
+    #    而不是把这个名字当 id 去查注册表（否则会得到"没有这个模型：xxx"的假失败）。
+    known = registry.all_models()
+
+    async def probe(key: str) -> dict:
+        fallback = key not in known
+        result = await test_settings({} if fallback else {"model_id": key})
+        info = effective.get(roles_by_key[key][0]) or {}
+        return {
+            "key": key,
+            "label": info.get("label") or key,
+            "model": info.get("model") or key,
+            "custom": bool(info.get("custom")),
+            "fallback": fallback,
+            "roles": roles_by_key[key],
+            **result,
+        }
+
+    groups = list(await asyncio.gather(*[probe(k) for k in roles_by_key]))
+    return {"ok": all(g.get("ok") for g in groups), "groups": groups}
 
 
 # ── 会话（读 checkpointer 的 SQLite）──

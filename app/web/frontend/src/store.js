@@ -323,3 +323,13 @@ export async function testSettings(payload) {
   })
   return res.json()
 }
+
+/**
+ * 阶段 7 · 界面第二轮反馈：一次测**当前配置里用到的每个模型**。
+ * 后端按模型键去重 + 并发（"2 个模型分给 4 个角色" ⇒ 只发 2 次请求），
+ * 返回 `{ok, groups: [{label, model, roles, ok, elapsedSec, error}]}`。
+ */
+export async function testRoleModels() {
+  const res = await fetch('/api/settings/test-roles', { method: 'POST' })
+  return res.json()
+}

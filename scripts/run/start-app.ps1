@@ -125,8 +125,17 @@ if ($Dev) {
 }
 
 # ── 前台启动后端 ─────────────────────────────────────────
+# ⚠️ 这里**故意先不打 URL**（阶段 7 · 界面第二轮反馈）：
+#    启动要加载 32 个工具 + 知识库，通常 10~30 秒；以前脚本一上来就把地址打出来，
+#    用户点进去看到的是"网页打不开"，很容易以为项目坏了。
+#    现在改成：先提示"正在启动"，把地址交给**后端自己**在启动完成时打印
+#    （`lifespan` 末尾会读下面这个环境变量，输出「✅ 已就绪 —— 在浏览器打开：…」）。
 Write-Host ""
-Write-Host "  界面:  http://127.0.0.1:$Port/" -ForegroundColor Green
+Write-Host "  正在启动，请稍候……" -ForegroundColor Yellow
+Write-Host "     要加载 32 个工具 + 知识库，通常 10~30 秒（首次更久）。" -ForegroundColor DarkGray
+Write-Host "     等下面出现「[OK] 已就绪」再打开浏览器 —— 提前点会打不开，那不是项目坏了。" -ForegroundColor DarkGray
+Write-Host ""
 Write-Host "  停止:  在这个窗口按 Ctrl+C" -ForegroundColor DarkGray
 Write-Host ""
+$env:CODE_AGENT_WEB_URL = "http://127.0.0.1:$Port/"
 & uv run uvicorn app.web.server:app --port $Port

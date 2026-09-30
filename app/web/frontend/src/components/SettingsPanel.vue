@@ -30,6 +30,7 @@ import {
   loadSettings,
   saveSettings,
   store,
+  testRoleModels,
   testSettings,
 } from '../store'
 
@@ -49,6 +50,10 @@ const notice = ref('')
 const error = ref('')
 const saving = ref(false)
 const testingCurrent = ref(false)
+// 阶段 7 · 界面第二轮反馈：测的是「当前用到的每个模型」（后端去重 + 并发），
+// 结果按模型分组，每组标出哪些角色在用它 —— 四个角色各配不同模型时也能一眼看清。
+const roleTest = ref(null)
+const ROLE_LABEL = Object.fromEntries(ROLES.map((r) => [r.key, r.label]))
 
 // 「我的模型」编辑表单
 const showForm = ref(false)
@@ -98,21 +103,22 @@ async function save() {
   }
 }
 
-/** 测"现在真正在用"的那个模型：Executor 选了哪个就测哪个。 */
-async function testCurrent() {
+/** 测「当前用到的每个模型」：后端按模型键去重后并发各测一次，前端只负责展示分组。 */
+async function testRoles() {
   testingCurrent.value = true
-  formTestResult.value = null
+  roleTest.value = null
   notice.value = ''
   try {
-    const id = roles.value.executor || ''
-    const payload = id && customModels.value.some((m) => m.id === id) ? { model_id: id } : {}
-    const res = await testSettings(payload)
-    notice.value = res.ok
-      ? `当前模型连接正常（${res.elapsedSec}s）｜实测：${res.testedModel}`
-      : `当前模型连接失败：${res.error}`
+    roleTest.value = await testRoleModels()
+  } catch (e) {
+    notice.value = `测试失败：${e}`
   } finally {
     testingCurrent.value = false
   }
+}
+
+function rolesText(group) {
+  return (group.roles || []).map((k) => ROLE_LABEL[k] || k).join('、')
 }
 
 function startAdd() {
@@ -299,10 +305,20 @@ async function remove(id) {
       <p class="note">这些设置只保存在你自己的电脑上，不会上传。</p>
       <div v-if="notice" class="result ok">{{ notice }}</div>
       <div v-if="error" class="result bad">{{ error }}</div>
+      <div v-if="roleTest" class="result" :class="roleTest.ok ? 'ok' : 'bad'">
+        <div v-for="g in roleTest.groups" :key="g.key" class="group">
+          {{ g.ok ? '✅' : '❌' }} {{ g.label
+          }}<span v-if="g.fallback">（跟随默认）</span
+          ><span v-else-if="g.model && g.model !== g.label">（实际调用 {{ g.model }}）</span>
+          <span v-if="g.ok"> — {{ g.elapsedSec }}s</span>
+          <span class="roles"> ← {{ rolesText(g) }}</span>
+          <div v-if="!g.ok" class="err">{{ g.error }}</div>
+        </div>
+      </div>
 
       <div class="actions footer">
-        <button class="ghost" :disabled="testingCurrent || !hasModels" @click="testCurrent">
-          {{ testingCurrent ? '测试中...' : '测试当前模型' }}
+        <button class="ghost test-roles" :disabled="testingCurrent || !hasModels" @click="testRoles">
+          {{ testingCurrent ? '测试中...' : '测试四个角色的模型' }}
         </button>
         <button class="primary" :disabled="saving" @click="save">
           {{ saving ? '保存中...' : '保存并生效' }}
@@ -366,6 +382,8 @@ async function remove(id) {
 .result { font-size: 12px; padding: 8px 10px; border-radius: 8px; }
 .result.ok { background: #052e16; color: #86efac; }
 .result.bad { background: #450a0a; color: #fca5a5; }
+.group { line-height: 1.7; }
+.roles { color: #94a3b8; }
 .err { font-size: 12px; color: #fca5a5; margin: 2px 0 0; }
 .note { font-size: 11.5px; color: #64748b; margin: 8px 0 0; }
 </style>
