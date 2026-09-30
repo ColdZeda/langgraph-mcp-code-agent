@@ -10,6 +10,7 @@
 Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner → Executor → Verifier）
 + 6 个自建 MCP Server（stdio 子进程，25 个工具）+ FileManagementToolkit（7 个文件工具），
 双入口（CLI `main.py` / Web UI `app/web/server.py`）。
+**定位：本机单用户**（2026-09-30 用户定）—— **不做公网部署、不做多用户账号**：它会执行 shell / 读写主机文件，公网开放等于给陌生人一个远程代码执行入口；部署与 CI/CD 留给**第二个项目**。对外展示 = **GitHub 主仓库 + Gitee 镜像**。
 ⚠️ **旧 30 题评估体系已于阶段 5 删除**（口径不可用）；**阶段 6 已从零重建并跑完正式两轮**（30 题 + 163 条强断言）：
 **single 30/30、multi 30/30，平均分 1.0000**，结果归档在 `docs/evidence/v3-single.json` / `v3-multi.json`
 —— 见下方「评估相关」。阶段 7（收尾包装）**待开工**。
@@ -503,6 +504,8 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - **`/api/settings` 那套"系统默认模型"（`base_url`/`api_key`）仍保留在后端，但界面不再露出来**
   （T7.6 用户化改造）：它只影响 Web 进程，**CLI 与 evals 完全不读**。界面里只剩
   「角色模型 + 我的模型 + 测试当前模型 + 保存并生效」。
+- ⚠️ **界面第二轮反馈有 6 条待修**（2026-09-30）：测试要覆盖**四个角色**（不能只测 Executor）/ 侧栏文案改「有角色使用了不同的模型」/ **会话行按钮要常显**（现在是 hover 才出现，用户找不到）/ 精简解释性小字 / `index.html` 加 `no-store` /
+  两个测试会话去留待定 —— 清单在 `docs/evidence/阶段7_WEB端走查与修复.md` §七。
 
 ### 仓库整理
 
