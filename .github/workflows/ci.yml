@@ -1,8 +1,16 @@
 name: CI
 
-# 跑的就是"本机也能跑"的那几步：ruff → pytest（不含真集成测试，它们要 Windows + WSL，
-# 见 README「如何验证这个项目」）。第三个 job 是**前端产物一致性检查**：
-# dist/ 是入库的（clone 下来不装 Node 也能开界面），所以必须保证"源码与产物一致"。
+# 跑的就是"本机也能跑"的那几步：ruff → pytest。
+# ⚠️ 真集成测试**不在这里**：它们要真 MySQL/WSL/Redis/SearXNG，而 GitHub 的 runner 是 Linux
+#    （**没有 WSL**）⇒ 那 5 条只在 Windows 本机跑，见 README「如何验证这个项目」。
+#
+# 📌 曾经还有一个 `frontend-dist` job（重新构建前端 + `git diff --exit-code app/web/frontend/dist`，
+#    用来防"改了前端忘了提交 dist"）。**2026-10-01 用户决定去掉**：他确认自己不会忘记先
+#    `npm run build` 再 push。附带留档那次排查的结论 —— 两端产物不一致的根因是**行尾**：
+#    Vite 模板在 Windows 工作树里是 CRLF，构建出的 `dist/index.html` 也带 CRLF，
+#    而该文件被 git 判为二进制（`-text`）不做规范化；Linux CI 构建出 LF ⇒ 严格 diff 必红。
+#    虽然 job 去掉了，`.gitattributes` 里那几条 `text eol=lf`（前端模板/静态资源/产物）**保留**：
+#    它让仓库里的前端文本文件行尾统一，避免以后再被这件事绊住。
 on:
   push:
     branches: [master]
@@ -31,39 +39,3 @@ jobs:
 
       - name: 单元 + 工具级测试
         run: uv run python -m pytest tests/ -v --tb=short
-
-  frontend-dist:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      # ⚠️ 大版本要和本机一致（本机 v24.9.0）：不同版本的打包器可能产出不同字节
-      #    ⇒ `git diff --exit-code` 会**误报**成"忘了提交 dist"。
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: app/web/frontend/package-lock.json
-
-      - name: 装前端依赖（严格按 lockfile）
-        working-directory: app/web/frontend
-        run: npm ci
-
-      - name: 重新构建
-        working-directory: app/web/frontend
-        run: npm run build
-
-      - name: 构建产物必须与仓库里提交的一致
-        run: |
-          # ⚠️ `--ignore-cr-at-eol`：Windows 本地与 Linux CI 的换行可能不同 ——
-          #    行尾差异不是问题，**内容差异**才是。
-          # 失败时把差异打出来（否则只看得到"不一致"，排查要重跑一遍）。
-          if ! git diff --exit-code --ignore-cr-at-eol -- app/web/frontend/dist; then
-            echo "::error::app/web/frontend/dist 与源码不一致 —— 本地跑一次 npm run build 并提交产物"
-            echo "──────── 差异概览 ────────"
-            git diff --stat --ignore-cr-at-eol -- app/web/frontend/dist
-            echo "──────── 差异片段（前 80 行）────────"
-            git diff --ignore-cr-at-eol -- app/web/frontend/dist | head -80
-            exit 1
-          fi
-          echo "✅ dist 与源码一致"
