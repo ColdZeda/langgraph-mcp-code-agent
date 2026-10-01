@@ -188,7 +188,7 @@ async function doPurgeSystem() {
         <template v-else>
           <span class="model-name">{{ executorModel ? executorModel.model : '读取中…' }}</span>
           <span v-if="executorModel?.custom" class="model-tag">我的模型</span>
-          <span v-if="rolesDiffer" class="model-warn">四个角色配置不同（悬停查看）</span>
+          <span v-if="rolesDiffer" class="model-warn">有角色使用了不同模型（悬停查看）</span>
         </template>
       </div>
       <div class="session-title">历史会话（checkpoint）</div>
