@@ -39,7 +39,13 @@ dev = [
 # async 测试直接用 `async def test_xxx()`，不需要逐个加 @pytest.mark.asyncio
 asyncio_mode = "auto"
 # 覆盖率：只统计 app/code_agent（MCP server 与 Agent 主体），报告未覆盖行
-addopts = "--cov=app/code_agent --cov-report=term-missing"
+# ⚠️ `-m "not integration"`：默认证集**不含**真集成测试（要真 MySQL/WSL/Redis/SearXNG，
+#    只能在 Windows 本机跑 —— GitHub 的 runner 没有 WSL）。要跑那一层就显式：
+#        uv run python -m pytest -m integration -v
+addopts = "-m \"not integration\" --cov=app/code_agent --cov-report=term-missing"
+markers = [
+    "integration: 需要真实依赖（MySQL 3307 / Redis 6379 / SearXNG 8123 / WSL）的集成测试；默认不跑",
+]
 
 [tool.ruff]
 line-length = 100
