@@ -173,7 +173,7 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 | 服务 | 容器 | 端口 | 说明 |
 |---|---|---|---|
 | MySQL 沙盒 | `agent-mysql` | 3307→3306 | 数据存在**命名卷** `mysql-data`；首次初始化会执行 `scripts/mysql-init/*.sql` |
-| 搜索 | `searxng` | 8888→8080 | 配置/缓存在 `E:\agentstart\work\searXNG\{config,data}` |
+| 搜索 | `searxng` | 8888→8080 | 配置/缓存在**本机** `searXNG\{config,data}`（不进版本控制） |
 | 缓存 | `redis-stack-server` | 6379 | 纯缓存，**故意不挂卷**（数据可丢） |
 | 静态发布 | `my-nginx` | 80 | 挂载源在 WSL（见下），由 WSL 里那份 compose 管理 |
 
@@ -528,7 +528,7 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
   `run_vm_shell_command` 根本不是 MCP 工具（`vm.py` 里它是普通函数，没挂 `@mcp.tool`）
   → 走 WSL 的路径它永远看不见，**恒定给满分**。
 - 留着一把坏尺子，只会让后续开发（包括 AI 助手）继续拿它量东西 —— 所以删掉，而不是标注。
-- 备份：`E:\agentstart\work\backup\1new\backup\evals\`；也能从 git 历史取回（`git show f2f3bbb:evals/tasks.py`）。
+- 备份：本机另存了一份（未入库）；也能从 git 历史取回（`git show f2f3bbb:evals/tasks.py`）。
 
 **新尺子长什么样**（`evals/`，11 个文件 + 一个夹具目录）：
 
@@ -585,7 +585,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 ### 改造前的存档数字（**仅供说明「改造前长什么样」**）
 
-> 存档文件已移出仓库（备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`，
+> 存档文件已移出仓库（本机另存了一份，未入库；
 > 也能用 `git show 73dd4e6^:docs/evidence/<文件名>` 从历史取回）。
 > **下表不是当前架构的成绩**；阶段 6 已用新评分器重建题集并**跑完正式两轮**，
 > **新结果已归档进 `docs/evidence/`**（见上一节「评估体系」）。
