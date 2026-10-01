@@ -1,5 +1,11 @@
 # Code Agent
 
+[![CI](https://github.com/chongd259/langgraph-mcp-code-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/chongd259/langgraph-mcp-code-agent/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.13-blue)
+![Tests](https://img.shields.io/badge/tests-593%20%2B%205%20integration-brightgreen)
+![Eval](https://img.shields.io/badge/eval-30%2F30%20%C2%B7%20163%20assertions-success)
+![License](https://img.shields.io/badge/license-MIT-lightgrey)
+
 > **给谁看**：第一次接触这个项目的人（面试官 / 同行 / 想跑起来的人）。
 > 想了解内部约定与已知坑 → [`AGENTS.md`](AGENTS.md)；设计取舍与代价 → [`docs/architecture.md`](docs/architecture.md)。
 
@@ -721,4 +727,6 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 ## License
 
-MIT
+本项目采用 **MIT 许可**（见 [`LICENSE`](LICENSE)）—— 可自由使用、修改、分发，保留版权声明即可。
+
+Copyright (c) 2026 wdnmded

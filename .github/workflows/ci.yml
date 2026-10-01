@@ -1,0 +1,61 @@
+name: CI
+
+# 跑的就是"本机也能跑"的那几步：ruff → pytest（不含真集成测试，它们要 Windows + WSL，
+# 见 README「如何验证这个项目」）。第三个 job 是**前端产物一致性检查**：
+# dist/ 是入库的（clone 下来不装 Node 也能开界面），所以必须保证"源码与产物一致"。
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # ⚠️ 不带 .env 也能跑：tests/conftest.py 会兜一个**假** key（真 key 从不进 CI）
+      - name: 同步依赖（严格按 uv.lock）
+        run: uv sync --frozen
+
+      - name: 静态检查
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: 单元 + 工具级测试
+        run: uv run python -m pytest tests/ -v --tb=short
+
+  frontend-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⚠️ 大版本要和本机一致（本机 v24.9.0）：不同版本的打包器可能产出不同字节
+      #    ⇒ `git diff --exit-code` 会**误报**成"忘了提交 dist"。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: app/web/frontend/package-lock.json
+
+      - name: 装前端依赖（严格按 lockfile）
+        working-directory: app/web/frontend
+        run: npm ci
+
+      - name: 重新构建
+        working-directory: app/web/frontend
+        run: npm run build
+
+      - name: 构建产物必须与仓库里提交的一致
+        run: |
+          if ! git diff --exit-code -- app/web/frontend/dist; then
+            echo "::error::app/web/frontend/dist 与源码不一致 —— 本地跑一次 npm run build 并提交产物"
+            exit 1
+          fi
