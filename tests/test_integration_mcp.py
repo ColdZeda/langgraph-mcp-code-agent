@@ -89,7 +89,8 @@ skip_no_redis = pytest.mark.skipif(
     not REDIS_UP, reason=f"Redis({REDIS_HOST}:{REDIS_PORT}) 没起：.\\scripts\\run\\start-deps.ps1"
 )
 skip_no_search = pytest.mark.skipif(
-    not SEARXNG_UP, reason=f"SearXNG({SEARCH_HOST}:{SEARCH_PORT}) 没起：.\\scripts\\run\\start-deps.ps1"
+    not SEARXNG_UP,
+    reason=f"SearXNG({SEARCH_HOST}:{SEARCH_PORT}) 没起：.\\scripts\\run\\start-deps.ps1",
 )
 skip_no_wsl = pytest.mark.skipif(not WSL_UP, reason="WSL 不可用（这条只能在 Windows 本机跑）")
 
@@ -98,7 +99,9 @@ async def _call(server_path: Path, client_id: str, tool_name: str, **kwargs) -> 
     """起一个 MCP server、找到工具、调一次，返回纯文本。"""
     tools = await load_mcp_tools(client_id=client_id, server_path=server_path)
     tool = next((t for t in tools if t.name == tool_name), None)
-    assert tool is not None, f"{client_id} server 里没有 {tool_name}，实际有：{[t.name for t in tools]}"
+    assert tool is not None, (
+        f"{client_id} server 里没有 {tool_name}，实际有：{[t.name for t in tools]}"
+    )
     result = await asyncio.wait_for(tool.ainvoke(kwargs), timeout=CALL_TIMEOUT)
     return result if isinstance(result, str) else str(result)
 
@@ -146,7 +149,9 @@ async def test_tool_cache_roundtrip_on_real_redis():
     cache = ToolCache("integration-test", enabled=True)
     args = {"probe": "itest"}
     await cache.set("itest_probe", args, "cached-value")
-    assert await cache.get("itest_probe", args) == "cached-value", "写进去的值读不回来（Redis 没通？）"
+    assert await cache.get("itest_probe", args) == "cached-value", (
+        "写进去的值读不回来（Redis 没通？）"
+    )
     await cache.invalidate()
     assert await cache.get("itest_probe", args) is None, "invalidate() 之后还能读到旧值"
     await cache.aclose()

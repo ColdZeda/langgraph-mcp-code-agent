@@ -60,14 +60,15 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（589 个） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**592 个**） |
+| **真集成测试**（要 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑 —— `addopts` 里带了 `-m "not integration"`） | `uv run python -m pytest -m integration -v`（5 条） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | **复用同名 run-id 前必跑**（清库里的 eval 线程；默认只报告，`--yes` 才删） | `uv run python evals/reset_eval_threads.py --yes` |
 | 逐题跑完后合并成一轮（缺题会拒绝写出） | `uv run python evals/merge_runs.py --prefix v3-single --mode single --archive` |
 | 看评估题集（**不跑、不烧 token**） | `uv run python evals/run_e2e.py --list` |
 | 跑评估（**逐题跑**，单/多 Agent 各一轮，**必须换 run-id / 前缀**） | `uv run python evals/run_e2e.py --task E001 --mode single --run-id v3-single-E001`（逐题循环见下方手册） |
 | 试跑几道题 | `uv run python evals/run_e2e.py --task E001 --mode single` / `--limit 3` |
-| 出评估报告（Markdown，数字全部现算） | `uv run python evals/report.py --single runtime/runs/v3-single.json --multi runtime/runs/v3-multi.json --rag runtime/runs/rag_ablation_*.json` |
+| 出评估报告（Markdown，数字全部现算） | `uv run python evals/report.py --single docs/evidence/v3-single.json --multi docs/evidence/v3-multi.json --rag docs/evidence/rag_ablation_20260924_053228.json --out docs/evidence/评估报告.md`（⚠️ 三个参数都是**单值**、**不吃通配符**；用 `docs/evidence/` 里入库的那份，别人 clone 下来也能复现） |
 | 报告生成器自测（**用假数据**，不跑评估） | `uv run python evals/report.py --selftest` |
 | MCP server 探针（排查"工具调不通"） | `uv run python scripts/probe_mcp_server.py rag query_rag --args '{"query":"MCP"}'` |
 | RAG 基准（含分块/精排指标） | `uv run python evals/rag_bench.py` |
@@ -136,7 +137,7 @@ scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           589 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           592 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / **powershell_exec** /
@@ -152,7 +153,11 @@ tests/                           589 个测试（config / prompts / mysql_safe_i
                                  **web_sessions_api**（那组接口与"活会话不许删"，9 条）
                                  〔阶段 7 · T7.5 加的两个，共 +34 条〕/
                                  **web_no_model**（T7.6：import 期不许建 LLM / 缺 key 不致命 /
-                                   第一个模型接管四个角色，5 条）〔阶段 7 · T7.6，共 +5 条〕）
+                                   第一个模型接管四个角色，5 条）〔阶段 7 · T7.6〕/
+                                 **web_test_roles**（`test-roles` 去重 + 按角色分组，3 条）/
+                                 **integration_mcp**（真 MySQL / WSL / SearXNG / Redis / RAG，
+                                   5 条，**默认不跑**，`-m integration`）
+                                 〔以上 8 条 = 阶段 7 · T7.6 与 T7.4〕）
 ```
 
 ## 已知坑（务必先看）
@@ -335,7 +340,7 @@ uv run python evals/run_e2e.py --task E001 --mode single --run-id v3-single-E001
 uv run python evals/merge_runs.py --prefix v3-single --mode single --archive       # 合并（缺题拒绝写）
 uv run python evals/report.py --single runtime/runs/v3-single.json \
                               --multi  runtime/runs/v3-multi.json \
-                              --rag    runtime/runs/rag_ablation_*.json --out docs/evidence/评估报告.md
+                              --rag    docs/evidence/rag_ablation_20260924_053228.json --out docs/evidence/评估报告.md
 ```
 
 ⚠️ **别再用 `--all` 一次跑一整轮**（结果 JSON 只在整轮结束写一次，被掐断就整轮白跑 —— E016 事故的教训）；
@@ -640,7 +645,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 > # ⑤ multi 轮：换前缀再把 ③④ 走一遍（thread_id 里带 run-id + mode，绝不能复用）
 > # ⑥ 报告（数字全部现算；缺哪个输入就如实写「未提供」，不编）：
 > #    uv run python evals/report.py --single runtime/runs/v4-single.json `
-> #        --multi runtime/runs/v4-multi.json --rag docs/evidence/rag_ablation_*.json `
+> #        --multi runtime/runs/v4-multi.json `
+> #        --rag    runtime/runs/rag_ablation_填具体文件名.json   # ⚠️ 单值参数，不吃通配符 `
 > #        --out docs/evidence/评估报告.md
 > ```
 >
@@ -721,7 +727,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | **589** | `uv run python -m pytest tests/ -q`（2026-09-29 实测输出：`589 passed in 27.96s`） |
+| 测试数 | **592**（另有 5 条真集成测试**默认不跑**） | `uv run python -m pytest tests/ -q`（2026-09-30 实测：`592 passed, 5 deselected in 31.86s`；`-m integration` 则为 `5 passed, 592 deselected`） |
 | 测试覆盖率 | **73~75%（语句 2081~2082，未覆盖 545~561）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **会随环境波动**：4 个依赖容器**在跑**时实测 73%（563 未覆盖）、**全停**时 74%（545）—— 那几条"要真环境"的测试走的分支不同（2026-09-27 实测）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5、阶段 6 各涨过一次）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。测试条数的**可核对链条**（用 `git worktree` + `pytest --collect-only` 数的）：阶段 5 末 `c73ac99` = **308** → 阶段 6 重建后 `4cd1574^` = **528** → 修完 D1–D5 = **550**（最后这批 **+22**：四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干） |
 | **评估正式结果（阶段 6 · 2026-09-25）** | **single 30/30 = 100%**（均分 1.0000，958,832 token / 332s / 194 工具 / 362 步）｜**multi 30/30 = 100%**（1,644,029 token / 687s / 227 工具 / 409 步）；断言两轮都是 **124/124 + 29/29 + 10/10**；打回·击穿预算·超时·未测·异常**全 0**。⚠️ **两轮口径不同**（single 有 200k 上限 + 每题超时；multi 只计量）⇒ **分数与成本都不可直比** | `uv run python evals/report.py --single runtime/runs/v3-single.json --multi runtime/runs/v3-multi.json`；归档 `docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
