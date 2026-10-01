@@ -368,3 +368,40 @@ embedding 缓存目录、日志级别、各类运行时目录 —— 留在 `.en
 3. 会话管理的实现与语义：`app/web/sessions.py` 顶部注释 + `tests/test_web_sessions*.py`；
 4. 阶段 7 的任务表与决策：仓库外 `program-fix第八版\阶段7_收尾包装.md` 顶部「执行中状态」；
 5. 原始数字与红绿证据：`docs/evidence/阶段6_修复与口径记录.md`（阶段 6）、本文（阶段 7）。
+
+---
+
+## 九、阶段 7 终检记录（2026-10-01）
+
+### 1. 干净 clone → 跑起来（**不带 `.env`**）
+
+```powershell
+git clone https://gitee.com/wdnmded/langgraph-mcp-code-agent.git E:\agentstart\work\clone-check-v1
+cd E:\agentstart\work\clone-check-v1
+uv sync                                  # 按 uv.lock
+uv run python -m pytest tests/ -q        # → 593 passed, 5 deselected in 106.88s
+uv run uvicorn app.web.server:app --port 8002   # 不带 .env 直接起
+curl http://127.0.0.1:8002/api/sessions  # → HTTP 200；日志有 "Application startup complete"
+```
+
+**结论**：**没有 `.env` 也能装、能跑测试、能起服务**（T7.6 的容错启动生效：注册表里没有可用模型时
+只警告不崩，界面提示「添加你的 API Key」）。这条走通 = "别人 clone 下来能用"这条最关键的假设成立。
+
+### 2. CI（GitHub Actions）现状
+
+| run | commit | `test` job（ruff + 593 测试） | `frontend-dist` job（产物一致性） |
+|---|---|---|---|
+| #1 | `5a2ada1` | ✅ success | ❌ failure |
+| #2 | `84d3518` | ✅ success | ❌ failure（本机复现不出差异） |
+| #3 | 待推送 | — | — |
+
+**诊断（已写进代码注释）**：本地 `npm ci && npm run build` **复现不出**差异（字节级比对：git blob 与
+工作树都是 LF）；根因是**跨平台行尾**——Vite 模板在工作树里曾是 CRLF（Windows），
+本地构建出的 `dist/index.html` 就带 CRLF，而 `dist/index.html` 被 git 判为二进制（`-text`）不做规范化，
+Linux CI 里构建出 LF ⇒ 严格 diff 必红。
+**已做两件事**：① `.gitattributes` 显式钉住前端模板/静态资源/产物 `text eol=lf`；
+② 产物检查失败时**打印 `git diff --stat` 与差异片段**（下次红能一眼看到差在哪）。
+
+⚠️ **尚未完成的收尾**：`32dc5d5`（这项修复）还没推到 GitHub（代理连接被重置，重试 4 次失败），
+**CI #3 因此还没跑**。等网络恢复推上去后，需要确认两个 job 都绿，并把 Actions 页面截图存进
+`docs/evidence/`（那才算"CI 真跑一次"的完整证据）。
