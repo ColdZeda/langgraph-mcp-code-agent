@@ -55,7 +55,9 @@ jobs:
 
       - name: 构建产物必须与仓库里提交的一致
         run: |
-          if ! git diff --exit-code -- app/web/frontend/dist; then
+          # ⚠️ `--ignore-cr-at-eol`：Windows 本地与 Linux CI 的换行可能不同
+          #    （dist/index.html 被 git 判为二进制、不做规范化）—— 行尾差异不是问题，内容差异才是。
+          if ! git diff --exit-code --ignore-cr-at-eol -- app/web/frontend/dist; then
             echo "::error::app/web/frontend/dist 与源码不一致 —— 本地跑一次 npm run build 并提交产物"
             exit 1
           fi
