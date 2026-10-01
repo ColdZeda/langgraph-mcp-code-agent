@@ -1,10 +1,54 @@
 # Code Agent
 
 > **给谁看**：第一次接触这个项目的人（面试官 / 同行 / 想跑起来的人）。
-> 想了解内部约定与已知坑 → [`AGENTS.md`](AGENTS.md)。
+> 想了解内部约定与已知坑 → [`AGENTS.md`](AGENTS.md)；设计取舍与代价 → [`docs/architecture.md`](docs/architecture.md)。
 
-基于 **LangGraph + MCP** 的本地多 Agent 编程助手（Python 3.13）：**Planner → Executor → Verifier** 三阶段 StateGraph，
-通过 MCP stdio 子进程统一编排 6 类工具，提供**命令行**与**本地 Web UI** 两种使用方式。
+## 一眼看懂（先看这段）
+
+**它是什么**：本机单用户的 AI 编程 / 操作电脑助手。LangGraph 多 Agent（**Planner → Executor → Verifier**）
++ MCP 工具层（32 个工具：PowerShell / MySQL / WSL2 / 搜索 / AST 与 diff / 本地知识库）+ Web UI 与 CLI 双入口。
+
+| 最硬的几个数字 | 值 |
+|---|---|
+| **评估**（30 题 / **163 条强断言**） | **single 30/30、multi 30/30**，平均分 **1.0000**；状态 124 / 轨迹 29 / 文本 10 全过 |
+| **成本画像**（multi ÷ single） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；**Verifier 占总 token 25%** |
+| **自动化测试** | **593** 条单元/工具级（约 30 秒跑完）+ **5** 条真集成测试（默认不跑，见「如何验证」） |
+| **覆盖率 / 静态检查** | 73~75%（`--cov`）/ `ruff check` + `ruff format --check` |
+| **RAG 检索对照**（2×2 消融 + 全量召回对照组） | 文件粒度 top-1 **0.6 → 0.9**，真源 top-1 0.4 → 0.6，延迟 12.8ms → 86.7ms |
+
+![真实任务：Planner 计划 + Executor 结果](docs/evidence/阶段7_web走查/当前界面/Planner计划与Executor结果.png)
+*真实任务：Planner 出计划 → Executor 执行（结果卡按 Markdown 渲染）*
+
+![权限确认弹框与节点级进度](docs/evidence/阶段7_web走查/当前界面/权限确认弹框与节点进度.png)
+*「需确认」档下写操作会弹框（含参数、倒计时、"本会话总是允许"）；上方是节点级实时进度*
+
+![测试四个角色的模型](docs/evidence/阶段7_web走查/当前界面/测试四个角色的模型-分组结果.png)
+*模型按角色配；一键测试"当前用到的每个模型"（按模型去重，2 个模型 / 4 个角色 ⇒ 只发 2 次请求）*
+
+## 能力总览（按 JD 关注度排序，细节都在下面各节）
+
+**① RAG 全链路**：`解析 → 分块 → Embedding → 向量检索 → CrossEncoder 精排 → 上下文组装`，
+知识库是**本地** ChromaDB（embedding/reranker 都走本地模型，路径不存在就降级为纯向量召回、不联网）。
+做了 **2×2 消融对照 + 全量召回对照组**（整篇/分块 × 有无精排，**不用 LLM、不烧 token**）：
+精排把文件粒度 top-1 从 0.6 拉到 **0.9**、把干扰源命中从 0.6 压到 0.4，代价是延迟 12.8ms → **86.7ms**。
+（详见「上下文工程与分层记忆」；原始数字在 [`docs/evidence/评估报告.md`](docs/evidence/评估报告.md) 第七节。）
+
+**② 评测体系**：30 道题 / **163 条断言**，四档强度（文本 10 / 轨迹 29 / **状态 124** / LLM 评分 0）。
+三条口径是"防自欺"的：**通过 = 满分**（不给部分分留后门）、**skip ≠ 0 分**（环境不可用记「未测」，
+不进分母）、**超时/异常也跑判定器**（产物可能已经写出来了）。判定器按**真实 MCP 工具名 + 真实参数名**写，
+改题集有机械守卫。报告：[`docs/evidence/评估报告.md`](docs/evidence/评估报告.md)。
+
+**③ 上下文工程**：长工具结果**外置**到磁盘、上下文里只留预览 + 路径（`read_file*` 在豁免名单里 ——
+实测不豁免会让 token 涨 7.3 倍）；历史超阈值**压实**成四段式摘要（摘要失败就保留原文，省 token 不能丢历史）；
+**token 预算**分节点级与任务级，且任务级在 ReAct 循环**内部逐步判**（只在节点入口判会漏掉单节点烧十几万 token）。
+
+**④ Agent 编排**：LangGraph `StateGraph` 三阶段 + `route_node` 复杂度路由（`auto` 模式），
+Verifier 打回上限 `MAX_RETRY=2`；执行过程通过 WebSocket 推**节点级进度**（不引 SSE）。
+工具层全部走 MCP stdio 子进程，**统一经一层包装**（权限判定 → 结果外置 → 只读缓存，三条入口 CLI/Web/评估都接）。
+
+**⑤ 权限与 HITL**：32 个工具的三档档位表（只读 14 / 写执行 18 / 高危 6），默认「需确认」；
+判定在**缓存查询之前**（否则"曾经允许过"的缓存会让已被拒绝的调用照样返回）；Web 弹框 + CLI 询问 +
+超时自动拒绝 + 审计留痕；WSL2 只当**隔离执行环境**，不叫"安全沙箱"。见「安全设计」。
 
 ## 架构
 
@@ -53,7 +97,8 @@ main.py (CLI REPL)                app/web/server.py (FastAPI + Vue3 Web UI, 端�
 ### 安装
 
 ```bash
-git clone https://gitee.com/wdnmded/langgraph-mcp-code-agent.git
+git clone https://github.com/chongd259/langgraph-mcp-code-agent.git
+# 国内镜像（内容相同）： https://gitee.com/wdnmded/langgraph-mcp-code-agent.git
 cd langgraph-mcp-code-agent
 uv sync
 ```
@@ -104,6 +149,38 @@ MODEL_BASE_URL=https://api.deepseek.com
 > - **改 `.env` 必须重启服务才生效**（配置在进程启动时读一次）；而界面改的会热生效，
 >   且**从下一条消息开始**（正在跑的那条任务用的是它启动时的配置快照）。
 > - **CLI 与评估（evals）不读 `web-settings.json`** —— 它们只用 `config/models.json` + `.env`。
+
+### 启动依赖服务
+
+```powershell
+.\scripts\run\start-deps.ps1     # 一键起全部 4 个：mysql / searxng / redis / nginx
+.\scripts\run\stop-deps.ps1      # 停止（保留容器，下次起得更快）
+```
+
+或手动分两步：
+
+```powershell
+docker compose up -d                                            # mysql / searxng / redis
+wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
+```
+
+| 服务 | 容器 | 端口 | 说明 |
+|---|---|---|---|
+| MySQL 沙盒 | `agent-mysql` | 3307→3306 | 数据存在**命名卷** `mysql-data`；首次初始化会执行 `scripts/mysql-init/*.sql` |
+| 搜索 | `searxng` | 8888→8080 | 配置/缓存在 `E:\agentstart\work\searXNG\{config,data}` |
+| 缓存 | `redis-stack-server` | 6379 | 纯缓存，**故意不挂卷**（数据可丢） |
+| 静态发布 | `my-nginx` | 80 | 挂载源在 WSL（见下），由 WSL 里那份 compose 管理 |
+
+**为什么 Agent 主体不容器化**：6 个 MCP 工具里，**PowerShell（`powershell.exe`）与 WSL2（`wsl.exe`）**
+必须依赖 Windows 宿主环境，Linux 容器里跑不了。
+
+**为什么 nginx 单独管理**：它的挂载源是 WSL 里的 `/home/user/nginx/*`（配合 `vm.py` 的"上传产物到 WSL"链路），
+而主 compose 在 Windows 侧执行 —— 从 Windows 跑会把 Linux 路径解析到 docker-desktop 发行版，
+导致**静默挂载空目录**（不报错，最难查）。所以两边分开管，`start-deps.ps1` 会把两边都拉起来。
+
+> 4 个容器都带 `restart: unless-stopped` → **打开 Docker Desktop（= 启动 Docker 引擎）时会自动起来**。
+> 例外：如果你**手动 stop** 过某个容器，引擎不会自动起它（这是 `unless-stopped` 的定义），
+> 这时用 `scripts\run\start-deps.ps1` 即可。
 
 ### 运行（命令行）
 
@@ -165,38 +242,6 @@ uv run uvicorn app.web.server:app --port 8000
 
 > 前端（Vue 3 + Vite）源码在 `app/web/frontend/`，构建产物 `dist/` 已入库——不装 Node 也能直接运行；
 > 改前端后 `cd app/web/frontend && npm install && npm run build` 重新构建。
-
-### 启动依赖服务
-
-```powershell
-.\scripts\run\start-deps.ps1     # 一键起全部 4 个：mysql / searxng / redis / nginx
-.\scripts\run\stop-deps.ps1      # 停止（保留容器，下次起得更快）
-```
-
-或手动分两步：
-
-```powershell
-docker compose up -d                                            # mysql / searxng / redis
-wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
-```
-
-| 服务 | 容器 | 端口 | 说明 |
-|---|---|---|---|
-| MySQL 沙盒 | `agent-mysql` | 3307→3306 | 数据存在**命名卷** `mysql-data`；首次初始化会执行 `scripts/mysql-init/*.sql` |
-| 搜索 | `searxng` | 8888→8080 | 配置/缓存在 `E:\agentstart\work\searXNG\{config,data}` |
-| 缓存 | `redis-stack-server` | 6379 | 纯缓存，**故意不挂卷**（数据可丢） |
-| 静态发布 | `my-nginx` | 80 | 挂载源在 WSL（见下），由 WSL 里那份 compose 管理 |
-
-**为什么 Agent 主体不容器化**：6 个 MCP 工具里，**PowerShell（`powershell.exe`）与 WSL2（`wsl.exe`）**
-必须依赖 Windows 宿主环境，Linux 容器里跑不了。
-
-**为什么 nginx 单独管理**：它的挂载源是 WSL 里的 `/home/user/nginx/*`（配合 `vm.py` 的"上传产物到 WSL"链路），
-而主 compose 在 Windows 侧执行 —— 从 Windows 跑会把 Linux 路径解析到 docker-desktop 发行版，
-导致**静默挂载空目录**（不报错，最难查）。所以两边分开管，`start-deps.ps1` 会把两边都拉起来。
-
-> 4 个容器都带 `restart: unless-stopped` → **打开 Docker Desktop（= 启动 Docker 引擎）时会自动起来**。
-> 例外：如果你**手动 stop** 过某个容器，引擎不会自动起它（这是 `unless-stopped` 的定义），
-> 这时用 `scripts\run\start-deps.ps1` 即可。
 
 ## 功能
 
@@ -556,6 +601,24 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
    不是「**通用任务成功率**」；
 3. `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 的**部分分** → 偏乐观。
 
+## 如何验证这个项目
+
+一条命令能跑的都列在这儿（本机 Windows + 已 `uv sync`）：
+
+| 做什么 | 命令 | 说明 |
+|---|---|---|
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -q` | **593 条，约 30 秒**；其中 5 条集成测试默认**不跑** |
+| 静态检查 | `uv run ruff check .` + `uv run ruff format --check .` | CI 里跑的就是这两条 |
+| **真集成测试**（要真依赖） | `uv run python -m pytest -m integration -v` | **5 条**：真 MySQL / 真 WSL / 真 SearXNG / 真 Redis / 真 RAG。环境不可用会**自动跳过**（不会红）<br>⚠️ 这层**只能在 Windows 本机跑**（GitHub 的 runner 是 Linux，没有 WSL），所以**不在 CI 里** |
+| 跑评估前的环境预检 | `uv run python evals/preflight.py --run-id check` | 验 `.env` 的 key / 容器 / WSL / 端口 / 知识库，**只报告不修** |
+| 看评估题集（不烧 token） | `uv run python evals/run_e2e.py --list` | 30 题的维度与断言分布 |
+| 出评估报告（读归档，不重跑） | 见「评估体系」里的命令 | 生成 `docs/evidence/评估报告.md` |
+| 只跑 RAG 检索基准 / 消融 | `uv run python evals/rag_bench.py` / `uv run python evals/rag_ablation.py --reps 10` | **不用 LLM**，几秒出数 |
+| 改完前端重建产物 | `cd app/web/frontend && npm run build` | `dist/` **入库**（clone 下来不装 Node 也能开界面）；CI 会检查"产物是否与源码一致" |
+
+> CI（GitHub Actions + Gitee）跑的是：`ruff check` → `ruff format --check` → `pytest tests/ -v`，
+> 外加一步**前端产物一致性检查**（`npm ci && npm run build && git diff --exit-code app/web/frontend/dist`）。
+
 ## 技术栈
 
 - **Agent 框架**：LangGraph（StateGraph + `create_react_agent`）
@@ -634,6 +697,27 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 | 测试覆盖率 | **73~75%**（语句 2081~2082，未覆盖 545~561；随依赖容器是否在跑、本机知识库里有没有内容而波动） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **数字随环境波动**（那几条"要真环境"的测试走的分支不同）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头正是这些要连真库 / 起子进程 / 要真人输入的模块 → 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 6 重测**；阶段 4 自测的临时数是 13.2ms → 81ms） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 73dd4e6^:docs/evidence/<文件名>` |
+
+## 已知问题与后续规划
+
+**边界（如实写，不粉饰）**
+
+- **本机单用户**：没有多用户 / 账号 / 部署形态。它会执行 shell、读写主机文件，所以定位就是"跑在你自己机器上"。
+- **可观测性有限**：只有**节点级进度事件**（WebSocket 推送）与**权限审计日志**（`runtime/permissions.log`），
+  没有指标（metrics）/ 链路追踪（tracing）。
+
+**已知技术债**
+
+- RAG 的 4 个工具走 MCP 子进程，每次调用要付 ≈8 秒的子进程启动（换来的是"不在事件循环里加载原生扩展"，
+  见 `AGENTS.md` 的订正 #27）。**改进方向**：把 `query_rag` 改成进程内本地工具，或让 MCP server 常驻。
+- Verifier 打回上限是 2 次；到上限后以最后一次结果收尾（不会无限重试，但也意味着"可能带着未解决的问题结束"）。
+- 评估每轮每题只跑 **1 次**，所以像"同一题两次得分不同"这类**方差**从两轮里量化不出来。
+
+**后续规划**（按价值排序）
+
+1. RAG 工具本地化 / MCP 常驻（去掉那 8 秒）；
+2. 评估加重复轮次与方差统计；
+3. 更多"工具级"回归（现在真集成测试只有 5 条）。
 
 ## License
 
