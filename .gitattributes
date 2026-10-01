@@ -1,1 +1,9 @@
 * text=auto
+
+# ── 前端：模板、静态资源与产物统一按文本 + LF 处理 ─────────────────────
+# 为什么必须显式写：Vite 模板若是 CRLF，Windows 本地构建出的 dist/index.html 就是 CRLF，
+# 而 Linux CI 构建出 LF ⇒ "产物一致性检查"会红（2026-09-30 实测踩到）；
+# 且 dist/index.html 曾被 git 判为二进制（-text）⇒ 不做规范化，只能靠显式规则钉住。
+app/web/frontend/index.html        text eol=lf
+app/web/frontend/public/**         text eol=lf
+app/web/frontend/dist/index.html   text eol=lf
