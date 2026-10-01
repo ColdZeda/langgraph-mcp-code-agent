@@ -60,7 +60,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**592 个**） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**593 个**） |
 | **真集成测试**（要 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑 —— `addopts` 里带了 `-m "not integration"`） | `uv run python -m pytest -m integration -v`（5 条） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | **复用同名 run-id 前必跑**（清库里的 eval 线程；默认只报告，`--yes` 才删） | `uv run python evals/reset_eval_threads.py --yes` |
@@ -137,7 +137,7 @@ scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           592 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           593 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / **powershell_exec** /
@@ -509,8 +509,14 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - **`/api/settings` 那套"系统默认模型"（`base_url`/`api_key`）仍保留在后端，但界面不再露出来**
   （T7.6 用户化改造）：它只影响 Web 进程，**CLI 与 evals 完全不读**。界面里只剩
   「角色模型 + 我的模型 + 测试当前模型 + 保存并生效」。
-- ⚠️ **界面第二轮反馈有 6 条待修**（2026-09-30）：~~测试覆盖四个角色~~ ✅ 已完成（`POST /api/settings/test-roles`：按模型去重 + 按角色分组）/ 侧栏文案改「有角色使用了不同的模型」/ **会话行按钮要常显**（现在是 hover 才出现，用户找不到）/ 精简解释性小字 / `index.html` 加 `no-store` /
-  两个测试会话去留待定 —— 清单在 `docs/evidence/阶段7_WEB端走查与修复.md` §七。
+- ✅ **界面第二轮反馈：6 条全部有结论**（2026-09-30）：
+  ① 测试覆盖四个角色 → ✅ 已实现（`POST /api/settings/test-roles`：按模型去重 + 按角色分组）；
+  ② 侧栏文案 → ✅ 已改「有角色使用了不同模型（悬停查看）」（`fd61783`）；
+  ③ 会话行 📌✏️🗑 → **维持 hover 显示**（用户确认：设计如此，不是待修）；
+  ④ 解释性小字 → **已精简到位**（用户确认现状正确）；
+  ⑤ `index.html` 防缓存 → **不做**（没实测到问题，真复现再加）；
+  ⑥ 两个测试会话 → **不处理**（用户说先不管）。
+  清单与论证在 `docs/evidence/阶段7_WEB端走查与修复.md` §七。
 
 ### 仓库整理
 
@@ -548,7 +554,10 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   ③ `v3-multi-旧版(限额200k).json`（限额版对照 29/30 —— 留着是给「人为闸门会制造假失败」留证据）；
   ④ `rag_ablation_20260923_203822.json`（旧语料）、⑤ `rag_ablation_20260924_053228.json`（语料修订后）；
   ⑥ `阶段6_修复与口径记录.md`（D1–D5 + 6 处题面的修复账本，**本阶段事实的唯一出处**）。
-  **待入库**：`评估报告.md`（由 `evals/report.py` 生成，还没跑）。
+  ⑦ **`评估报告.md` 已入库**（2026-09-30，`7bd7100`）：`evals/report.py` 生成、10 节
+     （含 STAR 量化对比与「局限与如实披露」）。
+     ⚠️ 生成器加了**家目录脱敏**（`_mask_home_paths`：`/home/<某人>/` → `/home/user/`）——
+     因为**报告是给人看的**；归档 JSON 保持原始证据不改写（见 `36d3c53`）。
 
 ## 当前进度（2026-09-25 更新）
 
@@ -727,7 +736,7 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | **592**（另有 5 条真集成测试**默认不跑**） | `uv run python -m pytest tests/ -q`（2026-09-30 实测：`592 passed, 5 deselected in 31.86s`；`-m integration` 则为 `5 passed, 592 deselected`） |
+| 测试数 | **593**（另有 5 条真集成测试**默认不跑**） | `uv run python -m pytest tests/ -q`（2026-09-30 实测：`593 passed, 5 deselected in 30.72s`；`-m integration` 则为 `5 passed, 593 deselected`） |
 | 测试覆盖率 | **73~75%（语句 2081~2082，未覆盖 545~561）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **会随环境波动**：4 个依赖容器**在跑**时实测 73%（563 未覆盖）、**全停**时 74%（545）—— 那几条"要真环境"的测试走的分支不同（2026-09-27 实测）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5、阶段 6 各涨过一次）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。测试条数的**可核对链条**（用 `git worktree` + `pytest --collect-only` 数的）：阶段 5 末 `c73ac99` = **308** → 阶段 6 重建后 `4cd1574^` = **528** → 修完 D1–D5 = **550**（最后这批 **+22**：四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干） |
 | **评估正式结果（阶段 6 · 2026-09-25）** | **single 30/30 = 100%**（均分 1.0000，958,832 token / 332s / 194 工具 / 362 步）｜**multi 30/30 = 100%**（1,644,029 token / 687s / 227 工具 / 409 步）；断言两轮都是 **124/124 + 29/29 + 10/10**；打回·击穿预算·超时·未测·异常**全 0**。⚠️ **两轮口径不同**（single 有 200k 上限 + 每题超时；multi 只计量）⇒ **分数与成本都不可直比** | `uv run python evals/report.py --single runtime/runs/v3-single.json --multi runtime/runs/v3-multi.json`；归档 `docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |

@@ -624,7 +624,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | **592**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
+| 测试数 | **593**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | **测试语料** 35（7 文件 × 5 条）→ `evals/fixtures/knowledge/`；产品库默认空 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数，**2026-09-24 语料修订后**） | top-1 命中正解文件 **0.40 → 0.60**（对照 0.70）；⚠️ 旧语料基线是 **0.20** | `uv run python evals/rag_ablation.py --reps 10` |
