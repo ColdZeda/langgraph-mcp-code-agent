@@ -622,8 +622,9 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 | 只跑 RAG 检索基准 / 消融 | `uv run python evals/rag_bench.py` / `uv run python evals/rag_ablation.py --reps 10` | **不用 LLM**，几秒出数 |
 | 改完前端重建产物 | `cd app/web/frontend && npm run build` | `dist/` **入库**（clone 下来不装 Node 也能开界面）；CI 会检查"产物是否与源码一致" |
 
-> CI（GitHub Actions + Gitee）跑的是：`ruff check` → `ruff format --check` → `pytest tests/ -v`，
-> 外加一步**前端产物一致性检查**（`npm ci && npm run build && git diff --exit-code app/web/frontend/dist`）。
+> CI（GitHub Actions + Gitee）跑的就是上面第 1、2 条：`ruff check` → `ruff format --check` →
+> `pytest tests/ -v`（**不需要 `.env`**：`tests/conftest.py` 会兜一个假 key）。
+> ⚠️ 真集成测试**不在 CI 里**（Linux runner 没有 WSL），只能本机 `-m integration` 跑。
 
 ## 技术栈
 

@@ -78,7 +78,10 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 > ✅ **评估体系已于阶段 6 重建并跑完正式两轮**：`single 30/30`、`multi 30/30`（平均分都是 1.0000，
 > 163 条断言：状态 124 / 轨迹 29 / 文本 10），归档在 `docs/evidence/v3-single.json` / `v3-multi.json`。
 > 跑法与口径见下方「**评估相关**」；**改造前那批旧分数一律不可比**（旧题集已删、口径已换）。
-> ⚠️ CI（`.gitee.yml`）从阶段 2 起跑三步：`ruff check .` → `ruff format --check .` → `pytest tests/ -v`。
+> ⚠️ **CI 双平台**：`.gitee.yml`（阶段 2 起）与 `.github/workflows/ci.yml`（2026-10-01 加）
+> 跑的都是同三步：`ruff check .` → `ruff format --check .` → `pytest tests/ -v`（**不需要 `.env`**）。
+> 真集成测试**不在 CI**（Linux runner 没有 WSL）。曾有一个 `frontend-dist` job（防"忘提交 dist"），
+> **2026-10-01 用户决定删除** —— 理由与踩到的行尾坑记在 `.github/workflows/ci.yml` 顶部注释里。
 
 ## 代码地图（精简）
 
@@ -518,6 +521,16 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   ⑥ 两个测试会话 → **不处理**（用户说先不管）。
   清单与论证在 `docs/evidence/阶段7_WEB端走查与修复.md` §七。
 
+### 前端产物与行尾（2026-10-01 踩到的坑）
+
+- **`dist/` 是入库的**（clone 下来不装 Node 也能开界面）⇒ 改完前端必须 `npm run build` 并提交产物。
+- ⚠️ **`app/web/frontend/dist/index.html` 被 git 判为二进制（`-text`）**，不做行尾规范化；
+  而 Vite 模板若是 **CRLF**（Windows 工作树默认如此），本地构建出的产物就带 CRLF，
+  Linux CI 构建出 LF ⇒ 任何"两端产物比对"都会红。**排查花了三轮**，根因就是行尾。
+- 现在 `.gitattributes` 显式钉住：`app/web/frontend/index.html`、`public/**`、`dist/index.html`
+  都是 `text eol=lf` ⇒ 工作树里这几类文件统一 LF（再构建两次的产物就一致了）。
+- 那个比对 job（`frontend-dist`）**已经删掉**（用户决定），但这几条 LF 规则**保留**。
+
 ### 仓库整理
 
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 → **做全仓扫描类操作必须排除**（否则扫到生成物）。
@@ -560,6 +573,33 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
      因为**报告是给人看的**；归档 JSON 保持原始证据不改写（见 `36d3c53`）。
 
 ## 当前进度（2026-09-25 更新）
+
+> ### 🟢 阶段 7（收尾包装）执行状态 —— **2026-10-01 更新，接活先看这段**
+>
+> **已完成**：① 真集成测试（5 条，默认不跑，`-m integration`）· B1 数字对齐（593）与修 4 处跑不通的
+> 报告命令 · B2 正式评估报告 `docs/evidence/评估报告.md` · 隐私中性化（家目录一律用 `user`，
+> 顺手修掉 E014 把作者家目录写死、换机器必失败的可移植性缺陷，报告生成器加脱敏）·
+> D1 侧栏文案 + 4 张真实截图（`docs/evidence/阶段7_web走查/当前界面/`）·
+> B3 README 重排（首屏 / 按 JD 的能力总览 / 依赖顺序 / 如何验证 / 已知边界）·
+> B4 `docs/architecture.md`（6 条 ADR，含代价与否决理由）· B6 GitHub 建仓 + MIT LICENSE +
+> GitHub Actions · B7 干净 clone 终检 · B8 机械自查。
+>
+> **B7 终检实测**：从镜像全新 clone（**不带 `.env`**）→ `uv sync` → `pytest tests/ -q` =
+> **593 passed, 5 deselected** → `uvicorn` 起服务 → `GET /api/sessions` = **HTTP 200**
+> （日志 `Application startup complete`）⇒ "别人 clone 下来能用"成立。
+>
+> **仓库与远端**：**GitHub 为主**（`https://github.com/chongd259/langgraph-mcp-code-agent`，
+> ⚠️ **2026-10-01 用户要求暂设私有**）→ 两个远端都配好了：`origin` = Gitee（镜像）、`github` = GitHub；
+> **tag `v1.0.0` 已推两边**。本地与远端 HEAD = `bc85a77`。
+>
+> **CI 现状**：`test` job（ruff + 593 测试）**连续三次成功**；`frontend-dist` job 三次失败后，
+> **2026-10-01 用户决定删除该 job**（他确认不会忘记先 `npm run build` 再 push）⇒ 之后 CI 只跑
+> 单元 + 静态检查这一条主线。
+>
+> **只剩的尾巴**：① 仓库可见性（用户自己在网页上改私有）；② CI 下一次运行确认全绿并把
+> Actions 截图存进 `docs/evidence/`（可作为"CI 真跑一次"的完整证据）；③ 仓库外
+> `handover_交接文档.md` 的快照已在本轮追加。
+
 
 **已经走完的**：
 ```

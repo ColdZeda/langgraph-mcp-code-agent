@@ -402,6 +402,19 @@ Linux CI 里构建出 LF ⇒ 严格 diff 必红。
 **已做两件事**：① `.gitattributes` 显式钉住前端模板/静态资源/产物 `text eol=lf`；
 ② 产物检查失败时**打印 `git diff --stat` 与差异片段**（下次红能一眼看到差在哪）。
 
-⚠️ **尚未完成的收尾**：`32dc5d5`（这项修复）还没推到 GitHub（代理连接被重置，重试 4 次失败），
-**CI #3 因此还没跑**。等网络恢复推上去后，需要确认两个 job 都绿，并把 Actions 页面截图存进
-`docs/evidence/`（那才算"CI 真跑一次"的完整证据）。
+**最终结论（2026-10-01）**：
+
+| run | commit | `test` job | `frontend-dist` job |
+|---|---|---|---|
+| #1 | `5a2ada1` | ✅ | ❌ |
+| #2 | `84d3518` | ✅ | ❌ |
+| #3 | `eacb71e` | ✅ | ❌（行尾已修仍红，本机仍复现不出） |
+
+⇒ **`test` job 连续三次成功**（ruff + 593 条测试，CI 上无 `.env`）；
+`frontend-dist` 这个"防忘提交 dist"的辅助 job **2026-10-01 用户决定删除**
+（他确认不会忘记先 `npm run build` 再 push）—— 理由与行尾坑写进了 `.github/workflows/ci.yml`
+顶部注释，`.gitattributes` 的 LF 规则保留。
+
+**收尾完成度**：`v1.0.0` 已打并推到两个远端（`origin` = Gitee 镜像、`github` = GitHub 主仓，
+⚠️ **GitHub 暂设私有**，用户 2026-10-01 要求）。
+唯一还差的一步：CI 下一次运行确认全绿（Actions 截图存 `docs/evidence/` 作为完整证据）。
