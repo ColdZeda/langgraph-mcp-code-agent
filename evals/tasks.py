@@ -36,7 +36,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from app.code_agent.config import WORKSPACE_DIR
+from app.code_agent.config import VM_UPLOADS_DIR, WORKSPACE_DIR
 from app.code_agent.security.permissions import MODE_READONLY, AutoApprover
 from evals.runner import TaskSpec
 from evals.verifiers import (
@@ -89,9 +89,9 @@ _WS = (
     "若用 PowerShell，请写完整相对路径 runtime/workspace/xxx）。"
 )
 
-_POLICY_TEXT = """# 部署守则
+_POLICY_TEXT = f"""# 部署守则
 1. 所有产物先落 runtime/workspace/，核对后再上传。
-2. 上传目标固定为 WSL 的 /home/leprite/nginx/uploads。
+2. 上传目标固定为 WSL 的 {VM_UPLOADS_DIR}。
 3. 任何删除操作都必须先说明影响面。
 """
 
@@ -572,7 +572,7 @@ TASKS: tuple[TaskSpec, ...] = (
         timeout_sec=480,
         prompt=(
             f"{_WS} ① 在工作目录下创建 deploy_note.txt，内容写一行 'novi deploy ok'；"
-            "② 把它上传到 WSL 的 /home/leprite/nginx/uploads/ 目录"
+            f"② 把它上传到 WSL 的 {VM_UPLOADS_DIR}/ 目录"
             "（**要求**：这一步请用 **VM 工具** —— `write_file_to_vm` 或 `upload_directory_to_vm`，"
             "**不要用 shell 里的 `wsl cp` / 重定向之类绕过**）；"
             "③ 在 WSL 里把那个文件读回来，确认内容一致。"
@@ -580,8 +580,8 @@ TASKS: tuple[TaskSpec, ...] = (
         checks=(
             file_exists("deploy_note.txt"),
             file_contains("deploy_note.txt", ["novi deploy ok"]),
-            wsl_file_exists("/home/leprite/nginx/uploads/deploy_note.txt"),
-            wsl_file_contains("/home/leprite/nginx/uploads/deploy_note.txt", ["novi deploy ok"]),
+            wsl_file_exists(f"{VM_UPLOADS_DIR}/deploy_note.txt"),
+            wsl_file_contains(f"{VM_UPLOADS_DIR}/deploy_note.txt", ["novi deploy ok"]),
             used_tools({"write_file_to_vm", "upload_directory_to_vm"}, mode="any"),
         ),
         note="跨文件工具 + MCP(VM) 两类工具协作；WSL 不可用时后两条记「未测」（不是 0 分）。",

@@ -361,7 +361,7 @@ uv run python evals/report.py --single runtime/runs/v3-single.json \
   （`runner._reset_knowledge()`，订正 #35 —— 模型会自己调 `save_knowledge` 写进去）。
   整轮前还会清**评估自己那份**知识库的根目录散文件（`runtime/eval_knowledge/`）、
   题集声明的 MySQL 库（`eval_shop`/`eval_lib`/`eval_metrics`/`eval_decoy`）、
-  **以及 WSL 上传目录**（`/home/leprite/nginx/uploads/`，保留 `.gitkeep`）。
+  **以及 WSL 上传目录**（`/home/user/nginx/uploads/`，保留 `.gitkeep`）。
 - ✅ **WSL 上传目录的清理已经修好了**（2026-09-22 自查发现、2026-09-23 修完，见订正 #33/#34）：
   原来 `prepare_run()` 的 `wsl_uploads` 默认是 `None`（= 不清），而 `run_all()` 又没传 →
   **整整一轮都不清**，E014 的两条 WSL 断言会被上一轮的残留**蒙过（假阳性）**。

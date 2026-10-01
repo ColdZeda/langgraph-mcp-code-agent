@@ -14,7 +14,7 @@ mcp = FastMCP()
 
 # WSL_DISTRO 表示要操作的 WSL 发行版名称；先查环境变量中CODE_AGENT_WSL_DISTRO指定的系统，无则Ubuntu,默认使用你当前的 Ubuntu。
 WSL_DISTRO = os.environ.get("CODE_AGENT_WSL_DISTRO", "Ubuntu")
-VM_UPLOADS_DIR = os.environ.get("CODE_AGENT_VM_UPLOADS_DIR", "/home/leprite/nginx/uploads")
+VM_UPLOADS_DIR = os.environ.get("CODE_AGENT_VM_UPLOADS_DIR", "/home/user/nginx/uploads")
 
 # 沙箱超时（秒），防止死循环命令卡住 Agent
 VM_COMMAND_TIMEOUT = int(os.environ.get("CODE_AGENT_VM_TIMEOUT", "60"))

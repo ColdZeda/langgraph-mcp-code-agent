@@ -4,6 +4,6 @@ WSL 命令默认设置 60 秒超时，防止死循环命令挂起。
 
 WSL 通过 subprocess.run(["wsl", "-d", "Ubuntu", "--", "bash", "-lc", cmd]) 桥接执行。
 
-WSL 部署文件时上传到 /home/leprite/nginx/uploads 目录，Nginx 对外提供访问。
+WSL 部署文件时上传到 /home/user/nginx/uploads 目录，Nginx 对外提供访问。
 
 WSL 沙箱用 shell=False 传参数数组，避免 shell 注入。

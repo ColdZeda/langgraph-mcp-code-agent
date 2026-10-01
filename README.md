@@ -190,7 +190,7 @@ wsl -d Ubuntu -- bash -lc "cd ~/nginx && docker compose up -d"  # nginx
 **为什么 Agent 主体不容器化**：6 个 MCP 工具里，**PowerShell（`powershell.exe`）与 WSL2（`wsl.exe`）**
 必须依赖 Windows 宿主环境，Linux 容器里跑不了。
 
-**为什么 nginx 单独管理**：它的挂载源是 WSL 里的 `/home/leprite/nginx/*`（配合 `vm.py` 的"上传产物到 WSL"链路），
+**为什么 nginx 单独管理**：它的挂载源是 WSL 里的 `/home/user/nginx/*`（配合 `vm.py` 的"上传产物到 WSL"链路），
 而主 compose 在 Windows 侧执行 —— 从 Windows 跑会把 Linux 路径解析到 docker-desktop 发行版，
 导致**静默挂载空目录**（不报错，最难查）。所以两边分开管，`start-deps.ps1` 会把两边都拉起来。
 

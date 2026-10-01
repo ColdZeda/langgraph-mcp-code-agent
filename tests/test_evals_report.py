@@ -201,3 +201,11 @@ def test_selftest_passes(capsys):
     assert R._selftest() == 0
     out = capsys.readouterr().out
     assert "自测通过" in out
+
+
+def test_home_paths_are_masked():
+    """报告里不许出现具体的家目录用户名（归档 JSON 里的路径要在渲染后被脱敏）。"""
+    raw = "WSL 上传目录 | /home/someone/nginx/uploads（删了 0 个）"
+    masked = R._mask_home_paths(raw)
+    assert "/home/user/nginx/uploads" in masked
+    assert "someone" not in masked

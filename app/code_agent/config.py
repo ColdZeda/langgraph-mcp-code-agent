@@ -83,7 +83,7 @@ MYSQL_READONLY_USER = os.getenv("MYSQL_READONLY_USER")
 MYSQL_READONLY_PASSWORD = os.getenv("MYSQL_READONLY_PASSWORD")
 
 WSL_DISTRO = os.getenv("CODE_AGENT_WSL_DISTRO", "Ubuntu")
-VM_UPLOADS_DIR = os.getenv("CODE_AGENT_VM_UPLOADS_DIR", "/home/leprite/nginx/uploads")
+VM_UPLOADS_DIR = os.getenv("CODE_AGENT_VM_UPLOADS_DIR", "/home/user/nginx/uploads")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 THREAD_ID = os.getenv("CODE_AGENT_THREAD_ID", "default")

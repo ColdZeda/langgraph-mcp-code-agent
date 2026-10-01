@@ -77,7 +77,7 @@ def test_wsl_cleanup_is_on_by_default():
     """**"默认不清"就是要修的 bug**：默认值必须是真的目录，不是 `None`。
 
     2026-09-22 之前 `prepare_run(wsl_uploads=None)` + `run_all` 没传 →
-    整整一轮都不清 `/home/leprite/nginx/uploads/`，E014 的两条 WSL 断言会被残留蒙过。
+    整整一轮都不清 `/home/user/nginx/uploads/`（即 `config.VM_UPLOADS_DIR`），E014 的两条 WSL 断言会被残留蒙过。
     """
     import inspect
 

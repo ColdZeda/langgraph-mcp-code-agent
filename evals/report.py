@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -794,6 +795,15 @@ def _selftest() -> int:
     return 0
 
 
+def _mask_home_paths(text: str) -> str:
+    """把 `/home/<某人>/` 统一脱敏成 `/home/user/`（**报告是给人看的，别带作者家目录**）。
+
+    为什么放在渲染之后：归档 JSON 是原始证据（保留当时的真实路径，不改写），
+    但报告不必要地把本机用户名带出去 —— 阶段 7 收尾时就是这么发现的。
+    """
+    return re.sub(r"/home/[^/\s)\]]+/", "/home/user/", text)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="从结果 JSON 生成评估报告（Markdown）")
     parser.add_argument("--single", type=Path, help="单 Agent 一轮的结果 JSON")
@@ -815,7 +825,7 @@ def main() -> int:
         load_json(args.rag) if args.rag else None,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(report, encoding="utf-8")
+    args.out.write_text(_mask_home_paths(report), encoding="utf-8")
     print(f"报告已生成：{args.out}（{len(report)} 字符）")
     return 0
 
