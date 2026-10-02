@@ -105,7 +105,7 @@ main.py (CLI REPL)                app/web/server.py (FastAPI + Vue3 Web UI, 端�
 
 ```bash
 git clone https://github.com/chongd259/langgraph-mcp-code-agent.git
-# 国内镜像（内容相同）： https://gitee.com/wdnmded/langgraph-mcp-code-agent.git
+# 国内镜像（内容相同）： https://gitee.com/ColdZeda/langgraph-mcp-code-agent.git
 cd langgraph-mcp-code-agent
 uv sync
 ```
@@ -744,4 +744,4 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 本项目采用 **MIT 许可**（见 [`LICENSE`](LICENSE)）—— 可自由使用、修改、分发，保留版权声明即可。
 
-Copyright (c) 2026 wdnmded
+Copyright (c) 2026 ColdZeda
