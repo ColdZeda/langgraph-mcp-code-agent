@@ -75,9 +75,10 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 13 | **仓库内文档不写本机绝对路径**；要提仓库外的东西 → 写「仓库外的项目档案目录（开发者本地维护）」+ 指向仓库内冻结快照。检查命令见下方代码块（`docs/evidence/*.json` 原始证据除外） |
 
 ```bash
-# 约定 13 的机械检查（活文档部分必须为空输出）
-git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests app ':(exclude)docs/evidence/*.json'
-git grep -nE "[A-Za-z]:\\\\" -- AGENTS.md README.md docs scripts tests app ':(exclude)docs/evidence/*.json'
+# 约定 13 的机械检查（**必须为空输出**）：只查『个人标识』，不查通用路径。
+# 允许的通用写法：C:\ / D:\code\… / E:\… 这类示例；
+# 刻意保留：docs/archive/ 与 docs/evidence/（原始记录，改了就不是证据了）。
+git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests app ':(exclude)docs/archive/*' ':(exclude)docs/evidence/*'
 ```
 
 ## 常用命令
