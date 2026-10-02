@@ -526,7 +526,7 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 结果 **29/30** —— E015 被上限掐断（烧掉 **257k** token 仍未完成）；
 把上限改成**只计量、不拦截**后，同一题集变成 **30/30**，而且**总成本更低**
 （1.64M vs 1.78M token）⇒ 那道题不是"做不出来"，是**被人为闸门判死的**。
-（限额版那份结果也留在 `docs/evidence/v3-multi-旧版(限额200k).json`，可对照。）
+（限额版那份结果也留在 `docs/evidence/v3-multi-limit200k.json`，可对照。）
 
 > ⚠️ **三条不能外推的事**：
 > 1. **每轮每题只跑 1 次** —— 单样本，题目层面的波动（同一题两次走不同工具路线）量化不出来；
@@ -713,7 +713,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数，**2026-09-24 语料修订后**） | top-1 命中正解文件 **0.40 → 0.60**（对照 0.70）；⚠️ 旧语料基线是 **0.20** | `uv run python evals/rag_ablation.py --reps 10` |
 | 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
-| **评估结果（正式两轮，2026-09-25）** | **single 30/30**、**multi 30/30**（平均分均 **1.0000**；两轮 163 条断言全过、8 维度全 1.00） | 结果文件：`docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
+| **评估结果（正式两轮，2026-09-25）** | **single 30/30**、**multi 30/30**（平均分均 **1.0000**；两轮 163 条断言全过、8 维度全 1.00） | 结果文件：`docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-limit200k.json`） |
 | 多 Agent 成本画像（同上两轮） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；其中 **Verifier 中位 10,988 token/题 = 25%**；**打回 0 次** | 同上两份 JSON 的 `totals` / `node_timings` |
 | 测试覆盖率 | **76%**（语句 2081~2082，未覆盖 545~561；随依赖容器是否在跑、本机知识库里有没有内容而波动） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **数字随环境波动**（那几条"要真环境"的测试走的分支不同）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头正是这些要连真库 / 起子进程 / 要真人输入的模块 → 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 6 重测**；阶段 4 自测的临时数是 13.2ms → 81ms） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |

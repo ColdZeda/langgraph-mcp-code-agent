@@ -68,7 +68,7 @@
 - 引入 LLM 评分档参与通过判定：判定器里留了 `TIER_JUDGE`，但**本批题集一题没用**（评分模型自身不稳，会污染判定）。
 
 **证据**：`docs/evidence/v3-single.json` / `v3-multi.json`（正式两轮）、
-`v3-multi-旧版(限额200k).json`（限额版对照，**留着就是给这条教训作证**）、`docs/evidence/评估报告.md`。
+`v3-multi-limit200k.json`（限额版对照，**留着就是给这条教训作证**）、`docs/evidence/评估报告.md`。
 
 ---
 

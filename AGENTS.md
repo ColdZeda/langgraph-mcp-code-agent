@@ -22,7 +22,7 @@
 **待办（当前真正未做的）**：
 
 1. **探索测试一轮（未做）**：12 道跨维度任务 —— 工具选择 / 跨工具 WSL 路径 / MySQL 全链路 / 错误恢复（不撒谎）/ 权限闸门 / 长输出 / RAG 端到端 / 模型名一致 / 跨轮记忆 / 效率 / 中文编码 / 路径边界。**重点复现**"Windows 路径被传给 VM 工具"那类误用。
-2. `docs/evidence/` 里的两份**过程文档**（`阶段6_修复与口径记录.md` / `阶段7_WEB端走查与修复.md`）口吻偏内部 —— 待决定是否对外化（内容是证据，别删）。
+2. `docs/records/` 里的两份**过程账**（`2026-09-25_评估口径与缺陷账.md` / `2026-10-02_WEB端走查与修复账.md`）口吻偏内部 —— 待决定是否对外化（内容是证据，别删）。
 3. **CI 截图存档**（可选仪式）：把 Actions 绿色页面截图存进 `docs/evidence/`。
 4. **仓库可见性**最终决定（现 public；若要给招聘方看就保持 public）。
 5. 本机 `.temp/` 有约 100 MB 临时产物（**不入库**）—— 待清理。
@@ -38,6 +38,7 @@
 | [`docs/architecture.md`](docs/architecture.md) | **设计取舍与代价**（6 条 ADR） | 改架构、或要回答"为什么这么选" |
 | 本文件 | **操作手册**（约定 / 命令 / 坑 / 当前状态） | 动手前必读 |
 | [`docs/archive/`](docs/archive/) | **历史冻结快照**（不更新） | 想知道"当时怎么做的" |
+| [`docs/records/`](docs/records/) | **过程账**（修复/缺陷账，可编辑） | 想知道"某个坑怎么修的、证据在哪" |
 
 ### 考古与备份
 
@@ -161,7 +162,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - **跑法**：`reset_eval_threads.py --yes` → `preflight.py --run-id …` → **逐题** `run_e2e.py` → `merge_runs.py --archive` → `report.py`。⚠️ **别用 `--all`**：结果 JSON 只在整轮结束写一次，被掐断就整轮白跑（E016 的教训）。⚠️ **每个 run-id 只能用一次**（复用会读到上一轮 checkpoint）。
 - **隔离**：评估只用 `runtime/eval_knowledge/` + `runtime/chroma_db_eval/`（夹具在 `evals/fixtures/knowledge/`，35 条 = 7 文件 × 5 条），**绝不碰产品的 `data/knowledge/`**；跑评估时别用 Web/CLI 干活（共用 `runtime/workspace/`）。
 - **已知局限（如实写，别外推）**：每题每轮只跑 1 次（方差量化不出来）；题集对当前模型**已饱和**（两轮都满分 ⇒ 架构差异不体现在分数上，只能看成本侧）。
-- **归档**：`docs/evidence/` —— 原始结果（`v3-single.json` / `v3-multi.json` / 限额版对照 / 两份 RAG 消融）+ 报告 `评估报告.md` + 过程账（`阶段6_修复与口径记录.md`）。
+- **归档**：`docs/evidence/` —— 原始结果（`v3-single.json` / `v3-multi.json` / 限额版对照 / 两份 RAG 消融）+ 报告 `评估报告.md` + 截图；**过程账在 `docs/records/`**（可编辑），不放这里。
 
 **关键数字与核验命令**：
 
@@ -194,7 +195,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - 🔴 **`llm.py` 不许出现模块级 `llm = get_llm()`**（已改成 PEP 562 惰性 `__getattr__`）：那行会在 **import 期**建 LLM ⇒ 没配 key 时 import 直接抛（**服务起不来、pytest 收集也炸**）。有源码级守卫 `tests/test_web_no_model.py`。
 - ⚠️ **"还没有可用模型"不是错误状态**：`rebuild_agents()` / `apply_settings()` 捕获缺 key 的 `ValueError`（只警告 + agent 置空）；启动顺序**先 `apply_settings()` 再 `runtime.load()`**；前端据 `modelReady` 显示引导。**别在 WS 层拦 `chat`**（实测会让按协议等消息的测试卡死）。
 - **用户加的第一个自定义模型 = 四个角色的默认模型**（否则未指定的角色回落 `.env` 的 `MODEL_NAME`，而面向用户的 `.env` 往往是空的）。`/api/settings` 的"系统默认模型"界面已不露出，CLI/evals 也完全不读。
-- ✅ **界面第二轮反馈 6 条已全部有结论**（测试四个角色 ✅ / 侧栏文案 ✅ / 会话行按钮维持 hover / 小字已精简 / 防缓存不做 / 两个测试会话不处理）—— 论证在 `docs/evidence/阶段7_WEB端走查与修复.md` §七。
+- ✅ **界面第二轮反馈 6 条已全部有结论**（测试四个角色 ✅ / 侧栏文案 ✅ / 会话行按钮维持 hover / 小字已精简 / 防缓存不做 / 两个测试会话不处理）—— 论证在 `docs/records/2026-10-02_WEB端走查与修复账.md` §七。
 
 ### 工具参数校验与跨平台路径（两次实锤事故）
 
@@ -213,7 +214,8 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 ### 仓库整理
 
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 ⇒ **做全仓扫描必须排除**（否则扫到生成物）。
-- `docs/` 三块：`architecture.md`（设计取舍）、`archive/`（**冻结快照**）、`evidence/`（评估原始结果，**只追加、不改写**）。
+- `docs/` 四块：`architecture.md`（设计取舍）、`archive/`（**冻结快照**）、`evidence/`（评估原始结果，**只追加、不改写**）、
+  `records/`（**过程账，可编辑**：走查/修复/缺陷账，命名 `<日期>_<主题>.md`）。
 - ⚠️ **git 历史 2026-09-27 用 `filter-repo` 重写两次**（公开前脱敏），剔除 4 条路径（归档前后两批旧简历、`docs/handover.md`、`docs/resume-star.md`）⇒ **旧 hash 全部失效**，映射表与重写前整份备份在**本机备份（未入库）**。
 - 🔴 **脱敏核对不能只对路径，要对"值"**：第一次按路径核对，漏了**改名之前**的那批旧简历（`docs/interview/`），地基提交的树里还留着 8 个文件；第二次改成"把手机号/邮箱原文取出，`git grep -F` 跨**全部提交**核对"才查出来。
 
@@ -239,7 +241,8 @@ evals/                       评估体系：tasks(30 题) · verifiers(判定器
                              · reset_eval_threads · env(语料隔离) + fixtures/knowledge/(35 条夹具)
 scripts/                     probe_mcp_server.py · fetch_models.py · mysql-init/ · run/（启停脚本）
 tests/                       629 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
-docs/                        architecture.md（ADR）· archive/（冻结快照）· evidence/（评估原始结果）
+docs/                        architecture.md（ADR）· archive/（冻结快照）
+                             · evidence/（评估原始结果 + 报告 + 截图）· records/（过程账，可编辑）
 ```
 
 **模块级细节与设计取舍看 [`docs/architecture.md`](docs/architecture.md)** —— 6 条 ADR：RAG 全链路 /
@@ -270,9 +273,11 @@ docs/                        architecture.md（ADR）· archive/（冻结快照�
   `agent-history-2026-10-03.md`（同上的去冗余版）·
   `handover-raw-2026-10-03.md` / `handover-2026-10-03.md`（旧的"交接文档"原始版与清理版）。
   **想看"当时怎么做的"翻这里；当前规范一律以本文件为准**。
-- [`docs/evidence/`](docs/evidence/) = 评估**原始结果**（`v3-*.json` / RAG 消融 / `评估报告.md` / 两份过程账），
-  **只追加、不改写**（里面的本机路径属原始证据，刻意保留）。
+- [`docs/evidence/`](docs/evidence/) = 评估**原始结果**（`v3-*.json` / RAG 消融）+ 生成物（`评估报告.md`）+ 截图，
+  **只追加、不改写**（里面的本机路径属原始证据，刻意保留）；规则见 [`docs/evidence/README.md`](docs/evidence/README.md)。
+- [`docs/records/`](docs/records/) = **过程账（可编辑）**：缺陷账 / 走查与修复账，每条都带"现象 → 根因 → 修法 → 证据"；
+  已进本文件「已知坑」的事项在这里**只留索引与当时的证据**，不重复细节。
 - 项目过程档案（阶段方案 / 讨论结论汇总 / 交接文档的**活版本**）在**仓库外的项目档案目录（开发者本地维护）**
   —— 仓库内不留本机路径，也不重复它的内容。
 - 阶段 5 / 阶段 6 的完整执行清单、红绿证据与 D1–D5 缺陷账：
-  `docs/evidence/阶段6_修复与口径记录.md` + 仓库外《讨论结论汇总》的订正记录（编号 #1–#70）。
+  `docs/records/2026-09-25_评估口径与缺陷账.md` + 仓库外《讨论结论汇总》的订正记录（编号 #1–#70）。
