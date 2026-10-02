@@ -60,7 +60,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | 开新会话 | `uv run python main.py --new-session` |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑，日志就在这个窗口；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**593 个**） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**628 个**） |
 | **真集成测试**（要 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑 —— `addopts` 里带了 `-m "not integration"`） | `uv run python -m pytest -m integration -v`（5 条） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v3-single` |
 | **复用同名 run-id 前必跑**（清库里的 eval 线程；默认只报告，`--yes` 才删） | `uv run python evals/reset_eval_threads.py --yes` |
@@ -74,6 +74,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 | RAG 基准（含分块/精排指标） | `uv run python evals/rag_bench.py` |
 | **RAG 消融对照**（改造前后 + 全量召回对照组，**不用 LLM**） | `uv run python evals/rag_ablation.py --reps 10 --archive` |
 | 重建前端 | `cd app/web/frontend && npm run build` |
+| **装 / 查 RAG 的本地模型**（不在仓库里，各 ≈87MB） | `uv run python scripts/fetch_models.py`（`--dry-run` 只看状态；`--source modelscope` 换下载通道） |
 
 > ✅ **评估体系已于阶段 6 重建并跑完正式两轮**：`single 30/30`、`multi 30/30`（平均分都是 1.0000，
 > 163 条断言：状态 124 / 轨迹 29 / 文本 10），归档在 `docs/evidence/v3-single.json` / `v3-multi.json`。
@@ -135,12 +136,14 @@ evals/                           ★ 阶段 6 重建的评估体系（11 个文�
                                    runtime/eval_knowledge + chroma_db_eval，**不碰产品库**）
                                  fixtures/knowledge/（只读夹具：4 篇正解 + 3 篇干扰，7 文件 / 35 条）
 scripts/                         probe_mcp_server.py（手工发 JSON-RPC 探某个 MCP server 到底回没回）
+                                 + fetch_models.py（★ 一键装 RAG 的两个本地模型；**不写死路径**，
+                                   默认下到 <仓库上级目录>/embedding-model，白名单只下必需文件）
                                  + mysql-init/*.sql（被 docker-compose 当**挂载目录**用，别挪）
 scripts/run/                     ★ 启动/停止脚本（`README.md` 里有对照表）：
                                  start-app.cmd / start-app.ps1（起 Web UI，前台）
                                  start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
                                  ⚠️ `.ps1` 必须是 **UTF-8 with BOM**；脚本找仓库根要往上**两层**
-tests/                           593 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
+tests/                           628 个测试（config / prompts / mysql_safe_ident / mysql_readonly /
                                  multi_agent / checkpoint / route / llm_registry / mcp_tool_lifecycle /
                                  tool_level / context / memory / tool_cache / tool_wrap / rag_chunking /
                                  permissions / dangerous_commands / **powershell_exec** /
@@ -531,6 +534,42 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   都是 `text eol=lf` ⇒ 工作树里这几类文件统一 LF（再构建两次的产物就一致了）。
 - 那个比对 job（`frontend-dist`）**已经删掉**（用户决定），但这几条 LF 规则**保留**。
 
+### MCP 工具的参数校验（2026-10-01 实锤事故）
+
+- 🔴 **`make_dir_in_vm` 收到 Windows 路径会造出畸形目录**：模型把 `E:\…\testprogram` 传给了它
+  （这工具要的是 **WSL 路径**），`shlex.quote` 把整串包成**一个**参数；**Linux 里反斜杠不是分隔符**
+  ⇒ WSL 在**当前目录**（NTFS 挂载的仓库根）建了个"名字就是这串路径"的目录；Windows 又不允许
+  文件名含 `:` ⇒ WSL/驱动层用**私用区替身**写进文件名（`:`→**U+F03A**、`\`→**U+F05C**）。
+  那个目录是**空的** ⇒ `git status` 一直干净（git 不跟踪目录），排查花了三轮。
+  （审计日志里有铁证：`permissions.log` 记着 `make_dir_in_vm` + `dir_path=E:\…\testprogram`。）
+- **现在的防线**：`vm.py` 的 `ensure_wsl_path()` —— 四个 VM 工具的 WSL 侧路径参数
+  （`make_dir_in_vm.dir_path` / `list_files_in_vm.dir_path` / `write_file_to_vm.file_path` /
+  `upload_directory_to_vm.vm_dest_dir`）收到 Windows 路径或含 `\` 一律抛 `VmPathError`，
+  消息里带两条出路（改用 `execute_powershell_command`，或改写成 `/mnt/e/…`）。
+  ⚠️ **刻意不做"自动转换"**：静默转换会掩盖"模型用错了工具"，让它一直错下去。
+- 回归测试 `tests/test_vm_path_guard.py`（打桩 `subprocess`，断言**根本走不到执行那一步**；
+  把校验去掉 → **7 条红**，装回来 → 全绿，红绿都验过）。
+- ⚠️ **经验：工具描述要写"什么时候不要用它"**。这次事故的直接原因是模型按工具名（`make_dir`）
+  匹配、忽略了 `in_vm`；四个工具的 description 现在都点名了"只接受 WSL 内路径"。
+
+### RAG 本地模型：默认**不**自动下载（2026-10-02 定案）
+
+- 两个模型**不进版本控制**（各 ≈87MB；进了 git 历史就删不掉）：向量 `all-MiniLM-L6-v2`、
+  精排 `ms-marco-MiniLM-L-6-v2`；默认位置 `<仓库上级目录>/embedding-model/…`（**跟着仓库走，
+  不写死任何人的路径**）。装法：`uv run python scripts/fetch_models.py`
+  （hf-mirror + 白名单，只下必需的十几个文件；`--source modelscope` 备选；`--dry-run` 只看状态）。
+- 🔴 **为什么砍掉"缺了自动下载"**（实测数据）：那条路要 **236 秒 / 下 671MB**
+  （`ignore_file_pattern` 没滤掉 ONNX/OpenVINO，而真正需要只有 87MB），而且外面套着
+  `redirect_stderr(None)`，把下载器的报错一起堵死 ⇒ 用户看到的是
+  `AttributeError: 'NoneType' object has no attribute 'write'`，**完全看不出发生了什么**。
+- **现在的行为**：向量模型缺失 → `store.RagModelMissing`，**0.06 秒**抛出，
+  消息里给两条出路（`scripts/fetch_models.py` / `CODE_AGENT_EMBEDDING_MODEL_PATH`）；
+  ⚠️ **判据在 `import sentence_transformers` 之前**（否则要先花十几秒 import torch 才报错）；
+  精排缺失 → 仍然**优雅降级**（返回 None，不抛）。
+- Web 启动时会打两行：`[RAG] 向量模型已就位/未安装 …`、`[RAG] 精排模型：…`。
+- 回归测试：`tests/test_fetch_models.py`（脚本逻辑 + **不许写死个人路径**）、
+  `tests/test_rag_model_status.py`（含两条**源码级**守卫：判据在重库导入之前、老的自动下载代码不许回来）。
+
 ### 仓库整理
 
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 → **做全仓扫描类操作必须排除**（否则扫到生成物）。
@@ -576,7 +615,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 
 > ### 🟢 阶段 7（收尾包装）执行状态 —— **2026-10-01 更新，接活先看这段**
 >
-> **已完成**：① 真集成测试（5 条，默认不跑，`-m integration`）· B1 数字对齐（593）与修 4 处跑不通的
+> **已完成**：① 真集成测试（5 条，默认不跑，`-m integration`）· B1 数字对齐（628）与修 4 处跑不通的
 > 报告命令 · B2 正式评估报告 `docs/evidence/评估报告.md` · 隐私中性化（家目录一律用 `user`，
 > 顺手修掉 E014 把作者家目录写死、换机器必失败的可移植性缺陷，报告生成器加脱敏）·
 > D1 侧栏文案 + 4 张真实截图（`docs/evidence/阶段7_web走查/当前界面/`）·
@@ -585,14 +624,14 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 > GitHub Actions · B7 干净 clone 终检 · B8 机械自查。
 >
 > **B7 终检实测**：从镜像全新 clone（**不带 `.env`**）→ `uv sync` → `pytest tests/ -q` =
-> **593 passed, 5 deselected** → `uvicorn` 起服务 → `GET /api/sessions` = **HTTP 200**
+> **628 passed, 5 deselected** → `uvicorn` 起服务 → `GET /api/sessions` = **HTTP 200**
 > （日志 `Application startup complete`）⇒ "别人 clone 下来能用"成立。
 >
 > **仓库与远端**：**GitHub 为主**（`https://github.com/chongd259/langgraph-mcp-code-agent`，
 > ⚠️ **2026-10-01 用户要求暂设私有**）→ 两个远端都配好了：`origin` = Gitee（镜像）、`github` = GitHub；
 > **tag `v1.0.0` 已推两边**。本地与远端 HEAD = `bc85a77`。
 >
-> **CI 现状**：`test` job（ruff + 593 测试）**连续三次成功**；`frontend-dist` job 三次失败后，
+> **CI 现状**：`test` job（ruff + 628 测试）**连续三次成功**；`frontend-dist` job 三次失败后，
 > **2026-10-01 用户决定删除该 job**（他确认不会忘记先 `npm run build` 再 push）⇒ 之后 CI 只跑
 > 单元 + 静态检查这一条主线。
 >
@@ -776,8 +815,8 @@ prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 
 
 | 数字 | 值 | 命令 |
 |---|---|---|
-| 测试数 | **593**（另有 5 条真集成测试**默认不跑**） | `uv run python -m pytest tests/ -q`（2026-09-30 实测：`593 passed, 5 deselected in 30.72s`；`-m integration` 则为 `5 passed, 593 deselected`） |
-| 测试覆盖率 | **73~75%（语句 2081~2082，未覆盖 545~561）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **会随环境波动**：4 个依赖容器**在跑**时实测 73%（563 未覆盖）、**全停**时 74%（545）—— 那几条"要真环境"的测试走的分支不同（2026-09-27 实测）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5、阶段 6 各涨过一次）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。测试条数的**可核对链条**（用 `git worktree` + `pytest --collect-only` 数的）：阶段 5 末 `c73ac99` = **308** → 阶段 6 重建后 `4cd1574^` = **528** → 修完 D1–D5 = **550**（最后这批 **+22**：四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干） |
+| 测试数 | **628**（另有 5 条真集成测试**默认不跑**） | `uv run python -m pytest tests/ -q`（2026-09-30 实测：`628 passed, 5 deselected in 30.72s`；`-m integration` 则为 `5 passed, 628 deselected`） |
+| 测试覆盖率 | **76%（语句 2081~2082，未覆盖 545~561）** | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov`，看 `TOTAL` 行）。⚠️ **会随环境波动**：4 个依赖容器**在跑**时实测 73%（563 未覆盖）、**全停**时 74%（545）—— 那几条"要真环境"的测试走的分支不同（2026-09-27 实测）。⚠️ **跨阶段不可直比**：分母会随"测试第一次 import 某个模块"而变大（阶段 5、阶段 6 各涨过一次）。⚠️ **`evals/` 与 `tests/` 不在覆盖率分母里**（只统计 `app/`）。测试条数的**可核对链条**（用 `git worktree` + `pytest --collect-only` 数的）：阶段 5 末 `c73ac99` = **308** → 阶段 6 重建后 `4cd1574^` = **528** → 修完 D1–D5 = **550**（最后这批 **+22**：四个新文件 19 条 + `evals_runner` / `evals_reset_threads` 若干） |
 | **评估正式结果（阶段 6 · 2026-09-25）** | **single 30/30 = 100%**（均分 1.0000，958,832 token / 332s / 194 工具 / 362 步）｜**multi 30/30 = 100%**（1,644,029 token / 687s / 227 工具 / 409 步）；断言两轮都是 **124/124 + 29/29 + 10/10**；打回·击穿预算·超时·未测·异常**全 0**。⚠️ **两轮口径不同**（single 有 200k 上限 + 每题超时；multi 只计量）⇒ **分数与成本都不可直比** | `uv run python evals/report.py --single runtime/runs/v3-single.json --multi runtime/runs/v3-multi.json`；归档 `docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
 | 评估题数 | **30**（阶段 6 重建：基础 10 / 长任务 12 / 对抗 8，8 维度各 ≥3） | `uv run python evals/run_e2e.py --list` |
 | 评估断言数 | **163 条**（43 个工厂；按档位：状态 124 / 轨迹 29 / 文本 10） | 同上（`--list` 会打印每题条数） |

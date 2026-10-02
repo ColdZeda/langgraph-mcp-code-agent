@@ -111,39 +111,104 @@ def windows_path_to_wsl_path(path: str) -> str:
     return f"/mnt/{drive}/{rest}"
 
 
+# ── VM 侧路径校验（2026-10-01 实锤事故之后加的防线）──────────────────────────
+#
+# 事故现场：模型把 **Windows 路径** `E:\…\runtime\workspace\testprogram` 传给了下面的
+# `make_dir_in_vm`（这个工具要的是 **WSL 路径**）。`shlex.quote` 把整串包成**一个**参数，
+# 而 **Linux 里反斜杠不是路径分隔符** ⇒ WSL 就在当前目录（NTFS 挂载的仓库根）建了一个
+# "名字就是这串路径"的目录；又因为 Windows 文件名不允许 `:`，WSL/驱动层改用**私用区替身**
+# 写进文件名（`:`→U+F03A、`\`→U+F05C）—— 于是仓库根出现一个谁也看不懂的畸形目录
+# （**空目录**，所以 git 完全看不见它，`git status` 一直是干净的）。
+#
+# 结论：**VM 工具只接受 WSL 内路径**；收到 Windows 路径或含反斜杠的路径一律**明确拒绝**。
+# ⚠️ 刻意**不**做"自动转换"：静默把 `E:\…` 转成 `/mnt/e/…` 会掩盖"模型用错了工具"这件事，
+# 让它一直错下去；明确报错才能把它推回正确的工具（PowerShell / 文件工具）。
+# 回归测试：`tests/test_vm_path_guard.py`（打桩 subprocess，断言**根本走不到执行那一步**）。
+_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+
+
+class VmPathError(ValueError):
+    """VM 工具的路径参数不是 WSL 内路径（Windows 盘符路径，或含反斜杠）。"""
+
+
+def ensure_wsl_path(value: str, *, tool: str, arg: str) -> str:
+    """校验 VM 侧路径参数，不合格就抛 `VmPathError`（消息里必须带**出路**）。
+
+    合格形态：`/home/user/…`、`/mnt/e/…`、`/tmp/…` —— 绝对/相对都行，**就是不能含 `\\`**。
+    """
+    text = (value or "").strip()
+    if not text:
+        raise VmPathError(f"{tool} 的 {arg} 不能为空：请给一个 WSL 路径，例如 {VM_UPLOADS_DIR}")
+    if "\\" in text or _WINDOWS_DRIVE_RE.match(text):
+        raise VmPathError(
+            f"{tool} 只接受 **WSL 内路径**（例如 {VM_UPLOADS_DIR} 或 /mnt/e/…），"
+            f"但 {arg} 收到的是 Windows 路径：{value!r}。\n"
+            "两条出路：① 要操作 Windows 侧的文件 → 改用 execute_powershell_command（或文件工具）；"
+            "② 确实要在 WSL 里操作 → 把路径写成 `/mnt/<盘符小写>/…` 的形式。"
+        )
+    return text
+
+
 # 在 Ubuntu 虚拟机中创建目录，对应 Linux 的 mkdir -p。
-@mcp.tool(name="make_dir_in_vm", description="在 Ubuntu 虚拟机中创建目录，相当于 mkdir -p 命令")
+@mcp.tool(
+    name="make_dir_in_vm",
+    description=(
+        "在 Ubuntu(WSL) 虚拟机中创建目录，相当于 Linux 的 mkdir -p。"
+        "⚠️ 只接受 **WSL 内路径**（如 /home/user/… 或 /mnt/e/…）；"
+        "要操作 Windows 侧的文件/目录请改用 execute_powershell_command 或文件工具。"
+    ),
+)
 def make_dir_in_vm(
     dir_path: Annotated[
-        str, Field(description="要创建的目录路径", examples=[VM_UPLOADS_DIR + "/test3"])
+        str,
+        Field(description="要创建的目录路径（WSL 内路径）", examples=[VM_UPLOADS_DIR + "/test3"]),
     ],
 ) -> str:
+    dir_path = ensure_wsl_path(dir_path, tool="make_dir_in_vm", arg="dir_path")
     sys.stderr.write(f"dir_path {dir_path}\n")
     return run_vm_shell_command("mkdir -p " + shlex.quote(dir_path))
 
 
 # 查看 Ubuntu 虚拟机中的目录内容，对应 Linux 的 ls -al。
-@mcp.tool(name="list_files_in_vm", description="查看 Ubuntu 虚拟机中指定目录，相当于 ls -al 命令")
+@mcp.tool(
+    name="list_files_in_vm",
+    description=(
+        "查看 Ubuntu(WSL) 虚拟机中指定目录，相当于 Linux 的 ls -al。"
+        "⚠️ 只接受 **WSL 内路径**（如 /home/user/… 或 /mnt/e/…）。"
+    ),
+)
 def list_files_in_vm(
-    dir_path: Annotated[str, Field(description="要查看的目录路径", examples=[VM_UPLOADS_DIR])],
+    dir_path: Annotated[
+        str, Field(description="要查看的目录路径（WSL 内路径）", examples=[VM_UPLOADS_DIR])
+    ],
 ) -> str:
+    dir_path = ensure_wsl_path(dir_path, tool="list_files_in_vm", arg="dir_path")
     sys.stderr.write(f"dir_path {dir_path}\n")
     return run_vm_shell_command("ls -al " + shlex.quote(dir_path))
 
 
 # 向 Ubuntu 虚拟机中的指定路径写入文件内容。
-@mcp.tool(name="write_file_to_vm", description="向 Ubuntu 虚拟机中写入指定文件")
+@mcp.tool(
+    name="write_file_to_vm",
+    description=(
+        "向 Ubuntu(WSL) 虚拟机中写入指定文件。"
+        "⚠️ file_path 只接受 **WSL 内路径**（如 /home/user/… 或 /mnt/e/…）；"
+        "要写 Windows 侧的文件请改用文件工具（write_file）或 execute_powershell_command。"
+    ),
+)
 def write_file_to_vm(
     file_path: Annotated[
         str,
         Field(
-            description="写入虚拟机中的文件地址", examples=[VM_UPLOADS_DIR + "/test2/index.html"]
+            description="写入虚拟机中的文件地址（WSL 内路径）",
+            examples=[VM_UPLOADS_DIR + "/test2/index.html"],
         ),
     ],
     content: Annotated[
         str, Field(description="写入虚拟机中的文件内容", examples=["<div>hello wsl</div>"])
     ],
 ) -> str:
+    file_path = ensure_wsl_path(file_path, tool="write_file_to_vm", arg="file_path")
     with tempfile.NamedTemporaryFile(
         delete=False, mode="w", encoding="utf-8", newline=""
     ) as tmp_file:
@@ -173,19 +238,31 @@ def change_file_permission_in_vm(file_path: str, mode: str) -> str:
 
 
 # 把 Windows 本地目录上传到 Ubuntu 虚拟机目录，并尽量保持原有目录结构。
-@mcp.tool(name="upload_directory_to_vm", description="将本地文件目录上传至 Ubuntu 虚拟机指定目录")
+@mcp.tool(
+    name="upload_directory_to_vm",
+    description=(
+        "将本地(Windows)文件目录上传至 Ubuntu(WSL) 虚拟机指定目录。"
+        "⚠️ 注意区分两个参数：`local_dir` 是 **Windows 本地路径**（会被自动转成 /mnt/…），"
+        "而 `vm_dest_dir` 只接受 **WSL 内路径**（如 /home/user/… 或 /mnt/e/…）。"
+    ),
+)
 def upload_directory_to_vm(
     local_dir: Annotated[
         str,
         Field(
-            description="本地文件目录",
+            description="本地文件目录（Windows 路径）",
             examples=["E:/agentstart/work/ai-agent-test/.temp/vue3-test"],
         ),
     ],
     vm_dest_dir: Annotated[
-        str, Field(description="虚拟机文件目录", examples=[VM_UPLOADS_DIR + "/vue3-test"])
+        str,
+        Field(
+            description="虚拟机文件目录（**WSL 内路径**）",
+            examples=[VM_UPLOADS_DIR + "/vue3-test"],
+        ),
     ],
 ) -> str:
+    vm_dest_dir = ensure_wsl_path(vm_dest_dir, tool="upload_directory_to_vm", arg="vm_dest_dir")
     local_dir = os.path.abspath(local_dir)
     if not os.path.exists(local_dir):
         msg = f"本地目录不存在：{local_dir}"

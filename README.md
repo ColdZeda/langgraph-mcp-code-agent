@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/chongd259/langgraph-mcp-code-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/chongd259/langgraph-mcp-code-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.13-blue)
-![Tests](https://img.shields.io/badge/tests-593%20%2B%205%20integration-brightgreen)
+![Tests](https://img.shields.io/badge/tests-628%20%2B%205%20integration-brightgreen)
 ![Eval](https://img.shields.io/badge/eval-30%2F30%20%C2%B7%20163%20assertions-success)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -18,8 +18,8 @@
 |---|---|
 | **评估**（30 题 / **163 条强断言**） | **single 30/30、multi 30/30**，平均分 **1.0000**；状态 124 / 轨迹 29 / 文本 10 全过 |
 | **成本画像**（multi ÷ single） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；**Verifier 占总 token 25%** |
-| **自动化测试** | **593** 条单元/工具级（约 30 秒跑完）+ **5** 条真集成测试（默认不跑，见「如何验证」） |
-| **覆盖率 / 静态检查** | 73~75%（`--cov`）/ `ruff check` + `ruff format --check` |
+| **自动化测试** | **628** 条单元/工具级（约 30 秒跑完）+ **5** 条真集成测试（默认不跑，见「如何验证」） |
+| **覆盖率 / 静态检查** | 76%（`--cov`）/ `ruff check` + `ruff format --check` |
 | **RAG 检索对照**（2×2 消融 + 全量召回对照组） | 文件粒度 top-1 **0.6 → 0.9**，真源 top-1 0.4 → 0.6，延迟 12.8ms → 86.7ms |
 
 ![真实任务：Planner 计划 + Executor 结果](docs/evidence/阶段7_web走查/当前界面/Planner计划与Executor结果.png)
@@ -34,7 +34,8 @@
 ## 能力总览（按 JD 关注度排序，细节都在下面各节）
 
 **① RAG 全链路**：`解析 → 分块 → Embedding → 向量检索 → CrossEncoder 精排 → 上下文组装`，
-知识库是**本地** ChromaDB（embedding/reranker 都走本地模型，路径不存在就降级为纯向量召回、不联网）。
+知识库是**本地** ChromaDB（embedding/reranker 都是本地模型、不联网；**精排缺失会自动降级**为纯向量召回，
+**向量模型缺失时** RAG 那 4 个工具会明确报错并告诉你一条命令装好 —— 见「快速开始 → 安装 RAG 的本地模型」）。
 做了 **2×2 消融对照 + 全量召回对照组**（整篇/分块 × 有无精排，**不用 LLM、不烧 token**）：
 精排把文件粒度 top-1 从 0.6 拉到 **0.9**、把干扰源命中从 0.6 压到 0.4，代价是延迟 12.8ms → **86.7ms**。
 （详见「上下文工程与分层记忆」；原始数字在 [`docs/evidence/评估报告.md`](docs/evidence/评估报告.md) 第七节。）
@@ -108,6 +109,18 @@ git clone https://github.com/chongd259/langgraph-mcp-code-agent.git
 cd langgraph-mcp-code-agent
 uv sync
 ```
+
+### 安装 RAG 的本地模型（知识库功能需要）
+
+```bash
+uv run python scripts/fetch_models.py --dry-run   # ① 先看装没装（不下载）
+uv run python scripts/fetch_models.py             # ② 装（≈90MB × 2，走 hf-mirror；连不上就加 --source modelscope）
+```
+
+这两个模型**不在仓库里**（各 ≈87MB —— 进了 git 就永远留在历史里，删都删不掉），
+默认下到 `<仓库的上级目录>/embedding-model/`：**跟着仓库走**，换台机器/换个盘 clone 会自动落在旁边，
+不写死任何人的路径。**没有它们也能用**：只有知识库那 4 个工具不可用（向量模型缺）或自动降级（精排缺），
+其余 30+ 个工具照常。
 
 ### 配置
 
@@ -613,10 +626,11 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 做什么 | 命令 | 说明 |
 |---|---|---|
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -q` | **593 条，约 30 秒**；其中 5 条集成测试默认**不跑** |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -q` | **628 条，约 30 秒**；其中 5 条集成测试默认**不跑** |
 | 静态检查 | `uv run ruff check .` + `uv run ruff format --check .` | CI 里跑的就是这两条 |
 | **真集成测试**（要真依赖） | `uv run python -m pytest -m integration -v` | **5 条**：真 MySQL / 真 WSL / 真 SearXNG / 真 Redis / 真 RAG。环境不可用会**自动跳过**（不会红）<br>⚠️ 这层**只能在 Windows 本机跑**（GitHub 的 runner 是 Linux，没有 WSL），所以**不在 CI 里** |
 | 跑评估前的环境预检 | `uv run python evals/preflight.py --run-id check` | 验 `.env` 的 key / 容器 / WSL / 端口 / 知识库，**只报告不修** |
+| **RAG 本地模型装没装** | `uv run python scripts/fetch_models.py --dry-run` | 只看状态、**不下载**；缺模型时直接给装法（装了 Web 启动日志里也会写） |
 | 看评估题集（不烧 token） | `uv run python evals/run_e2e.py --list` | 30 题的维度与断言分布 |
 | 出评估报告（读归档，不重跑） | 见「评估体系」里的命令 | 生成 `docs/evidence/评估报告.md` |
 | 只跑 RAG 检索基准 / 消融 | `uv run python evals/rag_bench.py` / `uv run python evals/rag_ablation.py --reps 10` | **不用 LLM**，几秒出数 |
@@ -694,14 +708,14 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | **593**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
+| 测试数 | **628**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | **测试语料** 35（7 文件 × 5 条）→ `evals/fixtures/knowledge/`；产品库默认空 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数，**2026-09-24 语料修订后**） | top-1 命中正解文件 **0.40 → 0.60**（对照 0.70）；⚠️ 旧语料基线是 **0.20** | `uv run python evals/rag_ablation.py --reps 10` |
 | 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
 | **评估结果（正式两轮，2026-09-25）** | **single 30/30**、**multi 30/30**（平均分均 **1.0000**；两轮 163 条断言全过、8 维度全 1.00） | 结果文件：`docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-旧版(限额200k).json`） |
 | 多 Agent 成本画像（同上两轮） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；其中 **Verifier 中位 10,988 token/题 = 25%**；**打回 0 次** | 同上两份 JSON 的 `totals` / `node_timings` |
-| 测试覆盖率 | **73~75%**（语句 2081~2082，未覆盖 545~561；随依赖容器是否在跑、本机知识库里有没有内容而波动） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **数字随环境波动**（那几条"要真环境"的测试走的分支不同）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头正是这些要连真库 / 起子进程 / 要真人输入的模块 → 集成测试挂在阶段 7 做 |
+| 测试覆盖率 | **76%**（语句 2081~2082，未覆盖 545~561；随依赖容器是否在跑、本机知识库里有没有内容而波动） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **数字随环境波动**（那几条"要真环境"的测试走的分支不同）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头正是这些要连真库 / 起子进程 / 要真人输入的模块 → 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 6 重测**；阶段 4 自测的临时数是 13.2ms → 81ms） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 73dd4e6^:docs/evidence/<文件名>` |
 

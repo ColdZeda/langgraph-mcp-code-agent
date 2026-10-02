@@ -418,3 +418,31 @@ Linux CI 里构建出 LF ⇒ 严格 diff 必红。
 **收尾完成度**：`v1.0.0` 已打并推到两个远端（`origin` = Gitee 镜像、`github` = GitHub 主仓，
 ⚠️ **GitHub 暂设私有**，用户 2026-10-01 要求）。
 唯一还差的一步：CI 下一次运行确认全绿（Actions 截图存 `docs/evidence/` 作为完整证据）。
+
+
+---
+
+## 十、2026-10-02：两个真 bug 的修复（路径校验 + 模型交付）
+
+### 1. VM 工具收到 Windows 路径 → 在仓库根造出畸形空目录
+
+| 项 | 内容 |
+|---|---|
+| 怎么发现的 | **用户自己在 Web 端做探索测试**时发现仓库根多了个名字很怪的文件夹 |
+| 铁证 | `runtime/permissions.log` 第 343 行：`17:37:54` `make_dir_in_vm` + `dir_path=E:\…\testprogram`（参数是**干净的 ASCII**） |
+| 根因 | 模型**按工具名匹配**（`make_dir`）忽略了 `in_vm`；`vm.py` 对该参数**零校验**；WSL 里 `\` 不是分隔符 ⇒ 整串被当成一个文件名；Windows 不允许 `:` ⇒ 驱动层用**私用区替身**（U+F03A / U+F05C）写入文件名 |
+| 为什么难查 | 那个目录是**空的** ⇒ git 完全看不见它（不跟踪目录），`git status` 一直"干净" |
+| 修法 | `vm.py` 新增 `ensure_wsl_path()`：四个 VM 工具的 WSL 侧路径参数收到 Windows 路径/含 `\` → **明确拒绝**（消息里带出路）；**不做自动转换**（否则掩盖"用错工具"） |
+| 证据 | `tests/test_vm_path_guard.py` 18 条；**去掉校验 → 7 条红**，还原 → 全绿 |
+| 顺带 | 删掉那个空目录；WSL 里 `find` 排查**无同类残留** |
+
+### 2. RAG 向量模型缺失 → 静默 236 秒 / 671MB / 报错被掩盖
+
+| 项 | 内容 |
+|---|---|
+| 怎么发现的 | 讨论"别人 clone 下来没有模型会怎样"时现场实测 |
+| 实测 | ① 走真实代码路径：**12.6 秒后**抛 `AttributeError: 'NoneType' object has no attribute 'write'`（真原因被掩盖）；② 绕开那段 hack 直调 ModelScope：**能下，但 236 秒 / 30 个文件 / 671.55 MB**（真正需要只有 87.4 MB）；③ 精排缺失：**0.1 秒优雅降级** ✓ |
+| 根因 | ① `redirect_stderr(None)` 把下载器写错误的路堵死（`store.py` 旧第 95 行）；② `ignore_file_pattern` 没滤掉 ONNX/OpenVINO；③ 下载**静默**进行（进度被抑制、日志无提示） |
+| 决策 | **甲方案（用户定）**：默认**不自动下载**；缺模型 → 立刻报清楚 + 告诉怎么装；装模型走脚本/Release |
+| 修法 | `store.py` 删掉整段自动下载（顺带消灭 ①②）；新增 `RagModelMissing` / `embedding_model_ready()` / `reranker_model_ready()` / `embedding_model_hint()`；**判据放在 `import sentence_transformers` 之前**（0.06 秒报错、单测不必加载 torch）；`scripts/fetch_models.py`（hf-mirror + 白名单，**不写死路径**）；`.env.example` 补齐两个路径变量；Web 启动打状态行 |
+| 证据 | `tests/test_fetch_models.py` + `tests/test_rag_model_status.py`（含源码级守卫：判据顺序、老代码不许回来）；`--dry-run` 实测识别出两个模型已就位（87.4 / 87.6 MB） |

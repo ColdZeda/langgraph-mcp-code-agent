@@ -23,14 +23,12 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import Any
 
 from app.code_agent.config import (
     CHROMA_DIR,
-    EMBEDDING_MODEL_CACHE_DIR,
     EMBEDDING_MODEL_PATH,
     KNOWLEDGE_DIR,
     RAG_CHUNK_MAX_CHARS,
@@ -44,8 +42,11 @@ from app.code_agent.config import (
 from app.code_agent.rag.chunking import split_into_chunks
 
 __all__ = [
+    "RagModelMissing",
     "delete_document",
     "document_exists",
+    "embedding_model_hint",
+    "embedding_model_ready",
     "ensure_seeded",
     "format_results",
     "get_chunk_count",
@@ -53,6 +54,7 @@ __all__ = [
     "get_embed_model",
     "get_reranker",
     "index_source",
+    "reranker_model_ready",
     "save_document",
     "search_knowledge",
     "seed_knowledge_base",
@@ -79,38 +81,52 @@ _reranker_resolved = False
 _seeded = False
 
 
+class RagModelMissing(RuntimeError):
+    """RAG 需要的本地模型没装好（消息里给出**怎么装**，不是一句"失败了"）。"""
+
+
+def embedding_model_ready() -> bool:
+    """向量模型是否就位（判据与真正加载时**同一个**：核心文件在不在）。"""
+    return (EMBEDDING_MODEL_PATH / "model.safetensors").exists()
+
+
+def reranker_model_ready() -> bool:
+    """精排模型是否就位（缺了只是降级，不是错误）。"""
+    return (Path(RERANKER_PATH) / "config.json").exists()
+
+
+def embedding_model_hint() -> str:
+    """缺模型时给模型/用户看的**可执行**提示。
+
+    为什么要有它（2026-10-02 实测的一次翻车）：改造前这里会**自动联网下载**
+    （ModelScope，实测 236 秒 / 下了 **671MB**，而真正需要的只有 87MB），
+    而且外面的 `redirect_stderr(None)` 会把下载器的报错也堵死 ⇒ 用户看到的是
+    `AttributeError: 'NoneType' object has no attribute 'write'`，**完全看不出发生了什么**。
+    现在改成"**默认不下载 + 立刻报清楚 + 告诉你怎么装**"（用户 2026-10-02 决策）。
+    """
+    return (
+        f"知识库向量模型未安装：期望路径 {EMBEDDING_MODEL_PATH}（缺 model.safetensors 文件）。\n"
+        "两条出路：\n"
+        "  ① 一键下载：`uv run python scripts/fetch_models.py`（默认走 hf-mirror，只下需要的文件，约 90MB）；\n"
+        "  ② 已经有模型：把它放到上面的路径，或用 .env 的 CODE_AGENT_EMBEDDING_MODEL_PATH 指过去"
+        "（见 .env.example）。\n"
+        "⚠️ 只影响 RAG 这 4 个工具（query_rag / save_knowledge / delete_knowledge / update_knowledge），"
+        "其余工具不受影响。"
+    )
+
+
 def _load_embedding_model():
+    """真正加载向量模型：**先判存在、再 import 重库**。
+
+    ⚠️ 顺序很重要：缺模型时要在**几十毫秒内**抛出可读错误，
+    而不是先花十几秒 `import torch` 再报错（顺带也让单测不必加载 torch）。
+    """
+    if not embedding_model_ready():
+        raise RagModelMissing(embedding_model_hint())
+
     from sentence_transformers import SentenceTransformer
 
-    # 核心文件 model.safetensors 存在 → 直接从本地加载，不走网络
-    if os.path.exists(EMBEDDING_MODEL_PATH / "model.safetensors"):
-        return SentenceTransformer(str(EMBEDDING_MODEL_PATH))
-
-    # 首次：从 ModelScope 下载（只下载 PyTorch 格式）
-    from contextlib import redirect_stderr
-
-    from modelscope import snapshot_download
-
-    # 抑制下载进度条（否则会通过 stdio 污染 MCP 协议）
-    with redirect_stderr(None):
-        saved_stdout = sys.stdout
-        sys.stdout = open(os.devnull, "w")
-        try:
-            model_dir = snapshot_download(
-                "sentence-transformers/all-MiniLM-L6-v2",
-                cache_dir=str(EMBEDDING_MODEL_CACHE_DIR),
-                ignore_file_pattern=[
-                    "*/onnx/*",
-                    "*/openvino/*",
-                    "*.h5",
-                    "*.ot",
-                    "pytorch_model.bin",
-                ],
-            )
-        finally:
-            sys.stdout.close()
-            sys.stdout = saved_stdout
-    return SentenceTransformer(model_dir)
+    return SentenceTransformer(str(EMBEDDING_MODEL_PATH))
 
 
 def get_embed_model():

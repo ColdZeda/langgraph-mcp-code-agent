@@ -329,6 +329,24 @@ async def lifespan(app: FastAPI):
         apply_settings(settings)  # 含 api_key 与各角色模型（改造前漏了 api_key）
         logger.info(f"已应用本地模型设置: {masked_settings(settings)}")
     await runtime.load()
+    # RAG 的两个本地模型**不在仓库里**（各 ≈87MB，见 scripts/fetch_models.py）——
+    # 启动时就把状态说清楚，别让用户"用到一半"才发现（缺向量模型时 RAG 的 4 个工具
+    # 会立刻报错并给出装法，见 store.embedding_model_hint）。
+    # ⚠️ 局部 import：不让 Web 启动路径平白依赖 rag 那一串（虽然 store 是全懒加载的）。
+    from app.code_agent.config import EMBEDDING_MODEL_PATH
+    from app.code_agent.rag import store as rag_store
+
+    if rag_store.embedding_model_ready():
+        logger.info(f"[RAG] 向量模型已就位：{EMBEDDING_MODEL_PATH}")
+    else:
+        logger.warning(
+            f"[RAG] 向量模型未安装（期望 {EMBEDDING_MODEL_PATH}）→ RAG 的 4 个工具不可用，"
+            "其余工具正常。装法：uv run python scripts/fetch_models.py"
+        )
+    logger.info(
+        "[RAG] 精排模型："
+        + ("已就位" if rag_store.reranker_model_ready() else "未安装 → 降级为纯向量召回")
+    )
     # 阶段 7：启动脚本会在拉起进程前设好这个环境变量 —— 这样"已就绪"这句话正好出现在
     # **能打开界面**的那一刻。脚本自己打的那句 URL 只能打在启动前（那时点开是打不开的），
     # 用户会以为项目坏了（界面第二轮反馈里就是这么踩的）。
