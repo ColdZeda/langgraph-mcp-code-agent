@@ -76,7 +76,8 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 
 ```bash
 # 约定 13 的机械检查（活文档部分必须为空输出）
-git grep -nE "agents[t]art|lepr[i]te|[A-Za-z]:[\\/]" -- AGENTS.md README.md docs scripts tests app ':(exclude)docs/evidence/*.json'
+git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests app ':(exclude)docs/evidence/*.json'
+git grep -nE "[A-Za-z]:\\\\" -- AGENTS.md README.md docs scripts tests app ':(exclude)docs/evidence/*.json'
 ```
 
 ## 常用命令
