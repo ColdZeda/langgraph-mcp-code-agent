@@ -1,3 +1,10 @@
+> **【冻结快照 · 2026-10-03】** 本文件是 `AGENTS.md` **重排之后**的版本快照，**不再更新**。
+> 它的价值 = 一份「清理掉冗余与过期内容、可以直接给人读」的 AI 协作规范记录
+> （**未清洗的原始版**见同目录 `agent-history-raw-2026-10-03.md`）。
+> 当前规范一律以仓库里的 [`AGENTS.md`](../../AGENTS.md) 为准。
+
+---
+
 # AI Agent Test — LangGraph + MCP Code Agent
 
 > **给谁看**：**AI 编码助手**（Claude / Cursor / Copilot / 其他）。
@@ -12,7 +19,7 @@
 | 项 | 值 |
 |---|---|
 | 阶段 | **阶段 7（收尾包装）已完成** —— 改造期（阶段 0–7）收口 |
-| 最近提交 | `git log --oneline -1`（别在文档里写死 hash —— 提交一次就过期）|
+| 最近提交 | `c294807`（docs：路径对外化 + CI 跨平台坑入档）· 本地 = Gitee = GitHub |
 | 远端 | `origin` = Gitee（镜像）· `github` = GitHub（主仓）；**tag `v1.0.0` 两边都有** |
 | CI | **passing**（`.github/workflows/ci.yml`）；跑 `ruff check` → `ruff format --check` → `pytest tests/ -v`，**不需要 `.env`** |
 | 测试 | **629** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **76%** |
@@ -76,7 +83,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 
 ```bash
 # 约定 13 的机械检查（活文档部分必须为空输出）
-git grep -nE "agents[t]art|lepr[i]te|[A-Za-z]:[\\/]" -- AGENTS.md README.md docs scripts tests app
+git grep -nE "agentstart|leprite|[A-Za-z]:[\\/]" -- AGENTS.md README.md docs scripts tests app
 ```
 
 ## 常用命令

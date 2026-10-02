@@ -2,7 +2,7 @@
 
 ## 事故（有审计日志与磁盘证据）
 
-模型把 **Windows 路径** `E:\\agentstart\\work\\ai-agent-test\\runtime\\workspace\\testprogram`
+模型把 **Windows 路径** `E:\\path\\to\\repo\\runtime\\workspace\\testprogram`
 传给了 `make_dir_in_vm`（这个工具要的是 **WSL 路径**）。`shlex.quote` 把整串包成**一个**参数，
 而 **Linux 里反斜杠不是分隔符** ⇒ WSL 在**当前目录**（NTFS 挂载的仓库根）建了一个
 "名字就是这串路径"的目录；Windows 又不允许文件名含 `:` ⇒ WSL/驱动层用**私用区替身**写进文件名
@@ -25,8 +25,8 @@ import pytest
 from app.code_agent.mcp_servers import vm
 
 #: 事故里那条真实路径（Windows 盘符 + 反斜杠）
-WINDOWS_ABS = r"E:\agentstart\work\ai-agent-test\runtime\workspace\testprogram"
-WINDOWS_FILE = r"E:\agentstart\work\ai-agent-test\runtime\workspace\testprogram\index.html"
+WINDOWS_ABS = r"E:\path\to\repo\runtime\workspace\testprogram"
+WINDOWS_FILE = r"E:\path\to\repo\runtime\workspace\testprogram\index.html"
 
 
 @pytest.fixture()
@@ -99,7 +99,7 @@ def test_other_bad_shapes_are_rejected(no_exec, bad):
     "good",
     [
         "/home/user/nginx/uploads/test3",
-        "/mnt/e/agentstart/work/ai-agent-test/runtime/workspace",
+        "/mnt/e/path/to/repo/runtime/workspace",
         "/tmp/x",
         "relative/posix/path",
     ],
@@ -153,8 +153,8 @@ def test_upload_positive_path(monkeypatch, tmp_path):
 @pytest.mark.parametrize(
     ("windows", "expected_prefix"),
     [
-        (r"E:\agentstart\work", "/mnt/e/agentstart/work"),
-        ("E:/agentstart/work", "/mnt/e/agentstart/work"),
+        (r"E:\path\to\parent", "/mnt/e/path/to/parent"),
+        ("E:/path/to/parent", "/mnt/e/path/to/parent"),
     ],
 )
 def test_windows_path_converter_still_works(windows, expected_prefix):

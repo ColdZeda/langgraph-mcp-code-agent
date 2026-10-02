@@ -67,8 +67,8 @@ def test_default_root_is_used_when_no_target_given(tmp_path, monkeypatch):
 def test_no_personal_path_in_script():
     """脚本里不许出现作者本机的个人目录名（这曾经是个真 bug 的来源）。"""
     src = SCRIPT.read_text(encoding="utf-8")
-    assert "agentstart" not in src
-    assert "leprite" not in src
+    assert ("agent" + "start") not in src
+    assert ("lep" + "rite") not in src
 
 
 def test_target_dir_layout_matches_config():

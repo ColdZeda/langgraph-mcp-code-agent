@@ -40,8 +40,8 @@ services:
       - "8888:8080"                      # 对应 config.py 的 SEARXNG_URL 默认值
     volumes:
       # 这两个是【Windows 路径】，从 Windows 跑 compose 没问题
-      - "E:/agentstart/work/searXNG/config:/etc/searxng"
-      - "E:/agentstart/work/searXNG/data:/var/cache/searxng"
+      - "${SEARXNG_DIR:-./searxng}/config:/etc/searxng"
+      - "${SEARXNG_DIR:-./searxng}/data:/var/cache/searxng"
 
   redis:
     image: redis/redis-stack-server
