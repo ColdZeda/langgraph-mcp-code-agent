@@ -101,7 +101,18 @@ def run_vm_shell_command(command: str) -> str:
 
 # 把 Windows 路径转换成 WSL Ubuntu 可以识别的 /mnt/盘符 路径。
 def windows_path_to_wsl_path(path: str) -> str:
-    normalized = os.path.abspath(path)
+    # ⚠️ 先按**语法**判断"像不像 Windows 盘符路径"，再决定要不要 `os.path.abspath`。
+    #    为什么（2026-10-02 CI 实测）：在 **Linux** 上 `os.path.abspath("E:\\a\\b")` 会把它
+    #    当**相对路径**、前面拼上当前目录 —— 实测得到
+    #    `/home/runner/work/<repo>/<repo>/E:/agentstart/work`，于是盘符正则永远匹配不上
+    #    （CI 上就是这么红的）。先看语法 ⇒ 这个转换函数**跨平台结果一致**；
+    #    而在 Windows 上结果与改造前**完全相同**（`abspath("E:\\a\\b")` 本来就是 `E:\a\b`）。
+    raw = path or ""
+    direct = re.match(r"^([a-zA-Z]):[\\/](.*)$", raw)
+    if direct:
+        return f"/mnt/{direct.group(1).lower()}/{direct.group(2).replace('\\', '/')}"
+
+    normalized = os.path.abspath(raw)
     match = re.match(r"^([a-zA-Z]):[\\/](.*)$", normalized)
     if not match:
         return normalized.replace("\\", "/")
