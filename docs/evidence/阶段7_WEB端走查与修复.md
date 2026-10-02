@@ -376,8 +376,8 @@ embedding 缓存目录、日志级别、各类运行时目录 —— 留在 `.en
 ### 1. 干净 clone → 跑起来（**不带 `.env`**）
 
 ```powershell
-git clone https://gitee.com/wdnmded/langgraph-mcp-code-agent.git E:\agentstart\work\clone-check-v1
-cd E:\agentstart\work\clone-check-v1
+git clone https://gitee.com/wdnmded/langgraph-mcp-code-agent.git 本机工作目录\clone-check-v1
+cd 本机工作目录\clone-check-v1
 uv sync                                  # 按 uv.lock
 uv run python -m pytest tests/ -q        # → 593 passed, 5 deselected in 106.88s
 uv run uvicorn app.web.server:app --port 8002   # 不带 .env 直接起
@@ -446,3 +446,18 @@ Linux CI 里构建出 LF ⇒ 严格 diff 必红。
 | 决策 | **甲方案（用户定）**：默认**不自动下载**；缺模型 → 立刻报清楚 + 告诉怎么装；装模型走脚本/Release |
 | 修法 | `store.py` 删掉整段自动下载（顺带消灭 ①②）；新增 `RagModelMissing` / `embedding_model_ready()` / `reranker_model_ready()` / `embedding_model_hint()`；**判据放在 `import sentence_transformers` 之前**（0.06 秒报错、单测不必加载 torch）；`scripts/fetch_models.py`（hf-mirror + 白名单，**不写死路径**）；`.env.example` 补齐两个路径变量；Web 启动打状态行 |
 | 证据 | `tests/test_fetch_models.py` + `tests/test_rag_model_status.py`（含源码级守卫：判据顺序、老代码不许回来）；`--dry-run` 实测识别出两个模型已就位（87.4 / 87.6 MB） |
+
+
+---
+
+## 十一、2026-10-02：CI 第一次红 —— 跨平台路径转换
+
+| 项 | 内容 |
+|---|---|
+| 现象 | `test` job 红在「单元 + 工具级测试」（21 秒），本机 **628 条全绿** |
+| 定位过程 | ① 先排"本机状态残留"：全新 clone + 无 `.env` 跑 → 全绿；② 再排"没有模型"：把两个模型路径指到不存在处跑全量 → 复现出**另一条**写脆的断言；③ 最后靠用户贴的 CI 日志原文命中真凶 |
+| 真凶 | `vm.py` 的 `windows_path_to_wsl_path()`：**Linux 上 `os.path.abspath("E:\\a\\b")` 把它当相对路径**、拼上当前目录 ⇒ 盘符正则匹配不上 ⇒ 返回 `/home/runner/work/…/E:/agentstart/work` |
+| 修法 | **先按语法判盘符**再决定要不要 `abspath`（Windows 行为不变，已逐条核对 4 个用例） |
+| 顺带修 | `tests/test_fetch_models.py` 里一条**写脆**的断言（默认目录 == 仓库上级目录）：用户按 `.env.example` 设了 `CODE_AGENT_EMBEDDING_MODEL_PATH` 就会红 ⇒ 改成断言"路径来自 config"这个**关系** |
+| 结果 | `8c34850` 上 **CI 徽章 = passing** ✓；本地 **629 passed** / ruff 全过 |
+| 教训 | ① 「本机绿 ≠ CI 绿」，平台差异（路径/行尾/权限/大小写）要专门过一遍；② GitHub 的 **job 日志接口即使仓库公开也要 admin 权限**，私有仓更是只能靠人贴日志或单独配只读 token |

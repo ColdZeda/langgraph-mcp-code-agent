@@ -413,7 +413,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   ⚠️ 别把它们合回去：混在一起会让**评测跑完把错误知识灌进真实会话**（用户实测踩过，见订正 #36）。
 - `runtime/runs/` 被 gitignore；**正式结果才复制到 `docs/evidence/`** 纳入版本控制。
   ⚠️ 2026-09 用户把**改造前**那批旧存档（旧模型 + 软口径）**移出了仓库**（所以那批不在 `docs/evidence/` 里），
-  备份在 `E:\agentstart\work\backup\1new\backup\old-data\docs\evidence\`（13 个文件），
+  备份在**本机**（未入库，13 个文件），
   git 历史里也有（如 `git show 73dd4e6^:docs/evidence/baseline-final.json` —— `73dd4e6` 是**删除**这批存档的提交，
   所以要用它的父提交 `^`；拿删除之后的提交去 show 只会得到 `path ... does not exist in ...`）。
   **阶段 6 起 `docs/evidence/` 重新只追加**：已入库 `rag_ablation_20260923_203822.json`（旧语料）
@@ -424,7 +424,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   ② 安全题的判定器要按 **MCP 工具名 + 真实参数名**写（`make_dir_in_vm` 的参数叫 `dir_path`，
   没有 `command`）—— 否则判定器看不见东西还恒给满分。
   另外旧题集**没有备份就找不到的**东西都在 git 里：`git show f2f3bbb:evals/tasks.py`；
-  文件级备份在 `E:\agentstart\work\backup\1new\backup\evals\`。
+  文件级备份在**本机**（未入库）。
 - **MCP 工具没有"需要关闭的 client"**（实测，langchain-mcp-adapters 0.1.1）：
   `MultiServerMCPClient.get_tools()` 的 docstring 明写
   *"a new session will be created for each tool call"* → 每次工具调用**自建并自关**一个会话
@@ -534,6 +534,23 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   都是 `text eol=lf` ⇒ 工作树里这几类文件统一 LF（再构建两次的产物就一致了）。
 - 那个比对 job（`frontend-dist`）**已经删掉**（用户决定），但这几条 LF 规则**保留**。
 
+### 路径转换的跨平台坑（2026-10-02 CI 实测）
+
+- 🔴 **`windows_path_to_wsl_path()` 不许先无条件 `os.path.abspath()`**：
+  在 **Linux** 上 `os.path.abspath("E:\…\a\b")` 会把它当**相对路径**、前面拼上当前目录 ——
+  实测得到 `/home/runner/work/<repo>/<repo>/E:/<父目录>/work`，于是盘符正则**永远匹配不上**
+  （CI 就是这么红的：`assert '/home/runner/.../E:/<父目录>/work'.startswith('/mnt/e/...')`）。
+- **修法**：**先按语法判盘符**（`^[A-Za-z]:[\\/]`）再决定要不要 `abspath` ⇒ 这个函数
+  **跨平台结果一致**；Windows 上行为与改造前**完全相同**（已用 4 个用例逐条核对）。
+- **教训（比这个 bug 更值钱）**：
+  1. **"本机绿"不等于"CI 绿"** —— 平台差异要专门想一遍（路径语法 / 行尾 / 权限 / 大小写敏感）；
+  2. **断言别写脆**：`test_default_root_is_parent_of_repo` 断言"默认目录 == 仓库上级目录"，
+     可用户一旦按 `.env.example` 设了 `CODE_AGENT_EMBEDDING_MODEL_PATH` 就不成立 ⇒ 改成断言
+     **关系**（"路径来自 config，不是硬编码"）；
+  3. **读不到 CI 日志时先做"最小复现"**：这次先排"本机残留"（全新 clone + 无 `.env`）、
+     再排"没有模型"（把模型路径指到不存在处），最后靠用户贴的日志原文命中 ——
+     GitHub 的 **job 日志接口即使仓库公开也要 admin 权限**（实测 `403 Must have admin rights`）。
+
 ### MCP 工具的参数校验（2026-10-01 实锤事故）
 
 - 🔴 **`make_dir_in_vm` 收到 Windows 路径会造出畸形目录**：模型把 `E:\…\testprogram` 传给了它
@@ -575,7 +592,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 → **做全仓扫描类操作必须排除**（否则扫到生成物）。
 - `docs/` 结构（2026-08-31 整理后）：`evidence/`（存档，只追加）+ `archive/`（历史素材，当前为空）。
   ⚠️ **`handover.md` 已于 2026-09-27 移出仓库**（理由是它是开发者内部交接文档，不该进公开仓库）：
-  现在在仓库外 `E:\agentstart\上班\work-content\program-fix第八版\handover_交接文档.md` —— **今后只在那里更新**。
+  现在在**仓库外**的方案文档目录（`program-fix第八版/`）里的 `handover_交接文档.md` —— **今后只在那里更新**。
 - ⚠️ **git 历史已于 2026-09-27 用 `git filter-repo` 重写**（公开前脱敏），**分两次跑**，剔除的路径共 4 条：
   `docs/archive/interview/`（归档后的旧简历）、`docs/handover.md`（第一次）、
   **`docs/interview/`（归档改名前的同一批旧简历 —— 第一次漏了它）**、`docs/resume-star.md`（第二次）。
@@ -588,7 +605,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
   连带后果，**读旧文档时要记住**：
   1. **旧 hash 全部失效**（例：地基提交 `8d0ab78` 现在是 **`f2f3bbb`** —— 本段凡"例"里的旧 hash 都只作对照，
      拿去 `git show` 只会报找不到）；
-     **累积**（原始 → 最终）映射表在 `E:\agentstart\work\backup\1new\prepublic-backup\commit-map-pass2.tsv`，
+     **累积**（原始 → 最终）映射表在 `本机备份（未入库）\commit-map-pass2.tsv`，
      第一次那份 `commit-map-pass1.tsv`（原始 → 第一次结果）也留着；重写前的整份备份（bundle + mirror）同目录；
      本文件与 `docs/evidence/` 里引用过的 hash **已按映射表批量更新**；
   2. `origin` remote 两次都被 filter-repo 摘掉 → 已重新 `git remote add`；
@@ -598,7 +615,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
      master 线上只有 1 个（`d143202`，只改 handover；内容已并入仓库外那份 handover，**无信息损失**），
      另外 7 个都在 `raw-origin` 那条考古线上（**5 个只改旧简历 / STAR 稿，2 个只改 handover**）——
      ⚠️ 那 7 个的**提交历史**没了，但**改的内容本身**（7 份简历 + STAR 稿）在重写前的备份里都还在，
-     且磁盘上另有一份：`backup\1new\backup\old-data\docs\archive\interview\`（7 个文件，
+     且磁盘上另有一份：`本机备份里的旧简历目录\`（7 个文件，
      缺 `project-evolution.md`，那份只在备份的 git 里）。
   改造前那批旧存档**内容已被移出仓库**（用户决定，备份在 `backup/1new/backup/old-data/docs/`），
   `archive/` 仍是空目录；**`evidence/` 从阶段 6 起重新往里写**（只追加）——**已入库 6 份**：
@@ -631,7 +648,9 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 > ⚠️ **2026-10-01 用户要求暂设私有**）→ 两个远端都配好了：`origin` = Gitee（镜像）、`github` = GitHub；
 > **tag `v1.0.0` 已推两边**。本地与远端 HEAD = `bc85a77`。
 >
-> **CI 现状**：`test` job（ruff + 628 测试）**连续三次成功**；`frontend-dist` job 三次失败后，
+> **CI 现状（2026-10-02 更新）**：**passing ✓** —— `test` job（ruff + **629** 测试）在 `8c34850` 上通过，
+> 期间修掉一个**跨平台坑**（见「已知坑 · 路径转换的跨平台坑」）。
+> 历史：`frontend-dist` job 三次失败后，
 > **2026-10-01 用户决定删除该 job**（他确认不会忘记先 `npm run build` 再 push）⇒ 之后 CI 只跑
 > 单元 + 静态检查这一条主线。
 >
@@ -645,7 +664,7 @@ multi_step 4、cross_tool 4、tool_selection 3、error_recovery 3、context_mana
 prototype（教学原型）→ baseline（0.983）→ optimized（单 Agent 1.0 / 多 Agent 0.967）→ Web UI ✅
 ```
 
-**当前阶段**：**改造期**。方案文档在**仓库外**：`E:\agentstart\上班\work-content\program-fix第八版\`
+**当前阶段**：**改造期**。方案文档在**仓库外**：`仓库外的方案文档目录（`program-fix第八版/`）\`
 （**第八版 = 第七版 + 执行期实测订正**；第七版是冻结原档，第六版是原始底稿）。
 阶段 0（文档清洗与仓库整理）、阶段 1（修 P0 缺陷）、阶段 2（降复杂度与容器化）、
 阶段 3（执行模式与模型配置）、阶段 4（上下文工程与分层记忆）、**阶段 5（HITL 与安全加固）**、
