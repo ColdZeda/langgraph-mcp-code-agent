@@ -33,9 +33,35 @@ fm = _load_module()
 # ── ① 默认位置：跟着仓库走，不写死个人路径 ──────────────────────────────────
 
 
-def test_default_root_is_parent_of_repo():
-    """默认下载根目录必须是 `<仓库的上级目录>/embedding-model`（换盘/换机器自动跟随）。"""
-    assert fm.DEFAULT_ROOT.resolve() == (REPO_ROOT.parent / "embedding-model").resolve()
+def test_default_root_follows_config_not_a_hardcoded_path():
+    """默认下载根目录必须**跟着 `config.py` 的默认值走**（不写死任何人的路径）。
+
+    ⚠️ **这里刻意不断言"等于仓库的上级目录"**：用户按 `.env.example` 设了
+    `CODE_AGENT_EMBEDDING_MODEL_PATH` 之后，那就不成立了 —— 2026-10-02 就是这句话
+    在"模型路径被显式配置"的环境下变红。断言**关系**（脚本默认根 == config 路径的上两级）
+    才是真正想锁的东西：**路径来自配置，不是硬编码**。
+    """
+    from app.code_agent.config import EMBEDDING_MODEL_PATH
+
+    assert fm.DEFAULT_ROOT == EMBEDDING_MODEL_PATH.parent.parent
+
+
+def test_default_root_is_used_when_no_target_given(tmp_path, monkeypatch):
+    """不传 `--target` 时，落到默认根（而不是当前目录）—— 用打桩下载器验证。"""
+    seen: list[str] = []
+
+    def fake_download(repo_id, files, dest, *, endpoint):
+        seen.append(str(dest))
+        dest.mkdir(parents=True, exist_ok=True)
+        for name in files:
+            p = dest / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(fm, "download_with_hf", fake_download)
+    monkeypatch.setattr(fm, "DEFAULT_ROOT", tmp_path)
+    assert fm.main(["--only", "reranker"]) == 0
+    assert seen and seen[0].startswith(str(tmp_path))
 
 
 def test_no_personal_path_in_script():
