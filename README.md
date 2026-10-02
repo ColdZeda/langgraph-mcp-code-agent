@@ -1,6 +1,6 @@
 # Code Agent
 
-[![CI](https://github.com/chongd259/langgraph-mcp-code-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/chongd259/langgraph-mcp-code-agent/actions/workflows/ci.yml)
+[![CI](https://github.com/ColdZeda/langgraph-mcp-code-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ColdZeda/langgraph-mcp-code-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.13-blue)
 ![Tests](https://img.shields.io/badge/tests-628%20%2B%205%20integration-brightgreen)
 ![Eval](https://img.shields.io/badge/eval-30%2F30%20%C2%B7%20163%20assertions-success)
@@ -104,7 +104,7 @@ main.py (CLI REPL)                app/web/server.py (FastAPI + Vue3 Web UI, 端�
 ### 安装
 
 ```bash
-git clone https://github.com/chongd259/langgraph-mcp-code-agent.git
+git clone https://github.com/ColdZeda/langgraph-mcp-code-agent.git
 # 国内镜像（内容相同）： https://gitee.com/ColdZeda/langgraph-mcp-code-agent.git
 cd langgraph-mcp-code-agent
 uv sync
