@@ -137,6 +137,10 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 
 - **工具结果外置**：≥6000 字符或 150 行 ⇒ 落盘 `runtime/tool_results/`，上下文只留预览 + 路径。⚠️ **`read_file` / `read_file_range` 在豁免名单，不许外置** —— 实测同一道"读全文并总结"：外置后模型看不见内容、改用分段读绕过，**token 从 17,361 涨到 127,071（7.3 倍）**。读 `tool_results/` 里的文件**不再外置**（同内容同 hash ⇒ 死循环）。
 - **对话压实**：历史超 `COMPACT_THRESHOLD=6000` token ⇒ 最老一段压成四段式摘要；**摘要失败就原样保留**（省 token 不能把历史弄丢）。
+  ⚠️ **三项都可用 `.env` 覆盖**（不设就走 `config.py` 的默认值 6000 / 30000 / 200000）：
+  `CODE_AGENT_COMPACT_THRESHOLD`（压实，长会话可加大到 12000~32000）· `CODE_AGENT_NODE_TOKEN_BUDGET`
+  （单次调用输入上限，**不能超过模型窗口**）· `CODE_AGENT_TASK_TOKEN_BUDGET`（单任务成本保险丝）。
+  **改完必须重启进程**（`.env` 只在 import 时读一次）。
 - **token 预算**：`NODE_TOKEN_BUDGET=30000` 剪枝、`TASK_TOKEN_BUDGET=200000` 硬终止。⚠️ 任务级必须在 **executor 的 ReAct 循环内部逐步判** —— 只在节点入口判，一次"读大文件 + 反复重读"能在**单个节点调用**里烧掉十几万 token。
 - **只读缓存**默认**不收** `mysql_execute_query`（只读但结果会变）；任何写操作后**清空本会话缓存**；Redis 挂了静默降级。
 - 🔴 **三条入口都必须接工具包装层**（权限 → 外置 → 缓存）：CLI（`run_agent`）/ evals（`run_single_task`）/ **Web（`AgentRuntime.load()`）**。漏一条，那条入口就没有外置、没有缓存、也没有权限层。
