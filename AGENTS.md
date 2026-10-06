@@ -44,6 +44,8 @@
 
 - **改造前的历史不在 `master` 上**：地基提交是**单提交重建**的 ⇒ 要用 `git log --all -S '<关键词>'` 去 `refs/remotes/raw-origin/*` 挖。
 - **git 历史 2026-09-27 用 `filter-repo` 重写两次**（公开前脱敏）⇒ **旧 hash 全部失效**；映射表与重写前的整份备份都在**本机备份（未入库）**。
+- 🔴 **`raw-origin` 对应的远端是私有仓**（改造前的历史，**含已失效的旧 key**）⇒ **不要把它公开，也绝不要把它的 refs 推给主仓**（例如 `git push github 'refs/remotes/raw-origin/*'` 这类操作禁止）。
+  2026-10-06 实测：主仓（GitHub/Gitee）**不含**这些提交（查那个 SHA 返回 422）、`code_agent_raw` 匿名访问返回 **403** ✓。
 - 项目过程档案（阶段方案 / 讨论结论汇总 / 交接文档）在**仓库外的项目档案目录（开发者本地维护）**；仓库内只保留冻结快照 `docs/archive/handover-*.md`。
 
 ## 项目一句话与定位
@@ -277,6 +279,7 @@ docs/                        architecture.md（ADR）· archive/（冻结快照�
 | 8 | 如需给历史留档：另存一份带日期的冻结快照进 `docs/archive/`（头部 3 行声明"冻结 + 当前规范看 `AGENTS.md`"） |
 | 9 | **本文件超过 50 KB 必须压缩**（助手侧对指令文件有 **65 KB 预算**，超了会**从尾部静默截断** ⇒ 后面的内容等于不存在） |
 | 10 | **状态只允许出现在两处**：`README.md`（对外）+ 本文件「接活先看」（对内）；**第三处出现即视为 bug**（历史只允许进 `docs/archive/`，且必须带"冻结"声明） |
+| 11 | **密钥与个人信息检查**（公开前 / 定期）：① 扫入库内容 —— `git grep -nE "sk-[A-Za-z0-9_-]{16,}|ghp_|github_pat_|AKIA|hf_|glpat-" -- .`（**必须为空**）；② 确认仍被忽略 —— `git check-ignore -v .env runtime/web-settings.json .temp`；③ **历史抽样** —— `git grep -I -lE "<前缀>" $(git rev-list --all)`；⚠️ 命中若落在**考古线**（`raw-origin`）⇒ 只需确认那个仓**私有**且 **refs 从未推给主仓**（见「考古与备份」） |
 
 ## 历史与档案
 
