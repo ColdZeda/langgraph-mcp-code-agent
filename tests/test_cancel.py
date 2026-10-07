@@ -79,6 +79,7 @@ class _StepwiseExecutor:
         cancel_after: int | None = 1,
         reason: str = cx.REASON_USER,
         sleep_between: float = 0.0,
+        tokens_per_step: int = 0,
     ) -> None:
         self.token = token
         self.tool = tool
@@ -86,13 +87,23 @@ class _StepwiseExecutor:
         self.cancel_after = cancel_after
         self.reason = reason
         self.sleep_between = sleep_between
+        # 每一步报多少 token（0 = 不报）；用来测**预算终止**（`tests/test_termination.py`）
+        self.tokens_per_step = tokens_per_step
         self.ran: list[int] = []
         self.calls = 0
+
+    def _usage(self) -> dict:
+        return {
+            "input_tokens": self.tokens_per_step // 2,
+            "output_tokens": self.tokens_per_step - self.tokens_per_step // 2,
+            "total_tokens": self.tokens_per_step,
+        }
 
     async def astream(self, inputs, config=None):
         self.calls += 1
         for i in range(1, self.steps + 1):
             # ① 模型那一块：模型说"这一步要调 write_file"
+            extra = {"usage_metadata": self._usage()} if self.tokens_per_step else {}
             yield {
                 "agent": {
                     "messages": [
@@ -105,6 +116,7 @@ class _StepwiseExecutor:
                                     "id": f"call{i}",
                                 }
                             ],
+                            **extra,
                         )
                     ]
                 }

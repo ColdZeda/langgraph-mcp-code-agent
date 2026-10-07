@@ -11,11 +11,11 @@
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口；**P0 已落地并做完真机验收**（停止 + 墙钟 + 停止按钮 + 任务状态条；真机撞出的 F1/F2 也已修） |
+| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口；**P0 已落地并做完真机验收**（停止 + 墙钟 + 停止按钮 + 任务状态条；真机撞出的 F1/F2 也已修）· **P1 已落地**（终止文案统一 + §十五A 三条提问原则 + 顺手修的 F3） |
 | 最近提交 | `git log --oneline -1`（别在文档里写死 hash —— 提交一次就过期）|
 | 远端 | `origin` = Gitee（镜像）· `github` = GitHub（主仓）；**tag `v1.0.0` 两边都有** |
 | CI | **passing**（`.github/workflows/ci.yml`）；跑 `ruff check` → `ruff format --check` → `pytest tests/ -v`，**不需要 `.env`** |
-| 测试 | **657** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **77%** |
+| 测试 | **665** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **77%** |
 | 评估 | **single 30/30 · multi 30/30**（平均分 1.0000，163 条断言）→ 报告 `docs/evidence/评估报告.md` |
 | 仓库可见性 | **public**（2026-10-03 定：作为对招聘方展示的入口） |
 
@@ -23,7 +23,7 @@
 
 1. **阶段 8 修复（进行中）** —— **P0 ✅ 已落地 + 真机验收通过**（协作式停止 + 墙钟 15 分钟 + 界面停止按钮 + 任务状态条；
    现场撞出的 **F1**「弹框遮罩挡住停止按钮」与 **F2**「卡片步数跨轮累积」也都已修，见修复账「真机验收」一节）·
-   **P1** 轨迹文案 / 因预算或取消终止**不调 Verifier**（图侧已在 P0 顺手统一，剩下文案与那条测试）/ §十五A 提示词三条收敛原则 ·
+   **P1 ✅ 已落地**（预算终止的固定中文说明 + R6 的"见上方轨迹"已删 + §十五A 三条提问原则；顺手修了 F3「终止那轮的重跑不计次」与"重跑撞预算被包装成验收失败"）·
    **P1.5** 入口"模板未渲染"检测 · **P2** token 预算放宽 + 按模型窗口自动算阈值。
    账本（现象→证据→根因→待修）：`docs/records/2026-10-07_探索测试第1-2轮与问题账.md`；
    修复账（做了什么→证据）：`docs/records/2026-10-07_阶段8修复账.md`。
@@ -102,7 +102,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 | 指定权限模式 | `uv run python main.py --permission readonly`（readonly / confirm（默认）/ open） |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**657 个**） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**665 个**） |
 | **真集成测试**（要真 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑） | `uv run python -m pytest -m integration -v`（5 条） |
 | **装 / 查 RAG 的本地模型**（不在仓库里，各 ≈87MB） | `uv run python scripts/fetch_models.py`（`--dry-run` 只看状态；`--source modelscope` 换通道） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v4-single` |
@@ -182,7 +182,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 
 | 数字 | 值 | 怎么核 |
 |---|---|---|
-| 测试数 | **657**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
+| 测试数 | **665**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
 | 覆盖率 | **77%**（会随环境波动：依赖容器在跑/全停时略不同） | 同上（`addopts` 自带 `--cov`，看 `TOTAL` 行） |
 | 评估题数 / 断言数 | 30 题 / 163 条 | `uv run python evals/run_e2e.py --list` |
 | MCP 工具数 | 25（+ 7 文件工具 = **32**） | `git grep -c "@mcp.tool" -- app/code_agent` |
@@ -203,7 +203,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - **可达性**：`execute_powershell_command` 是**唯一能把原始命令透传下去**的入口；VM 四个工具都 `shlex.quote` 过参数（那边属纵深防御）。
 - **审计**：`runtime/permissions.log`（所有确认决定 + 放开档高危操作，一行一条 JSON）。
 
-### 停止与墙钟（阶段 8 · P0）
+### 停止 / 墙钟 / 终止文案（阶段 8 · P0 + P1）
 
 - **停止是"协作式"的**：只在三个**检查点**生效 —— ① 节点入口（planner / executor / verifier）
   ② executor 的 **ReAct 每一步**（`astream` 循环开头）③ **每次工具调用之前**（`utils/tool_wrap.py::_process`）。
@@ -235,6 +235,25 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - ⚠️ **`step_count` 每轮必须复位**（`run_multi_agent` 的输入里带 `"step_count": 0`）：它是个只增不减的通道，
   不复位的话同一会话里第 N 张卡片会把前 N-1 轮的步数一起算进去（实测 35 → 40 → 51）—— 而卡片上写的就是"步数"。
   **一轮之内的打回重跑仍然累加**（那是它本来的意思）；停止文案与卡片必须报**同口径**的步数。
+- ⚠️ **`retry_count` 在终止路径上也要计**（阶段 8 · P1 修的 F3）：`is_retry` 必须在**所有终止分支之前**算，
+  否则「被打回后发起的、却被预算/停止掐断」的那一轮不计数 ⇒ 卡片写「打回 0 次」而实际被打回过。
+- 🔴 **预算终止 ≠ 验收未通过**：① 出边判 `budget_exceeded` ⇒ **不调 Verifier**；
+  ② `run_multi_agent` 里**不许**把预算终止套上「任务执行完成，但验收未通过」那层包装
+  （重跑轮撞预算时 `verdict` 还留着上一轮的 FAIL，一包装就是第 2 题现场那句看不懂的混合文案）；
+  ③ 文案统一走 `_budget_message` / `_cancel_message`，两者共用 `_SIDE_EFFECTS_KEPT` 与 `_TERMINATION_TAIL`。
+- 🔴 **终止说明里不许写「见上方工具调用轨迹」**（账本 R6）：历史回放**只有最终回复、没有轨迹**
+  （`web/server.py::get_session_messages` 只回 role+content），那句话会把人引到不存在的地方。
+  守卫在 `tests/test_termination.py`（**AST 级**：只查字符串字面量，注释里提它是允许的）。
+
+### 什么时候该先问一句（阶段 8 · P1，候选池 §十五A）
+
+- 两个 Executor 提示词（`SYSTEM_PROMPT_TEMPLATE` / `EXECUTOR_PLAN_PROMPT`）都拼了同一个常量
+  `prompts.CLARIFY_PRINCIPLES`：判据是「**问一下的成本 vs 猜错重做的成本**」，
+  猜错代价大（删除 / 覆盖 / 上传到别人机器 / 不可逆）⇒ 先问；有明确默认值的 ⇒ 别问、直接做并写明假设；
+  目标不明确 / 自相矛盾 / 明显做不到 ⇒ 先问；同类失败连续 2 次 ⇒ 停下汇报（试过什么 / 卡在哪 / 给 2~3 个选项）。
+- **提问必须带默认建议**（不是空问），且防刷：一轮最多问一次、整个任务最多 2 次，超过就按最保守假设继续做。
+- 🔴 **往这段文本里加字不许出现 `{` `}`**：模板会被 `PromptTemplate.format()` 处理，
+  举 `${…}` 这类例子会直接炸（举例请用「」或中括号）。有测试守着（`tests/test_prompts.py`）。
 
 ### Web 端（会话管理与模型设置）
 
@@ -303,7 +322,7 @@ evals/                       评估体系：tasks(30 题) · verifiers(判定器
                              · preflight · report · rag_bench · rag_ablation · merge_runs
                              · reset_eval_threads · env(语料隔离) + fixtures/knowledge/(35 条夹具)
 scripts/                     probe_mcp_server.py · fetch_models.py · mysql-init/ · run/（启停脚本）
-tests/                       657 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
+tests/                       665 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
 docs/                        architecture.md（ADR）· archive/（冻结快照）
                              · evidence/（评估原始结果 + 报告 + 截图）· records/（过程账，可编辑）
 ```

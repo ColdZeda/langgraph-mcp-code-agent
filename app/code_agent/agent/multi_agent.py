@@ -227,6 +227,37 @@ def _plan_to_text(plan: str) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 
+#: 两种终止（停止 / 预算）共用的两句话。
+#: ⚠️ **谁都不许再写"见上方工具调用轨迹"**（账本 R6）：历史回放里**只有最终回复**、
+#: 没有轨迹，那句话会把用户引到一个不存在的地方。轨迹在 Web 的结果卡片里、不在对话历史里。
+_TERMINATION_TAIL = "如需继续，请把范围缩小后重试（例如只读需要的文件片段，或把任务拆成几次）。"
+_SIDE_EFFECTS_KEPT = (
+    "⚠️ 已经发生的副作用（写好的文件 / 建好的目录 / 库里的数据）一律保留 —— "
+    "终止只保证「后面不再继续」，不做回滚。"
+)
+
+
+def _budget_message(*, total_tokens: int, step_count: int, tool_calls: int, last: str = "") -> str:
+    """预算击穿后的**固定中文说明**（结构与 `_cancel_message` 对齐）。
+
+    ⚠️ 与"停止"分开写：**预算终止 ≠ 任务失败**。第 2 题现场是「因预算终止」被拼成
+    "验收未通过"+ 一句英文错误串（账本 R5），用户完全看不懂发生了什么 ——
+    预算只是**成本保险丝**，产物与已经拿到的结论都还在。
+    """
+    where = (
+        f"任务在「第 {step_count} 步之后」停下" if step_count > 0 else "任务在「开始执行前」就停了"
+    )
+    return (
+        f"【已终止·预算】本次任务累计消耗 {total_tokens} token，"
+        f"达到上限 {TASK_TOKEN_BUDGET}（CODE_AGENT_TASK_TOKEN_BUDGET）—— {where}。\n"
+        "预算终止是「成本保险丝」：不代表任务做错了，也不是「验收未通过」。\n"
+        f"{_SIDE_EFFECTS_KEPT}\n"
+        f"已执行 {tool_calls} 次工具调用。\n"
+        f"停下前拿到的最后一段结论：{last[:500] or '（无）'}\n"
+        f"{_TERMINATION_TAIL}"
+    )
+
+
 def _cancel_reason_text(token: Any) -> str:
     """停止原因 → 给用户看的中文（原因码本身在 `cancel.py` 里，是结构化的）。"""
     reason = getattr(token, "reason", "") or REASON_USER
@@ -266,10 +297,9 @@ def _cancel_message(
         f"{_cancel_where_text(stage, step_count, tool_calls)}。\n"
         f"已用 {minutes} 分 {seconds} 秒（不含人工确认的等待）· 累计 {total_tokens} token · "
         f"已执行 {tool_calls} 次工具调用。\n"
-        "⚠️ 已经发生的副作用（写好的文件 / 建好的目录 / 库里的数据）一律保留 —— "
-        "停止只保证「后面不再继续」，不做回滚。\n"
+        f"{_SIDE_EFFECTS_KEPT}\n"
         f"停下前拿到的最后一段结论：{last[:500] or '（无）'}\n"
-        "如需继续，请重新发起任务、并把范围说小一点（例如只处理指定的那几个文件）。"
+        f"{_TERMINATION_TAIL}"
     )
 
 
@@ -302,6 +332,7 @@ def _cancel_stop_result(
     messages: list | None = None,
     last_content: str = "",
     pruned: int = 0,
+    is_retry: bool = False,
 ) -> dict:
     """停止命中时的**统一返回**（executor 用；planner / verifier 见各自节点）。
 
@@ -332,6 +363,9 @@ def _cancel_stop_result(
         "executor_trace_list": prior_trace + trace,
         "executor_messages": messages or [],
         "step_count": total_steps,
+        # 阶段 8 · P1（F3）：被停止的这一轮若本来就是"被打回后发起的"，同样要计一次打回
+        # （否则卡片上会写「打回 0 次」，而实际上明明被打回过）
+        "retry_count": state.get("retry_count", 0) + (1 if is_retry else 0),
         "token_usage": total,
         "pruned_messages": state.get("pruned_messages", 0) + pruned,
     }
@@ -490,29 +524,35 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         )
         return _cancel_stop_result(state, stopped, stage=stage)
 
+    # ⚠️ 阶段 8 · P1（F3）：`is_retry` **要在所有终止分支之前算好**。
+    #    `retry_count` 的语义是「已经打回了多少次」—— 只要这一轮**是**被打回后发起的，
+    #    无论它是跑完了、被预算掐断、还是被停止，都得计一次；
+    #    否则卡片上会写「打回 0 次」，而实际上明明被打回过（现场：重跑轮撞预算 ⇒ 显示 0 次）。
+    prev_verdict = str(state.get("verdict") or "")
+    is_retry = _is_retry_round(prev_verdict)
+    retry_now = state.get("retry_count", 0) + (1 if is_retry else 0)
+
     tokens_used = state.get("token_usage", 0)
     if over_task_budget(tokens_used, TASK_TOKEN_BUDGET):
         logger.warning(
             "任务级 token 预算击穿：已用 %d / 上限 %d，主动终止", tokens_used, TASK_TOKEN_BUDGET
         )
+        prior_trace = list(state.get("executor_trace_list") or [])
         return {
-            "executor_result": (
-                f"【已终止】本次任务累计消耗 {tokens_used} token，"
-                f"达到上限 {TASK_TOKEN_BUDGET}（CODE_AGENT_TASK_TOKEN_BUDGET）。\n"
-                "为避免继续消耗，已主动停止执行。已完成的部分见上方工具调用轨迹；"
-                "如需继续，请缩小任务范围后重试。"
+            "executor_result": _budget_message(
+                total_tokens=tokens_used,
+                step_count=0,
+                tool_calls=len(prior_trace),
             ),
             "budget_exceeded": True,
-            "executor_trace": _trace_to_text(state.get("executor_trace_list") or []),
-            "executor_trace_list": state.get("executor_trace_list") or [],
+            "retry_count": retry_now,
+            "executor_trace": _trace_to_text(prior_trace),
+            "executor_trace_list": prior_trace,
             "executor_messages": [],
             "step_count": state.get("step_count", 0),
         }
 
     plan_steps = _plan_to_text(state.get("plan", ""))
-    prev_verdict = str(state.get("verdict") or "")
-    # 上一轮**没通过**（含"裁定无法解析"）→ 本次是重跑。判据统一走 `_is_retry_round`（修 D1）。
-    is_retry = _is_retry_round(prev_verdict)
     # 自动注入的知识（T4.4 ②）：只在任务语义上拼一次，重跑时也保留
     knowledge = str(state.get("knowledge") or "")
     knowledge_prefix = f"{knowledge}\n\n" if knowledge else ""
@@ -639,6 +679,8 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             messages=messages,
             last_content=last_content,
             pruned=pruned,
+            # 阶段 8 · P1（F3）：被停止的这一轮若是重跑，同样要计一次打回
+            is_retry=is_retry,
         )
 
     if budget_hit:
@@ -653,15 +695,15 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             }
         )
         return {
-            "executor_result": (
-                f"【已终止】本次任务累计消耗 {spent_before + tokens} token，"
-                f"达到上限 {TASK_TOKEN_BUDGET}（CODE_AGENT_TASK_TOKEN_BUDGET），"
-                f"在第 {step_count} 步提前停止。\n"
-                f"已执行的工具调用：{_trace_to_text(trace)}\n"
-                f"终止前拿到的最后一段结论：{last_content[:500] or '（无）'}\n"
-                "如需继续，请缩小任务范围（例如只读需要的文件片段）后重试。"
+            "executor_result": _budget_message(
+                total_tokens=spent_before + tokens,
+                # 口径与停止一致：报**本轮累计**步数（不是本次节点调用的局部计数）
+                step_count=state.get("step_count", 0) + step_count,
+                tool_calls=len(prior_trace) + len(trace),
+                last=last_content,
             ),
             "budget_exceeded": True,
+            "retry_count": retry_now,
             # ⚠️ **跨轮累积**（修 D2）：重跑被预算掐断时，若只返回本轮 trace，
             #    前几轮真正干活的轨迹就被**覆盖**了 —— 实测 E007 因此"表建好了、3 行数据也插了，
             #    但轨迹断言只看见 mysql_create_database 一条" ⇒ 计分假阴性。
@@ -684,7 +726,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         "executor_trace_list": prior_trace + trace,
         "executor_messages": messages,
         "step_count": state.get("step_count", 0) + step_count,
-        "retry_count": state.get("retry_count", 0) + (1 if is_retry else 0),
+        "retry_count": retry_now,
         "token_usage": spent_before + tokens,
         "pruned_messages": state.get("pruned_messages", 0) + pruned,
     }
@@ -1141,6 +1183,14 @@ async def run_multi_agent(
                     "以下是 Executor 已经产出的结果（副作用均已保留）：\n\n"
                     f"{state['executor_result']}"
                 )
+        elif state.get("budget_exceeded"):
+            # 阶段 8 · P1（F3 / 账本 R5 的真实形状）：**被预算掐断的那一轮不该被包装成验收失败**。
+            # 触发路径：第 1 轮跑完 → Verifier 判 FAIL（`verdict` 留在 state 里）→ 打回重跑 →
+            # 第 2 轮撞上预算 ⇒ 若走下面那条 `elif`，最终回复会变成
+            # 「任务执行完成，但验收未通过（已重试 1 次）：验收意见：… 执行结果：【已终止·预算】…」
+            # —— 正是第 2 题现场那句"看不懂的混合文案"。
+            # 语义上也说不通：那一轮**根本没验收**，谈不上"验收未通过"。
+            final_response = state["executor_result"]
         elif verdict_text.strip() and not _verdict_passed(verdict_text):
             # ⚠️ 判据走 `_verdict_passed`（修 D1）：裁定**无法解析**时也算"未通过"，
             #    否则上游返回错误串时会被当成"没失败"，回复里既不提示、也照样算成功。

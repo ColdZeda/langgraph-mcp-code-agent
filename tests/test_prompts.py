@@ -6,6 +6,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.agent.prompts import (
+    CLARIFY_PRINCIPLES,
+    EXECUTOR_PLAN_PROMPT,
     PROMPT_CONTEXT,
     SYSTEM_PROMPT_TEMPLATE,
     build_user_prompt,
@@ -81,3 +83,38 @@ class TestPromptContext:
 
     def test_mysql_port_is_int(self):
         assert isinstance(PROMPT_CONTEXT["mysql_port"], int)
+
+
+class TestClarifyPrinciples:
+    """阶段 8 · P1：候选池 §十五A 的「什么时候该先问一句」三条收敛原则。
+
+    为什么要写进提示词：探索测试第 2 题里用户把模板占位符原样粘进来，模型**一句没问**、
+    直接四处翻文件猜意图，烧了 20.8 万 token（账本 R2）。
+    """
+
+    def test_both_executor_prompts_carry_the_principles(self):
+        """single（SYSTEM_PROMPT_TEMPLATE）与 multi/auto（EXECUTOR_PLAN_PROMPT）都要有。"""
+        for name, template in (
+            ("SYSTEM_PROMPT_TEMPLATE", SYSTEM_PROMPT_TEMPLATE),
+            ("EXECUTOR_PLAN_PROMPT", EXECUTOR_PLAN_PROMPT),
+        ):
+            formatted = template.format(**prompt_context("executor"))
+            for key in ("先问", "连续失败 2 次", "默认建议", "最多问 2 次"):
+                assert key in formatted, f"{name} 少了这条原则：{key}"
+
+    def test_principles_block_has_no_braces(self):
+        """🔴 这段文本会被 `PromptTemplate.format()` 处理 ⇒ **正文里不能有 `{` `}`**。
+
+        否则会被当成占位符：轻则 `KeyError`，重则把用户的词替换没了 ——
+        这是往提示词里加字时最容易踩的坑（要举例请用「」或中括号）。
+        """
+        assert "{" not in CLARIFY_PRINCIPLES
+        assert "}" not in CLARIFY_PRINCIPLES
+        # 拼进模板后仍然能被 format（真跑一遍，而不是只检查字符）
+        for template in (SYSTEM_PROMPT_TEMPLATE, EXECUTOR_PLAN_PROMPT):
+            template.format(**prompt_context("executor"))
+
+    def test_principles_keep_the_cost_judgement(self):
+        """门槛那句话必须在：判据是「问一下的成本」vs「猜错重做的成本」。"""
+        assert "猜错重做的成本" in CLARIFY_PRINCIPLES
+        assert "不要问" in CLARIFY_PRINCIPLES, "既要会问，也要明确'什么时候别问'"
