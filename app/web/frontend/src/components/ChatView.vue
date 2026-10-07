@@ -17,10 +17,9 @@ const send = () => {
   scrollToBottom()
 }
 
-const newSessionAndClear = () => {
-  store.messages = []
-  newSession()
-}
+// ⚠️ 2026-10-07 实测修：这里原来是个 wrapper（先 `store.messages = []` 再调 `newSession()`）
+// ⇒ 守卫在 store 里、清空在守卫**之前** ⇒ 执行中点「＋新会话」会出现「提示有了、界面空了、
+//    旧任务还在跑」（用户实测报的）。现在**直接暴露 store 的函数**：清空由它在守卫通过后自己做。
 
 // ── 阶段 8 · P0：任务状态条 ────────────────────────────────────────
 // 数值全部来自后端（`status` 事件），前端只负责补中间那 1 秒与排版。
@@ -42,7 +41,7 @@ function fmtTokens(n) {
   return v >= 10000 ? `${(v / 10000).toFixed(1)} 万` : String(v)
 }
 
-defineExpose({ newSession: newSessionAndClear })
+defineExpose({ newSession })
 </script>
 
 <template>

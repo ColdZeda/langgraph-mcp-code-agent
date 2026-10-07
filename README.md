@@ -19,7 +19,7 @@
 | **评估**（30 题 / **163 条强断言**） | **single 30/30、multi 30/30**，平均分 **1.0000**；状态 124 / 轨迹 29 / 文本 10 全过 |
 | **成本画像**（multi ÷ single） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；**Verifier 占总 token 25%** |
 | **自动化测试** | **628** 条单元/工具级（约 30 秒跑完）+ **5** 条真集成测试（默认不跑，见「如何验证」） |
-| **覆盖率 / 静态检查** | 78%（`--cov`）/ `ruff check` + `ruff format --check` |
+| **覆盖率 / 静态检查** | 78%~79%（`--cov`，随依赖容器状态波动）/ `ruff check` + `ruff format --check` |
 | **RAG 检索对照**（2×2 消融 + 全量召回对照组） | 文件粒度 top-1 **0.6 → 0.9**，真源 top-1 0.4 → 0.6，延迟 12.8ms → 86.7ms |
 
 ![真实任务：Planner 计划 + Executor 结果](docs/evidence/阶段7_web走查/当前界面/Planner计划与Executor结果.png)
@@ -709,16 +709,29 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | **701**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
+| 测试数 | **723**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | **测试语料** 35（7 文件 × 5 条）→ `evals/fixtures/knowledge/`；产品库默认空 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数，**2026-09-24 语料修订后**） | top-1 命中正解文件 **0.40 → 0.60**（对照 0.70）；⚠️ 旧语料基线是 **0.20** | `uv run python evals/rag_ablation.py --reps 10` |
 | 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
 | **评估结果（正式两轮，2026-09-25）** | **single 30/30**、**multi 30/30**（平均分均 **1.0000**；两轮 163 条断言全过、8 维度全 1.00） | 结果文件：`docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-limit200k.json`） |
 | 多 Agent 成本画像（同上两轮） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；其中 **Verifier 中位 10,988 token/题 = 25%**；**打回 0 次** | 同上两份 JSON 的 `totals` / `node_timings` |
-| 测试覆盖率 | **78%**（语句 2477，未覆盖 542；随依赖容器是否在跑、本机知识库里有没有内容而波动） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **数字随环境波动**（那几条"要真环境"的测试走的分支不同）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头正是这些要连真库 / 起子进程 / 要真人输入的模块 → 集成测试挂在阶段 7 做 |
+| 测试覆盖率 | **78%~79%**（语句 2557，未覆盖 532~568；随依赖容器是否在跑、本机知识库里有没有内容而波动） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **数字随环境波动**（那几条"要真环境"的测试走的分支不同）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头正是这些要连真库 / 起子进程 / 要真人输入的模块 → 集成测试挂在阶段 7 做 |
 | RAG 检索指标（**阶段 6 重测**；阶段 4 自测的临时数是 13.2ms → 81ms） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
 | 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 73dd4e6^:docs/evidence/<文件名>` |
+
+## 文档地图（哪份文档管什么）
+
+| 文档 | 是什么 | 性质 |
+|---|---|---|
+| `README.md` | 怎么装、怎么跑、能力总览、评估结果、已知边界 | **对外入口**（本文件） |
+| `AGENTS.md` | 约定 / 常用命令 / 已知坑 / **当前状态** | AI 操作手册（活文档） |
+| `docs/architecture.md` | 设计取舍与代价（6 条 ADR） | 活文档 |
+| `docs/records/` | 过程账：某个坑**怎么修的、证据在哪** | 活文档（可编辑） |
+| `docs/evidence/` | 评估**原始结果** + 报告 + 截图 | **只追加、不改写** |
+| `docs/archive/` | 历史冻结快照（改造前的交接 / 历史版本） | **不再更新** |
+
+> 想知道「当时怎么想的、哪条结论怎么来的」→ 看 `docs/records/`；想知道「现在该怎么做」→ 看 `AGENTS.md`。
 
 ## 已知问题与后续规划
 
@@ -727,6 +740,8 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 - **本机单用户**：没有多用户 / 账号 / 部署形态。它会执行 shell、读写主机文件，所以定位就是"跑在你自己机器上"。
 - **可观测性有限**：只有**节点级进度事件**（WebSocket 推送）与**权限审计日志**（`runtime/permissions.log`），
   没有指标（metrics）/ 链路追踪（tracing）。
+- ⚠️ **多标签页可以各跑一个任务**（后端是「每条连接一个任务」）⇒ **请勿让两个任务同时改同一个工作区**，
+  否则会互相覆盖。同一个标签页内是**串行**的：任务执行中切会话 / 新建会话会被拦住并提示（要先停止任务）。
 
 **已知技术债**
 
