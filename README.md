@@ -1,8 +1,13 @@
 # Code Agent
 
+> ⚠️ **项目仍在开发 / 测试中：请勿用于真实生产环境，也不要直接跑在你不想被改动的宿主机上。**
+> 它**真的会执行 shell 命令、读写本机文件**（这是它的能力，不是漏洞 —— 定位就是"本机单用户的助手"）。
+> 建议先在**可丢弃的环境**（虚拟机 / WSL / 有快照的机器）里试；默认权限档是「需确认」，
+> 在不熟悉的目录下**不要**切到「放开」。
+
 [![CI](https://github.com/ColdZeda/langgraph-mcp-code-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ColdZeda/langgraph-mcp-code-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.13-blue)
-![Tests](https://img.shields.io/badge/tests-628%20%2B%205%20integration-brightgreen)
+![Tests](https://img.shields.io/badge/tests-723%20%2B%205%20integration-brightgreen)
 ![Eval](https://img.shields.io/badge/eval-30%2F30%20%C2%B7%20163%20assertions-success)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
