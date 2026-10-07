@@ -622,3 +622,43 @@ def test_edges_end_the_graph_when_cancelled():
     assert ma.after_executor({"budget_exceeded": True, "route": "complex"}) == "end"
     assert ma.after_executor({"route": "complex"}) == "verifier"
     assert ma.decide_after_verify({"cancelled": True, "retry_count": 0, "verdict": ""}) == "end"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 六、真机验收撞出来的两条（F1 的协议侧在 test_web_stop.py，这里是 F2）
+# ═══════════════════════════════════════════════════════════════════
+
+
+async def test_step_count_is_reset_per_turn(tmp_path, thread_id):
+    """🔴 **F2 回归**：`step_count` 必须**每轮复位**，不能跨轮累积。
+
+    现场：同一个会话里三个任务的卡片依次写着 `步数 35 → 40 → 51`，而卡片上写的是"步数"、
+    旁边就是"本轮实际使用模型" ⇒ 用户只会读成"本轮"。根因是 `run_multi_agent` 每轮复位的
+    是 `retry_count` / `token_usage` / `cancelled`，**唯独漏了 `step_count`**。
+    （一轮**之内**的打回重跑仍然要累加 —— 那是这个数字的本意，见另一条用例。）
+    """
+    token = cx.CancelToken()
+    agent = _StepwiseExecutor(token, _writing_tool(tmp_path), steps=2, cancel_after=None)
+
+    first = await _run(tmp_path, token, agent, thread=thread_id)
+    second = await _run(tmp_path, token, agent, thread=thread_id)
+
+    assert first["step_count"] == second["step_count"] == 4, (
+        f"两轮的步数应当各自独立（每轮 4 块），实际 {first['step_count']} → {second['step_count']}"
+    )
+
+
+async def test_cancel_text_and_card_report_the_same_step_number(tmp_path, thread_id):
+    """停止文案里的步数要与结果卡片上的 `stepCount` **同口径**（F2 的另一半）。
+
+    实测过的不一致：正文写「任务在「第 11 步之后」停下」，同一张卡片右下角写「步数 51」。
+    """
+    token = cx.CancelToken()
+    agent = _StepwiseExecutor(token, _writing_tool(tmp_path), steps=3, cancel_after=1)
+
+    result = await _run(tmp_path, token, agent, thread=thread_id)
+
+    total = result["step_count"]
+    assert f"第 {total} 步之后" in result["final_response"], (
+        f"文案里的步数要与卡片一致（{total}）：{result['final_response'][:120]}"
+    )

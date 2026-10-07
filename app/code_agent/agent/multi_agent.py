@@ -311,11 +311,15 @@ def _cancel_stop_result(
     trace = trace or []
     prior_trace = list(state.get("executor_trace_list") or [])
     total = state.get("token_usage", 0) + tokens_spent
+    # 阶段 8 · P0（真机验收 F2）：文案与卡片必须报**同一个步数**。
+    # 本地 `step_count` 只是"本次节点调用"的块数；一轮内被打回重跑过的话，
+    # 卡片的 `stepCount`（= 本轮累计）会更大 ⇒ 同一张卡片上出现"第 11 步"与"步数 51"两个数字。
+    total_steps = state.get("step_count", 0) + step_count
     return {
         "executor_result": _cancel_message(
             token,
             stage=stage,
-            step_count=step_count,
+            step_count=total_steps,
             total_tokens=total,
             tool_calls=len(prior_trace) + len(trace),
             last=last_content,
@@ -327,7 +331,7 @@ def _cancel_stop_result(
         "executor_trace": _trace_to_text(prior_trace + trace),
         "executor_trace_list": prior_trace + trace,
         "executor_messages": messages or [],
-        "step_count": state.get("step_count", 0) + step_count,
+        "step_count": total_steps,
         "token_usage": total,
         "pruned_messages": state.get("pruned_messages", 0) + pruned,
     }
@@ -1091,6 +1095,12 @@ async def run_multi_agent(
                     "cancelled": False,
                     "cancel_reason": "",
                     "cancel_stage": "",
+                    # ⚠️ 阶段 8 · P0（真机验收 F2）：`step_count` **必须每轮复位**。
+                    #    它是个只增不减的通道：不复位的话，同一个会话里第 N 个任务的卡片会把
+                    #    前 N-1 个任务的步数一起算进去（实测 35 → 40 → 51），
+                    #    而卡片上写的是"步数"、旁边就是"本轮实际使用模型" —— 用户只会读成"本轮"。
+                    #    （一轮**之内**的打回重跑仍然累加，那是这个数字的本意。）
+                    "step_count": 0,
                 },
                 config=config,
             )

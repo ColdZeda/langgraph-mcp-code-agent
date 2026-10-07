@@ -11,17 +11,18 @@
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口；**P0 已落地**（停止 + 墙钟 + 停止按钮 + 任务状态条） |
+| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口；**P0 已落地并做完真机验收**（停止 + 墙钟 + 停止按钮 + 任务状态条；真机撞出的 F1/F2 也已修） |
 | 最近提交 | `git log --oneline -1`（别在文档里写死 hash —— 提交一次就过期）|
 | 远端 | `origin` = Gitee（镜像）· `github` = GitHub（主仓）；**tag `v1.0.0` 两边都有** |
 | CI | **passing**（`.github/workflows/ci.yml`）；跑 `ruff check` → `ruff format --check` → `pytest tests/ -v`，**不需要 `.env`** |
-| 测试 | **655** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **77%** |
+| 测试 | **657** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **77%** |
 | 评估 | **single 30/30 · multi 30/30**（平均分 1.0000，163 条断言）→ 报告 `docs/evidence/评估报告.md` |
 | 仓库可见性 | **public**（2026-10-03 定：作为对招聘方展示的入口） |
 
 **待办（当前真正未做的）**：
 
-1. **阶段 8 修复（进行中）** —— **P0 ✅ 已落地**（协作式停止 + 墙钟 15 分钟 + 界面停止按钮 + 任务状态条）·
+1. **阶段 8 修复（进行中）** —— **P0 ✅ 已落地 + 真机验收通过**（协作式停止 + 墙钟 15 分钟 + 界面停止按钮 + 任务状态条；
+   现场撞出的 **F1**「弹框遮罩挡住停止按钮」与 **F2**「卡片步数跨轮累积」也都已修，见修复账「真机验收」一节）·
    **P1** 轨迹文案 / 因预算或取消终止**不调 Verifier**（图侧已在 P0 顺手统一，剩下文案与那条测试）/ §十五A 提示词三条收敛原则 ·
    **P1.5** 入口"模板未渲染"检测 · **P2** token 预算放宽 + 按模型窗口自动算阈值。
    账本（现象→证据→根因→待修）：`docs/records/2026-10-07_探索测试第1-2轮与问题账.md`；
@@ -101,7 +102,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 | 指定权限模式 | `uv run python main.py --permission readonly`（readonly / confirm（默认）/ open） |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**655 个**） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**657 个**） |
 | **真集成测试**（要真 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑） | `uv run python -m pytest -m integration -v`（5 条） |
 | **装 / 查 RAG 的本地模型**（不在仓库里，各 ≈87MB） | `uv run python scripts/fetch_models.py`（`--dry-run` 只看状态；`--source modelscope` 换通道） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v4-single` |
@@ -181,7 +182,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 
 | 数字 | 值 | 怎么核 |
 |---|---|---|
-| 测试数 | **655**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
+| 测试数 | **657**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
 | 覆盖率 | **77%**（会随环境波动：依赖容器在跑/全停时略不同） | 同上（`addopts` 自带 `--cov`，看 `TOTAL` 行） |
 | 评估题数 / 断言数 | 30 题 / 163 条 | `uv run python evals/run_e2e.py --list` |
 | MCP 工具数 | 25（+ 7 文件工具 = **32**） | `git grep -c "@mcp.tool" -- app/code_agent` |
@@ -228,6 +229,12 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
   前端 `store.status` + 本地 1 秒补时（**弹框期间冻结**，与后端口径一致）。
 - **前端「停止」按钮**（`store.stopTask()` → WS `{"type":"stop"}` → `stopping` 回执 → `result.cancelled`）：
   结果卡片显示 `⏹ 已停止 · 你点了「停止」`，**不是**"验收未通过"。
+- 🔴 **权限弹框是 `position: fixed; inset: 0` 的全屏遮罩** ⇒ 它**盖住输入区的停止按钮**（实测 `elementFromPoint` 命中 `div.overlay`）。
+  所以弹框里**必须**有「⏹ 停止任务」（已加，`PermissionDialog.vue`）：点了 `stopTask()` + 清本地弹框，**不发** `permission_response`（那个 Future 由后端结算）。
+  ⚠️ **停止 ≠ 拒绝**：拒绝只否掉这一次调用，任务会换个办法接着干；停止是整轮停下。
+- ⚠️ **`step_count` 每轮必须复位**（`run_multi_agent` 的输入里带 `"step_count": 0`）：它是个只增不减的通道，
+  不复位的话同一会话里第 N 张卡片会把前 N-1 轮的步数一起算进去（实测 35 → 40 → 51）—— 而卡片上写的就是"步数"。
+  **一轮之内的打回重跑仍然累加**（那是它本来的意思）；停止文案与卡片必须报**同口径**的步数。
 
 ### Web 端（会话管理与模型设置）
 
@@ -296,7 +303,7 @@ evals/                       评估体系：tasks(30 题) · verifiers(判定器
                              · preflight · report · rag_bench · rag_ablation · merge_runs
                              · reset_eval_threads · env(语料隔离) + fixtures/knowledge/(35 条夹具)
 scripts/                     probe_mcp_server.py · fetch_models.py · mysql-init/ · run/（启停脚本）
-tests/                       655 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
+tests/                       657 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
 docs/                        architecture.md（ADR）· archive/（冻结快照）
                              · evidence/（评估原始结果 + 报告 + 截图）· records/（过程账，可编辑）
 ```

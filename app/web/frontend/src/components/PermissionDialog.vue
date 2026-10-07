@@ -9,9 +9,16 @@
  *  1. **默认不勾**「本会话内对该工具总是允许」—— 不改变"每次都要确认"的安全默认；
  *  2. 勾选后**只对当前会话 + 当前权限模式**有效（后端按 `(模式, 工具名)` 记，切档自动失效）；
  *  3. **倒计时到点自己收起**：后端到点会按 B2 自动拒绝，留着框只会让用户点了没人接。
+ *
+ * 阶段 8 · P0（真机验收 F1）：**弹框必须也能停任务**。
+ * 这个遮罩是 `position: fixed; inset: 0` —— 它把输入区的「⏹ 停止」按钮**整个盖住**，
+ * 于是"卡在弹框上时点停止"这条路在界面上根本走不到（实测 `elementFromPoint` 命中的是 `div.overlay`）。
+ * 后端那条路早就通了（`stop` → 收掉待确认的 future → `permissions.enforce` 先判停止再判允许/拒绝），
+ * 所以这里补一个同样发 `stop` 的按钮：**点了就停整个任务**，不用先回答这个弹框。
+ * ⚠️ 它**不同于「拒绝」**：拒绝只是否掉这一次工具调用，任务还会换个办法接着干。
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { respondPermission, store } from '../store'
+import { respondPermission, stopTask, store } from '../store'
 
 const alwaysAllow = ref(false) // ← 默认不勾
 const remaining = ref(store.confirmTimeoutSec || 0)
@@ -43,6 +50,17 @@ function decide(allow) {
     alwaysAllow: allow && alwaysAllow.value,
   })
 }
+
+/** 阶段 8 · P0（F1）：**停止整个任务**（不是"拒绝这一次调用"）。
+ *
+ *  后端收到 `stop` 会把待确认的弹框按"拒绝"收掉、并让任务在下一个检查点停下；
+ *  所以这里只需把本地弹框与队列清掉（不然会挂着一个永远等不到回应的框）。
+ *  ⚠️ **不发** `permission_response` —— 那个 Future 由后端自己结算，重复回答会变成"已失效的答复"。 */
+function stopEverything() {
+  stopTask()
+  store.permissionRequest = null
+  store.permissionQueue = []
+}
 </script>
 
 <template>
@@ -70,9 +88,20 @@ function decide(allow) {
       </label>
 
       <div class="actions">
+        <!-- 阶段 8 · P0（F1）：整页遮罩会盖住输入区的「停止」，所以停止必须在这里也能点到 -->
+        <button
+          class="btn stop"
+          title="停止整个任务（已产出的文件/数据一律保留）；它不同于「拒绝」——拒绝只是否掉这一次调用"
+          @click="stopEverything()"
+        >
+          ⏹ 停止任务
+        </button>
         <button class="btn deny" @click="decide(false)">拒绝</button>
         <button class="btn allow" @click="decide(true)">允许执行</button>
       </div>
+      <p class="hint">
+        「停止任务」= 让整个任务在下一步边界停下（已保留的产物不回滚）；「拒绝」只否掉这一次调用，任务会继续。
+      </p>
     </div>
   </div>
 </template>
@@ -110,4 +139,8 @@ function decide(allow) {
 .btn.deny:hover { background: #334155; }
 .btn.allow { background: #2563eb; color: #fff; }
 .btn.allow:hover { background: #1d4ed8; }
+/* 阶段 8 · P0（F1）：停止按钮**靠左**放，与「拒绝 / 允许执行」拉开距离，避免误点 */
+.btn.stop { margin-right: auto; background: #b91c1c; color: #fff; }
+.btn.stop:hover { background: #dc2626; }
+.hint { margin-top: 10px; font-size: 11.5px; line-height: 1.6; color: #64748b; }
 </style>
