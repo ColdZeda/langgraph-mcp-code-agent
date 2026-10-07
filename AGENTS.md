@@ -11,11 +11,11 @@
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口；**P0 已落地并做完真机验收**（停止 + 墙钟 + 停止按钮 + 任务状态条；真机撞出的 F1/F2 也已修）· **P1 已落地**（终止文案统一 + §十五A 三条提问原则 + 顺手修的 F3）· **P1.5 已落地**（入口「模板没替换」检测，含 30 道评估题的护栏） |
+| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口；**P0 已落地并做完真机验收**（停止 + 墙钟 + 停止按钮 + 任务状态条；真机撞出的 F1/F2 也已修）· **P1 已落地**（终止文案统一 + §十五A 三条提问原则 + 顺手修的 F3）· **P1.5 已落地**（入口「模板没替换」检测，含 30 道评估题的护栏）· **P2 已落地**（三项阈值按模型窗口自动算 + 任务预算放宽到 50 万~200 万） |
 | 最近提交 | `git log --oneline -1`（别在文档里写死 hash —— 提交一次就过期）|
 | 远端 | `origin` = Gitee（镜像）· `github` = GitHub（主仓）；**tag `v1.0.0` 两边都有** |
 | CI | **passing**（`.github/workflows/ci.yml`）；跑 `ruff check` → `ruff format --check` → `pytest tests/ -v`，**不需要 `.env`** |
-| 测试 | **690** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **78%** |
+| 测试 | **700** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **78%** |
 | 评估 | **single 30/30 · multi 30/30**（平均分 1.0000，163 条断言）→ 报告 `docs/evidence/评估报告.md` |
 | 仓库可见性 | **public**（2026-10-03 定：作为对招聘方展示的入口） |
 
@@ -25,7 +25,8 @@
    现场撞出的 **F1**「弹框遮罩挡住停止按钮」与 **F2**「卡片步数跨轮累积」也都已修，见修复账「真机验收」一节）·
    **P1 ✅ 已落地**（预算终止的固定中文说明 + R6 的"见上方轨迹"已删 + §十五A 三条提问原则；顺手修了 F3「终止那轮的重跑不计次」与"重跑撞预算被包装成验收失败"）·
    **P1.5 ✅ 已落地**（`utils/placeholder_guard.py`：命中就只回问、不进图；工具层拦路径参数）·
-   **P2** token 预算放宽 + 按模型窗口自动算阈值。
+   **P2 ✅ 已落地**（`config.token_budgets()`：压实 15% / 单次输入 35% / 任务 max(50 万, 4×窗口)；模型可在 `models.json` 或 Web 面板声明 `context_window`）。
+   ⚠️ **本机 `.env` 里显式写着三项阈值 ⇒ env 优先、仍然是老值**：要落地得删掉那三行（见修复账 §八）。
    账本（现象→证据→根因→待修）：`docs/records/2026-10-07_探索测试第1-2轮与问题账.md`；
    修复账（做了什么→证据）：`docs/records/2026-10-07_阶段8修复账.md`。
    **计划书**（要做什么 / 验收标准 / 执行顺序）在**仓库外**的项目档案目录（开发者本地维护）里的 `阶段8_探索测试与稳健性修复.md`。
@@ -103,7 +104,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 | 指定权限模式 | `uv run python main.py --permission readonly`（readonly / confirm（默认）/ open） |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**690 个**） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**700 个**） |
 | **真集成测试**（要真 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑） | `uv run python -m pytest -m integration -v`（5 条） |
 | **装 / 查 RAG 的本地模型**（不在仓库里，各 ≈87MB） | `uv run python scripts/fetch_models.py`（`--dry-run` 只看状态；`--source modelscope` 换通道） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v4-single` |
@@ -145,12 +146,15 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 ### 上下文工程与分层记忆（阶段 4，都是实测结论）
 
 - **工具结果外置**：≥6000 字符或 150 行 ⇒ 落盘 `runtime/tool_results/`，上下文只留预览 + 路径。⚠️ **`read_file` / `read_file_range` 在豁免名单，不许外置** —— 实测同一道"读全文并总结"：外置后模型看不见内容、改用分段读绕过，**token 从 17,361 涨到 127,071（7.3 倍）**。读 `tool_results/` 里的文件**不再外置**（同内容同 hash ⇒ 死循环）。
-- **对话压实**：历史超 `COMPACT_THRESHOLD=6000` token ⇒ 最老一段压成四段式摘要；**摘要失败就原样保留**（省 token 不能把历史弄丢）。
-  ⚠️ **三项都可用 `.env` 覆盖**（不设就走 `config.py` 的默认值 6000 / 30000 / 200000）：
-  `CODE_AGENT_COMPACT_THRESHOLD`（压实，长会话可加大到 12000~32000）· `CODE_AGENT_NODE_TOKEN_BUDGET`
-  （单次调用输入上限，**不能超过模型窗口**）· `CODE_AGENT_TASK_TOKEN_BUDGET`（单任务成本保险丝）。
-  **改完必须重启进程**（`.env` 只在 import 时读一次）。
-- **token 预算**：`NODE_TOKEN_BUDGET=30000` 剪枝、`TASK_TOKEN_BUDGET=200000` 硬终止。⚠️ 任务级必须在 **executor 的 ReAct 循环内部逐步判** —— 只在节点入口判，一次"读大文件 + 反复重读"能在**单个节点调用**里烧掉十几万 token。
+- **对话压实**：历史超阈值 ⇒ 最老一段压成四段式摘要；**摘要失败就原样保留**（省 token 不能把历史弄丢）。
+  ⚠️ **阶段 8 · P2 起三项阈值是运行期按「当前模型窗口」算的**（`config.token_budgets()`）：
+  压实 **15%** · 单次调用输入 **35%** · 任务累计 **max(50 万, 4×窗口)**（各带上下限封顶）。
+  128k 窗口 → `19200 / 44800 / 512000`；1M 窗口 → `64000 / 200000 / 2000000`。
+  **解析顺序（高→低）**：`.env` 显式设的三个老名字 > 该角色模型的 `context_window`
+  （`config/models.json`，或 Web 面板「我的模型」里填）> `CODE_AGENT_CONTEXT_WINDOW`（全局覆盖）> 128000。
+  ⚠️ 换模型**不必重启**（额度每次任务重新解析）；但**改了 `.env` 必须重启**（那是 import 期读的）。
+  ⚠️ 阈值是**估算值** ⇒ 一律留足余量；`NODE` 不要设得接近窗口。
+- **token 预算**：额度见上一条（按窗口算，env 可覆盖）。⚠️ 任务级必须在 **executor 的 ReAct 循环内部逐步判** —— 只在节点入口判，一次"读大文件 + 反复重读"能在**单个节点调用**里烧掉十几万 token。
 - **只读缓存**默认**不收** `mysql_execute_query`（只读但结果会变）；任何写操作后**清空本会话缓存**；Redis 挂了静默降级。
 - 🔴 **三条入口都必须接工具包装层**（权限 → 外置 → 缓存）：CLI（`run_agent`）/ evals（`run_single_task`）/ **Web（`AgentRuntime.load()`）**。漏一条，那条入口就没有外置、没有缓存、也没有权限层。
 - **自动注入 / 自动沉淀走进程内** `rag/store.py`（**不走 MCP**：每次调用都要新起子进程 import chromadb + torch，毫秒级变秒级）。评估里 `auto_inject=False` + `auto_deposit=False`，**且每题开跑前复位知识库**（模型自己会调 `save_knowledge` 写进去，这条路关不掉）。⚠️ 复位**不能调 `ensure_seeded()`**（进程级 `_seeded` 标志 ⇒ 第二次直接跳过 = 永远不清）。
@@ -183,7 +187,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 
 | 数字 | 值 | 怎么核 |
 |---|---|---|
-| 测试数 | **690**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
+| 测试数 | **700**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
 | 覆盖率 | **78%**（会随环境波动：依赖容器在跑/全停时略不同） | 同上（`addopts` 自带 `--cov`，看 `TOTAL` 行） |
 | 评估题数 / 断言数 | 30 题 / 163 条 | `uv run python evals/run_e2e.py --list` |
 | MCP 工具数 | 25（+ 7 文件工具 = **32**） | `git grep -c "@mcp.tool" -- app/code_agent` |
@@ -334,7 +338,7 @@ evals/                       评估体系：tasks(30 题) · verifiers(判定器
                              · preflight · report · rag_bench · rag_ablation · merge_runs
                              · reset_eval_threads · env(语料隔离) + fixtures/knowledge/(35 条夹具)
 scripts/                     probe_mcp_server.py · fetch_models.py · mysql-init/ · run/（启停脚本）
-tests/                       690 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
+tests/                       700 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
 docs/                        architecture.md（ADR）· archive/（冻结快照）
                              · evidence/（评估原始结果 + 报告 + 截图）· records/（过程账，可编辑）
 ```

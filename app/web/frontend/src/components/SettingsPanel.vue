@@ -55,9 +55,15 @@ const testingCurrent = ref(false)
 const roleTest = ref(null)
 const ROLE_LABEL = Object.fromEntries(ROLES.map((r) => [r.key, r.label]))
 
+/** 编辑某个模型时，把**当前**声明的窗口显示在占位符里（让人知道留空会保留什么）。 */
+const editingWindow = computed(() => {
+  const m = customModels.value.find((x) => x.id === form.value.id)
+  return m && m.context_window ? String(m.context_window) : ''
+})
+
 // 「我的模型」编辑表单
 const showForm = ref(false)
-const form = ref({ id: '', label: '', model: '', base_url: '', api_key: '' })
+const form = ref({ id: '', label: '', model: '', base_url: '', api_key: '', context_window: '' })
 const formError = ref('')
 const formTesting = ref(false)
 const formTestResult = ref(null)
@@ -122,7 +128,7 @@ function rolesText(group) {
 }
 
 function startAdd() {
-  form.value = { id: '', label: '', model: '', base_url: '', api_key: '' }
+  form.value = { id: '', label: '', model: '', base_url: '', api_key: '', context_window: '' }
   formError.value = ''
   formTestResult.value = null
   showForm.value = true
@@ -135,6 +141,8 @@ function startEdit(m) {
     model: m.model || '',
     base_url: m.base_url || '',
     api_key: '',
+    // 阶段 8 · P2：留空 = 不改动已保存的值（与 api_key 同一套语义）
+    context_window: m.context_window ? String(m.context_window) : '',
   }
   formError.value = ''
   formTestResult.value = null
@@ -155,6 +163,10 @@ async function submitForm() {
       model: form.value.model,
       base_url: form.value.base_url,
       api_key: form.value.api_key,
+      // 只传数字；空 = 后端保持原值（不声明 ⇒ 阈值按默认 128k 算）
+      context_window: form.value.context_window
+        ? Number(form.value.context_window)
+        : undefined,
     }
     const res = await addCustomModel(payload)
     if (!res.ok) {
@@ -283,6 +295,22 @@ async function remove(id) {
         <input v-model="form.base_url" placeholder="如 https://open.bigmodel.cn/api/paas/v4" />
         <label>API Key{{ form.id ? '（留空则不改动已保存的）' : '' }}</label>
         <input v-model="form.api_key" type="password" placeholder="只保存在你自己的电脑上" />
+        <!-- 阶段 8 · P2：窗口决定三项 token 阈值（压实 / 单次输入 / 任务累计） -->
+        <label>上下文窗口（tokens，选填）</label>
+        <input
+          v-model="form.context_window"
+          inputmode="numeric"
+          :placeholder="
+            form.id
+              ? `留空 = 不改动（当前 ${editingWindow || '未声明'}）`
+              : '如 128000；不填就按 128000 算'
+          "
+        />
+        <p class="hint">
+          填了它，<b>压实阈值 / 单次输入上限 / 任务预算</b>会按窗口自动算
+          （15% / 35% / max(50 万, 4×窗口)）；不填按 128000 算。
+          <code>.env</code> 里显式设了值的仍以 <code>.env</code> 为准。
+        </p>
         <div v-if="formTestResult" class="result" :class="formTestResult.ok ? 'ok' : 'bad'">
           {{
             formTestResult.ok
@@ -371,6 +399,7 @@ async function remove(id) {
   border-radius: 10px; background: #0b1220; }
 .form-title { font-size: 13px; font-weight: 600; color: #e2e8f0; margin-bottom: 2px; }
 .form label { font-size: 12px; color: #94a3b8; }
+.form .hint { font-size: 11.5px; line-height: 1.6; color: #64748b; margin: -2px 0 6px; }
 .form input { padding: 7px 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a;
   color: #e2e8f0; font-size: 13px; font-family: inherit; }
 .form input:focus { outline: none; border-color: #3b82f6; }

@@ -164,6 +164,8 @@ def test_resolve_model_marks_custom_and_reports_real_name(tmp_path):
         "label": "GLM-5.3",
         "model": "glm-5.3",
         "custom": True,
+        # 阶段 8 · P2：没声明窗口 ⇒ None（由 config 回落默认 128k）
+        "context_window": None,
     }
     assert reg.resolve_model("planner")["label"] == "builtin-a", "没覆盖的角色用注册表默认"
 

@@ -21,6 +21,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -241,6 +242,15 @@ def _custom_models_list(settings: dict) -> list[dict]:
     return out
 
 
+def _clean_context_window(value: Any) -> int | None:
+    """阶段 8 · P2：把前端传来的"上下文窗口"规整成正整数（空/脏值 = 不声明）。"""
+    try:
+        window = int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return None
+    return window if window > 0 else None
+
+
 def _make_custom_id(model: str, existing: list[dict]) -> str:
     """给自定义模型生成一个稳定 id（角色下拉框里存的就是它）。"""
     slug = "".join(ch if ch.isalnum() else "-" for ch in model.lower()).strip("-") or "model"
@@ -274,6 +284,8 @@ def masked_settings(settings: dict) -> dict:
                 "base_url": str(item.get("base_url") or ""),
                 "api_key_set": c_set,
                 "api_key_tail": c_tail,
+                # 阶段 8 · P2：模型声明的上下文窗口（三项阈值按它自动算；空 = 按默认 128k）
+                "context_window": _clean_context_window(item.get("context_window")),
             }
         )
     return {
@@ -395,6 +407,8 @@ async def list_models():
                 "custom": bool(spec.get("custom")),
                 "api_key_set": key_set,
                 "api_key_tail": key_tail,
+                # 阶段 8 · P2：模型声明的上下文窗口（前端在模型设置里能看到/改到）
+                "context_window": _clean_context_window(spec.get("context_window")),
             }
         )
     return {
@@ -477,6 +491,13 @@ async def upsert_custom_model(body: dict):
         item["api_key"] = api_key
     elif prev and prev.get("api_key"):
         item["api_key"] = prev["api_key"]  # 留空 = 保持原密钥
+    # 阶段 8 · P2：上下文窗口（不填 = 不声明 ⇒ 三项阈值按默认 128k 算）。
+    # ⚠️ 语义与 api_key 一样：**留空保持原值**（前端拿不到原值来重填，不能因为没传就抹掉）。
+    window = _clean_context_window(body.get("context_window"))
+    if window is None:
+        window = _clean_context_window((prev or {}).get("context_window"))
+    if window is not None:
+        item["context_window"] = window
 
     settings["custom_models"] = [it for it in items if str(it.get("id")) != mid] + [item]
 

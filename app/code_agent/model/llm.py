@@ -206,6 +206,11 @@ class LLMRegistry:
                 "provider": "openai-compatible",
                 "custom": True,
             }
+            # 阶段 8 · P2：模型可自带**上下文窗口**声明 —— 三项阈值按它自动算。
+            # 不填也行（回落 128000）；填了就能让"32k 的小模型不会被 30000 的额度撞窗口"。
+            window = item.get("context_window")
+            if isinstance(window, int | float) and window > 0:
+                cleaned[cid]["context_window"] = int(window)
         self._custom_models = cleaned
         self._cache.clear()
 
@@ -232,8 +237,31 @@ class LLMRegistry:
                 "label": spec.get("label") or key,
                 "model": spec.get("model") or key,
                 "custom": bool(spec.get("custom")),
+                # 阶段 8 · P2：模型声明的上下文窗口（没声明就是 None ⇒ 由 config 回落默认值）
+                "context_window": self.context_window(role),
             }
-        return {"key": "", "label": "系统默认", "model": key, "custom": False}
+        return {
+            "key": "",
+            "label": "系统默认",
+            "model": key,
+            "custom": False,
+            "context_window": None,
+        }
+
+    def context_window(self, role: str = DEFAULT_ROLE) -> int | None:
+        """该角色当前模型声明的**上下文窗口**（没人声明就 None）。
+
+        阶段 8 · P2：`config.token_budgets()` 用它算三项阈值 ——
+        `config/models.json` 的模型加一个 `context_window` 字段即可（自定义模型同名字段，
+        来自 Web 面板）。⚠️ 这里**只做取数**：不猜、不按名字推断（"deepseek 都是 128k"这种
+        推断迟早会错，而且错得很隐蔽）。
+        """
+        key = self.model_key(role)
+        spec = self.all_models().get(key) or {}
+        value = spec.get("context_window")
+        if isinstance(value, int | float) and value > 0:
+            return int(value)
+        return None
 
     def effective_models(self) -> dict[str, dict]:
         """四个角色各自"当前实际会用"的模型（顶栏常驻显示 + 排查用）。"""

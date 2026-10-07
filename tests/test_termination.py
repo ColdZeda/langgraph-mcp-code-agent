@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.agent import cancel as cx  # noqa: E402
 from app.code_agent.agent import multi_agent as ma  # noqa: E402
+from app.code_agent.config import TokenBudgets  # noqa: E402
 from tests.test_cancel import (  # noqa: E402
     _CountingAgent,
     _FakePlannerLLM,
@@ -36,6 +37,21 @@ from tests.test_cancel import (  # noqa: E402
 # ═══════════════════════════════════════════════════════════════════
 # 夹具（与 tests/test_cancel.py 那套一致：隔离 checkpoint + 假 Planner）
 # ═══════════════════════════════════════════════════════════════════
+
+
+def tiny_task_budget(monkeypatch, limit: int = 50):
+    """把**运行期解析出来的**任务额度压到 50。
+
+    ⚠️ 阶段 8 · P2 起额度是按模型窗口算的 ⇒ 不能再 patch 模块级常量
+    （`ma.TASK_TOKEN_BUDGET` 已经不被读了），要 patch 解析函数。
+    """
+    monkeypatch.setattr(
+        ma,
+        "token_budgets",
+        lambda *a, **k: TokenBudgets(
+            compact=19200, node=44800, task=limit, context_window=128000, source="test"
+        ),
+    )
 
 
 @pytest.fixture
@@ -78,7 +94,7 @@ async def test_budget_termination_skips_the_verifier(
 
     现场（账本 R5）：第 2 题因预算终止，界面却写着"验收未通过"+ 一句英文错误串。
     """
-    monkeypatch.setattr(ma, "TASK_TOKEN_BUDGET", 50)  # 第一步（100 token）就会击穿
+    tiny_task_budget(monkeypatch)  # 第一步（100 token）就会击穿
     token = cx.CancelToken()
     verifier = _CountingAgent()
     agent = _StepwiseExecutor(
@@ -107,16 +123,16 @@ async def test_budget_termination_skips_the_verifier(
 
 async def test_budget_message_is_the_fixed_chinese_one():
     """两种情形（开始前就超 / 跑到一半超）都用同一套固定中文说明。"""
-    before = ma._budget_message(total_tokens=200_000, step_count=0, tool_calls=3)
+    before = ma._budget_message(total_tokens=500_000, step_count=0, tool_calls=3, limit=500_000)
     midway = ma._budget_message(
-        total_tokens=208_509, step_count=11, tool_calls=44, last="最后一段结论"
+        total_tokens=508_509, step_count=11, tool_calls=44, limit=500_000, last="最后一段结论"
     )
 
     assert "任务在「开始执行前」就停了" in before
     assert "任务在「第 11 步之后」停下" in midway
     for text in (before, midway):
         assert "成本保险丝" in text, "要把'预算终止'与'任务做错了'分开说"
-        assert "208509" in text or "200000" in text
+        assert "500000" in text, "要写清本次生效的额度（按窗口算出来的那个）"
         assert ma._SIDE_EFFECTS_KEPT in text
         assert ma._TERMINATION_TAIL in text
     assert "最后一段结论" in midway
@@ -154,7 +170,7 @@ async def test_budget_on_a_retry_round_is_not_wrapped_as_a_failed_verification(
     此时最终回复若走"验收未通过"那条包装分支，就会变成
     「任务执行完成，但验收未通过（已重试 1 次）：验收意见：再改改…执行结果：【已终止·预算】…」。
     """
-    monkeypatch.setattr(ma, "TASK_TOKEN_BUDGET", 50)
+    tiny_task_budget(monkeypatch)
     token = cx.CancelToken()
     verifier = _FailingVerifier()
     agent = _FailThenBudgetExecutor(token, _writing_tool(tmp_path), steps=2, cancel_after=None)
@@ -194,7 +210,7 @@ def test_no_termination_text_points_at_a_missing_trace():
     assert offenders == [], f"终止文案又在指向不存在的东西：{offenders}"
 
     for text in (
-        ma._budget_message(total_tokens=1, step_count=2, tool_calls=3),
+        ma._budget_message(total_tokens=1, step_count=2, tool_calls=3, limit=500_000),
         ma._cancel_message(
             cx.CancelToken(), stage="executor", step_count=2, total_tokens=1, tool_calls=3
         ),
@@ -207,7 +223,7 @@ def test_stop_and_budget_share_the_same_tail():
     """两条终止路径的说明必须**同一套收尾**（P1 ② 的"文案统一"）。"""
     token = cx.CancelToken()
     for text in (
-        ma._budget_message(total_tokens=1, step_count=2, tool_calls=3),
+        ma._budget_message(total_tokens=1, step_count=2, tool_calls=3, limit=500_000),
         ma._cancel_message(token, stage="executor", step_count=2, total_tokens=1, tool_calls=3),
         ma._cancel_message(token, stage="verifier", step_count=2, total_tokens=1, tool_calls=3),
     ):

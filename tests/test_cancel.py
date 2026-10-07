@@ -543,7 +543,10 @@ async def test_status_events_carry_elapsed_steps_and_tokens(tmp_path, thread_id)
     # 步数口径 = executor 的 `astream` 块数（真实图里一步会吐 agent/tools 两块）
     assert last["steps"] == result["step_count"] >= 1
     assert last["wallClockSec"] == 900
-    assert last["usageLimit"] == ma.TASK_TOKEN_BUDGET
+    # 阶段 8 · P2：额度是运行期按窗口算的 ⇒ 与解析函数对齐（不再是 import 期常量）
+    from app.code_agent.config import token_budgets
+
+    assert last["usageLimit"] == token_budgets().task
     assert isinstance(last["elapsedSec"], float)
     assert last["stage"] == "executor"
     assert result["status"]["steps"] == last["steps"]

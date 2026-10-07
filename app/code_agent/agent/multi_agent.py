@@ -50,11 +50,9 @@ from app.code_agent.agent.prompts import (
 )
 from app.code_agent.config import (
     CHECKPOINT_DB,
-    COMPACT_THRESHOLD_TOKENS,
-    NODE_TOKEN_BUDGET,
     RAG_AUTO_DEPOSIT,
     RAG_AUTO_INJECT,
-    TASK_TOKEN_BUDGET,
+    token_budgets,
 )
 from app.code_agent.model.llm import get_llm, invoke_with_fallback, registry, with_fallback
 from app.code_agent.utils.placeholder_guard import (
@@ -242,19 +240,24 @@ _SIDE_EFFECTS_KEPT = (
 )
 
 
-def _budget_message(*, total_tokens: int, step_count: int, tool_calls: int, last: str = "") -> str:
+def _budget_message(
+    *, total_tokens: int, step_count: int, tool_calls: int, limit: int, last: str = ""
+) -> str:
     """预算击穿后的**固定中文说明**（结构与 `_cancel_message` 对齐）。
 
     ⚠️ 与"停止"分开写：**预算终止 ≠ 任务失败**。第 2 题现场是「因预算终止」被拼成
     "验收未通过"+ 一句英文错误串（账本 R5），用户完全看不懂发生了什么 ——
     预算只是**成本保险丝**，产物与已经拿到的结论都还在。
+
+    `limit`：本次实际生效的额度。**必须由调用方传进来**（阶段 8 · P2）：
+    它现在是按"当前模型的窗口"运行期算出来的，不再是一个写死的常量。
     """
     where = (
         f"任务在「第 {step_count} 步之后」停下" if step_count > 0 else "任务在「开始执行前」就停了"
     )
     return (
         f"【已终止·预算】本次任务累计消耗 {total_tokens} token，"
-        f"达到上限 {TASK_TOKEN_BUDGET}（CODE_AGENT_TASK_TOKEN_BUDGET）—— {where}。\n"
+        f"达到上限 {limit}（CODE_AGENT_TASK_TOKEN_BUDGET 或按窗口自动算的值）—— {where}。\n"
         "预算终止是「成本保险丝」：不代表任务做错了，也不是「验收未通过」。\n"
         f"{_SIDE_EFFECTS_KEPT}\n"
         f"已执行 {tool_calls} 次工具调用。\n"
@@ -494,8 +497,10 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     **阶段 4 在这里加了三个上下文工程动作**（都只是"改喂给模型的 prompt"，
     不动 checkpoint 里的完整历史）：
       - T4.4 ②：把任务开始时检索到的相关经验拼在【任务】前面；
-      - T4.3 节点级：进模型前按 NODE_TOKEN_BUDGET 剪枝（先砍最老的工具结果）；
-      - T4.3 任务级：累计 token 已击穿 TASK_TOKEN_BUDGET → **直接终止并报告**。
+      - T4.3 节点级：进模型前按 `NODE_TOKEN_BUDGET` 剪枝（先砍最老的工具结果）；
+      - T4.3 任务级：累计 token 已击穿 `TASK_TOKEN_BUDGET` → **直接终止并报告**。
+    ⚠️ **阶段 8 · P2 起，这两个额度是运行期按模型窗口算的**（`config.token_budgets()`），
+    不再是 import 期常量 —— 换模型后不用重启就生效。
 
     **阶段 8 · P0 在这里加了停止**（协作式取消，三道检查点里的两道）：
       - **节点入口**：进来先看停止开关（"还没开始执行"就该一步都不跑）；
@@ -503,11 +508,13 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
       - 第三道在工具调用层（`utils/tool_wrap.py::_process`），兜住"这一步里的下一次调用"。
     ⚠️ **正在飞的那一次模型调用不会被打断**（协作式的固有代价）：它返回后我们才发现已停止。
     """
+    # 阶段 8 · P2：额度**运行期**解析（按当前 executor 模型的窗口；env 显式设了就用 env）
+    budgets = token_budgets()
     # ── 阶段 8 · P0：① 节点入口的停止检查（与"预算击穿"分开：停是"人/时间"，击穿是"钱"）──
     token = current_token()
     if token is not None:
         token.stage = "executor"
-        token.usage_limit = TASK_TOKEN_BUDGET
+        token.usage_limit = budgets.task
         token.tokens = state.get("token_usage", 0)
     stopped = _stopped()
     if stopped is not None:
@@ -538,9 +545,9 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     retry_now = state.get("retry_count", 0) + (1 if is_retry else 0)
 
     tokens_used = state.get("token_usage", 0)
-    if over_task_budget(tokens_used, TASK_TOKEN_BUDGET):
+    if over_task_budget(tokens_used, budgets.task):
         logger.warning(
-            "任务级 token 预算击穿：已用 %d / 上限 %d，主动终止", tokens_used, TASK_TOKEN_BUDGET
+            "任务级 token 预算击穿：已用 %d / 上限 %d，主动终止", tokens_used, budgets.task
         )
         prior_trace = list(state.get("executor_trace_list") or [])
         return {
@@ -548,6 +555,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
                 total_tokens=tokens_used,
                 step_count=0,
                 tool_calls=len(prior_trace),
+                limit=budgets.task,
             ),
             "budget_exceeded": True,
             "retry_count": retry_now,
@@ -586,13 +594,13 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     # 跨轮记忆来自 state["messages"]（checkpointer 按 thread_id 恢复，add_messages 负责累积）
     prior_turns = list(state.get("messages") or [])
     raw_input = [*prior_turns, HumanMessage(content=user_msg)]
-    input_messages = prune_messages(raw_input, NODE_TOKEN_BUDGET)
+    input_messages = prune_messages(raw_input, budgets.node)
     pruned = len(raw_input) - len(input_messages)
     if pruned:
         logger.info(
             "节点级剪枝：prompt 估算 %d token 超过预算 %d，砍掉 %d 条最老消息",
             estimate_messages_tokens(raw_input),
-            NODE_TOKEN_BUDGET,
+            budgets.node,
             pruned,
         )
     budget_hit = False
@@ -646,13 +654,13 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             # ⚠️ 任务级预算**必须在这里也要判**：单个 executor 节点内部的 ReAct 循环
             #    是不经过图节点边界的，只在节点入口判的话，一次"读大文件 + 反复重读"
             #    就能在**一次**节点调用里烧掉十几万 token 而永远不触发上限（实测 127,071）。
-            if over_task_budget(spent_before + tokens, TASK_TOKEN_BUDGET):
+            if over_task_budget(spent_before + tokens, budgets.task):
                 budget_hit = True
                 logger.warning(
                     "任务级 token 预算击穿：本节点已用 %d（累计 %d / 上限 %d），终止 ReAct 循环",
                     tokens,
                     spent_before + tokens,
-                    TASK_TOKEN_BUDGET,
+                    budgets.task,
                 )
                 break
     except TaskCancelled as exc:
@@ -705,6 +713,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
                 # 口径与停止一致：报**本轮累计**步数（不是本次节点调用的局部计数）
                 step_count=state.get("step_count", 0) + step_count,
                 tool_calls=len(prior_trace) + len(trace),
+                limit=budgets.task,
                 last=last_content,
             ),
             "budget_exceeded": True,
@@ -1152,10 +1161,14 @@ async def run_multi_agent(
         # ── T4.2：先把过长的历史压实，再进图 ──
         # 只在**确实超阈值**时才去构造模型链（否则每轮都白建一次 LLM 对象）
         compacted = False
+        # 阶段 8 · P2：压实阈值也**运行期**解析（按当前模型的窗口）
+        budgets = token_budgets()
         snapshot = await app.aget_state(config)
         prior = list((snapshot.values or {}).get("messages") or [])
-        if prior and estimate_messages_tokens(prior) > COMPACT_THRESHOLD_TOKENS:
-            new_history, compacted = await compact_history(prior, registry.chain("executor"))
+        if prior and estimate_messages_tokens(prior) > budgets.compact:
+            new_history, compacted = await compact_history(
+                prior, registry.chain("executor"), threshold=budgets.compact
+            )
             if compacted:
                 logger.info(
                     "对话压实：%d 条历史（估算 %d token）→ 摘要 + 最近 %d 条",

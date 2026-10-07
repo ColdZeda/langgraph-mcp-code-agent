@@ -186,11 +186,11 @@ def _history(n: int) -> list:
 
 
 async def test_compact_noop_when_under_threshold(monkeypatch):
-    monkeypatch.setattr(ctx, "COMPACT_THRESHOLD_TOKENS", 10**9)
+    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     llm = _FakeChainLLM()
     msgs = _history(5)
 
-    out, changed = await ctx.compact_history(msgs, [llm])
+    out, changed = await ctx.compact_history(msgs, [llm], threshold=10**9)
 
     assert changed is False
     assert out == msgs
@@ -199,12 +199,12 @@ async def test_compact_noop_when_under_threshold(monkeypatch):
 
 async def test_compact_replaces_old_with_four_section_summary(monkeypatch):
     """超阈值 → 最老的一段被换成四段式摘要，最近若干条逐字保留。"""
-    monkeypatch.setattr(ctx, "COMPACT_THRESHOLD_TOKENS", 50)
+    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 2)
     llm = _FakeChainLLM("【目标】做 A\n【约束】用 B\n【已完成】C\n【未决】D")
     msgs = _history(6)
 
-    out, changed = await ctx.compact_history(msgs, [llm])
+    out, changed = await ctx.compact_history(msgs, [llm], threshold=50)
 
     assert changed is True
     assert llm.calls == 1, "每次压实只该花一次模型调用"
@@ -216,7 +216,7 @@ async def test_compact_replaces_old_with_four_section_summary(monkeypatch):
 
 async def test_compact_keeps_first_turn_constraint_in_summary(monkeypatch):
     """验收项：长会话不丢**早期**的目标与约束 —— 摘要的输入里必须含第 1 轮。"""
-    monkeypatch.setattr(ctx, "COMPACT_THRESHOLD_TOKENS", 50)
+    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 2)
 
     seen: dict = {}
@@ -227,7 +227,7 @@ async def test_compact_keeps_first_turn_constraint_in_summary(monkeypatch):
             return AIMessage(content="【目标】x\n【约束】不许改技术栈\n【已完成】y\n【未决】z")
 
     msgs = [HumanMessage(content="【约束】不许改技术栈，也不许引入新前端库")] + _history(6)
-    out, changed = await ctx.compact_history(msgs, [_SpyLLM()])
+    out, changed = await ctx.compact_history(msgs, [_SpyLLM()], threshold=50)
 
     assert changed is True
     assert "不许改技术栈" in seen["prompt"], "第 1 轮的约束必须进入摘要的输入"
@@ -236,34 +236,34 @@ async def test_compact_keeps_first_turn_constraint_in_summary(monkeypatch):
 
 async def test_compact_failure_returns_history_unchanged(monkeypatch):
     """**反向验证**：摘要失败时宁可保留全部历史（多花 token），也不能丢消息。"""
-    monkeypatch.setattr(ctx, "COMPACT_THRESHOLD_TOKENS", 50)
+    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 2)
     msgs = _history(6)
 
-    out, changed = await ctx.compact_history(msgs, [_BoomLLM()])
+    out, changed = await ctx.compact_history(msgs, [_BoomLLM()], threshold=50)
 
     assert changed is False
     assert out == msgs
 
 
 async def test_compact_empty_summary_returns_unchanged(monkeypatch):
-    monkeypatch.setattr(ctx, "COMPACT_THRESHOLD_TOKENS", 50)
+    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 2)
-    out, changed = await ctx.compact_history(_history(6), [_FakeChainLLM("   ")])
+    out, changed = await ctx.compact_history(_history(6), [_FakeChainLLM("   ")], threshold=50)
 
     assert changed is False
 
 
 async def test_compact_noop_when_too_few_messages(monkeypatch):
-    monkeypatch.setattr(ctx, "COMPACT_THRESHOLD_TOKENS", 1)
+    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 8)
     msgs = _history(2)
-    out, changed = await ctx.compact_history(msgs, [_FakeChainLLM()])
+    out, changed = await ctx.compact_history(msgs, [_FakeChainLLM()], threshold=1)
 
     assert changed is False and out == msgs
 
 
 @pytest.mark.parametrize("n", [0, 1])
 async def test_compact_handles_empty_history(monkeypatch, n):
-    out, changed = await ctx.compact_history(_history(n), [_FakeChainLLM()])
+    out, changed = await ctx.compact_history(_history(n), [_FakeChainLLM()], threshold=1)
     assert changed is False

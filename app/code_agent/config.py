@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -115,17 +116,131 @@ EXTERNALIZE_EXEMPT_TOOLS = {
     if t.strip()
 }
 
-# ── T4.2 对话压实 ──
-# 历史消息估算 token 超过它 → 把最老的若干轮压成四段式摘要
-COMPACT_THRESHOLD_TOKENS = int(os.getenv("CODE_AGENT_COMPACT_THRESHOLD", "6000"))
+# ═══════════════════════════════════════════════════════════════════
+# 阶段 8 · P2（候选池 §十三①）：三项阈值**按模型窗口自动算**
+# ═══════════════════════════════════════════════════════════════════
+#
+# **为什么**：这三个阈值以前是**全局写死**的，跟"当前用哪个模型"无关 ——
+#   · 换个 32k 窗口的模型，`NODE_TOKEN_BUDGET=30000` 可能直接撞窗口（一次调用就超）；
+#   · 换个 1M 窗口的模型，压实阈值 6000 又过于保守（模型明明记得住，却一直在摘要）。
+#
+# **解析顺序**（高优先级在前）：
+#   ① 显式环境变量（老名字不变）：`CODE_AGENT_COMPACT_THRESHOLD` / `CODE_AGENT_NODE_TOKEN_BUDGET`
+#      / `CODE_AGENT_TASK_TOKEN_BUDGET` —— 设了就**一律**用它（这是"我说了算"的出口）；
+#   ② 按**当前 executor 实际用的模型**的窗口算比例；
+#   ③ 窗口本身也是三级：`CODE_AGENT_CONTEXT_WINDOW`（全局覆盖）> 注册表里该模型的
+#      `context_window`（`config/models.json` 或 Web 面板里加的自定义模型）> 128000（默认）。
+#
+# **比例**（token 是**估算值** ⇒ 一律留足余量）：
+#   压实 **15%** · 单次调用输入 **35%** · 任务累计 **max(50 万, 4 倍窗口)** 并封顶 200 万。
+# ⚠️ **任务级刻意不是窗口的小比例**：它是"**成本保险丝**"，不是"能不能塞进一次调用"的问题 ——
+#    一个任务本来就可能跑好几轮满上下文。候选池 §十三① 当时写的是"TASK ≈ 60~70%（窗口）"，
+#    但那是**比今天还紧**的（128k × 65% ≈ 8.3 万 < 现在的 20 万），与"预算放宽到 50 万~100 万"
+#    的结论相反 ⇒ 2026-10-07 定：**任务级按"窗口倍数 + 下限"算**（见 `TASK_MIN`）。
+DEFAULT_CONTEXT_WINDOW = int(os.getenv("CODE_AGENT_CONTEXT_WINDOW", "128000"))
 # 压实后**原样保留**的最近消息条数（越近的信息越要逐字保留）
 COMPACT_KEEP_MESSAGES = int(os.getenv("CODE_AGENT_COMPACT_KEEP", "8"))
+COMPACT_RATIO = 0.15
+NODE_RATIO = 0.35
+TASK_WINDOW_MULTIPLE = 4
+TASK_MIN = 500_000
+TASK_MAX = 2_000_000
+COMPACT_MIN, COMPACT_MAX = 6_000, 64_000
+NODE_MIN, NODE_MAX = 30_000, 200_000
 
-# ── T4.3 token 预算 ──
-# 节点级：进入 Executor 前估算 prompt token，超了就先剪枝（砍最老、最长的工具结果）
-NODE_TOKEN_BUDGET = int(os.getenv("CODE_AGENT_NODE_TOKEN_BUDGET", "30000"))
-# 任务级硬上限：单任务累计 token 超了 → **主动终止并报告**（而不是烧到失控）
-TASK_TOKEN_BUDGET = int(os.getenv("CODE_AGENT_TASK_TOKEN_BUDGET", "200000"))
+
+@dataclass(frozen=True)
+class TokenBudgets:
+    """三项阈值的**一次解析结果**（附带窗口与来源，便于测试与排查）。"""
+
+    compact: int  # 对话压实阈值
+    node: int  # 单次调用输入上限（进模型前剪枝）
+    task: int  # 单任务累计 token 上限（成本保险丝）
+    context_window: int
+    source: str  # "env"（至少一项来自显式环境变量）/ "window"（按窗口算的）
+
+    def as_dict(self) -> dict:
+        return {
+            "compact": self.compact,
+            "node": self.node,
+            "task": self.task,
+            "contextWindow": self.context_window,
+            "source": self.source,
+        }
+
+
+def _env_int(name: str) -> int | None:
+    """读一个可选的环境变量（空串/读不出数字都算"没设"）。"""
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return int(float(str(raw).strip()))
+    except ValueError:
+        return None
+
+
+def _clamp(value: int, low: int, high: int) -> int:
+    return max(low, min(high, value))
+
+
+def budgets_for_window(
+    window: int,
+    *,
+    compact_env: int | None = None,
+    node_env: int | None = None,
+    task_env: int | None = None,
+) -> TokenBudgets:
+    """纯函数：给一个窗口算出三项阈值（显式 env 优先）。**不读环境、不碰注册表**，好测。"""
+    window = int(window) if window and window > 0 else DEFAULT_CONTEXT_WINDOW
+    compact = _clamp(int(window * COMPACT_RATIO), COMPACT_MIN, COMPACT_MAX)
+    node = _clamp(int(window * NODE_RATIO), NODE_MIN, NODE_MAX)
+    task = _clamp(max(TASK_MIN, window * TASK_WINDOW_MULTIPLE), TASK_MIN, TASK_MAX)
+    overridden = False
+    if compact_env is not None:
+        compact, overridden = compact_env, True
+    if node_env is not None:
+        node, overridden = node_env, True
+    if task_env is not None:
+        task, overridden = task_env, True
+    return TokenBudgets(
+        compact=compact,
+        node=node,
+        task=task,
+        context_window=window,
+        source="env" if overridden else "window",
+    )
+
+
+def _registry_context_window(role: str) -> int | None:
+    """从模型注册表里取该角色当前模型的窗口声明（取不到就 None，绝不抛）。"""
+    try:
+        # 局部 import：`model/llm.py` 依赖本模块，模块级 import 会成环
+        from app.code_agent.model.llm import registry
+
+        return registry.context_window(role)
+    except Exception:  # noqa: BLE001 —— 取窗口失败不能影响任何主流程
+        return None
+
+
+def token_budgets(role: str = "executor") -> TokenBudgets:
+    """**运行期**解析三项阈值（换模型后不用重启也生效）。"""
+    env_window = _env_int("CODE_AGENT_CONTEXT_WINDOW")
+    window = env_window or _registry_context_window(role) or DEFAULT_CONTEXT_WINDOW
+    return budgets_for_window(
+        window,
+        compact_env=_env_int("CODE_AGENT_COMPACT_THRESHOLD"),
+        node_env=_env_int("CODE_AGENT_NODE_TOKEN_BUDGET"),
+        task_env=_env_int("CODE_AGENT_TASK_TOKEN_BUDGET"),
+    )
+
+
+# ⚠️ 下面三个常量是**默认窗口下的静态快照**（给 import 期就要用值的读者 + 兼容老代码）。
+#    运行期请用 `token_budgets()` —— 否则换了模型它不会跟着变。
+_DEFAULT_BUDGETS = budgets_for_window(DEFAULT_CONTEXT_WINDOW)
+COMPACT_THRESHOLD_TOKENS = _DEFAULT_BUDGETS.compact  # 默认窗口 15%（128k → 19200）
+NODE_TOKEN_BUDGET = _DEFAULT_BUDGETS.node  # 默认窗口 35%（128k → 44800）
+TASK_TOKEN_BUDGET = _DEFAULT_BUDGETS.task  # max(50 万, 4×窗口)（128k → 512000）
 
 # ── T8.1 任务级墙钟（阶段 8 · P0）──
 # 单个任务最长**执行**时间（秒）；到点自动停 —— 与用户点「停止」走**同一条**路径

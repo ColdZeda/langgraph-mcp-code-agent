@@ -21,13 +21,13 @@ from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 
 from app.code_agent.config import (
     COMPACT_KEEP_MESSAGES,
-    COMPACT_THRESHOLD_TOKENS,
     EXTERNALIZE_EXEMPT_TOOLS,
     EXTERNALIZE_MAX_LINES,
     EXTERNALIZE_PREVIEW_CHARS,
     EXTERNALIZE_THRESHOLD,
     RUNTIME_DIR,
     TOOL_RESULTS_DIR,
+    token_budgets,
 )
 from app.code_agent.model.llm import invoke_with_fallback
 
@@ -179,7 +179,9 @@ def _summary_message(summary: str) -> BaseMessage:
     return HumanMessage(content=f"{SUMMARY_MARKER}\n{summary}")
 
 
-async def compact_history(messages: list, chain: list) -> tuple[list, bool]:
+async def compact_history(
+    messages: list, chain: list, *, threshold: int | None = None
+) -> tuple[list, bool]:
     """超阈值时压实历史。
 
     返回 `(新消息列表, 是否真的压实了)`：
@@ -188,10 +190,14 @@ async def compact_history(messages: list, chain: list) -> tuple[list, bool]:
       - 成功 → `[摘要消息] + 最近 COMPACT_KEEP_MESSAGES 条`，第二项为 True。
 
     压缩的是**最老的那一段**，最近的消息逐字保留 —— 越近的信息越不能糊。
+
+    `threshold`：不传就**运行期**按当前模型的窗口算（阶段 8 · P2）——
+    以前这里读的是 import 期常量，换模型后阈值不会跟着变。
     """
     if not messages:
         return list(messages), False
-    if estimate_messages_tokens(messages) <= COMPACT_THRESHOLD_TOKENS:
+    limit = token_budgets().compact if threshold is None else threshold
+    if estimate_messages_tokens(messages) <= limit:
         return list(messages), False
     if len(messages) <= COMPACT_KEEP_MESSAGES:
         return list(messages), False
