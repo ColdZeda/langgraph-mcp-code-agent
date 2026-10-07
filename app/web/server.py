@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import sqlite3
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -352,7 +354,20 @@ async def lifespan(app: FastAPI):
     settings = load_settings()
     if settings:
         apply_settings(settings)  # 含 api_key 与各角色模型（改造前漏了 api_key）
-        logger.info(f"已应用本地模型设置: {masked_settings(settings)}")
+        # ⚠️ 2026-10-08 按用户反馈改：原来把整个 settings 字典（含全部自定义模型 + 密钥尾号）
+        #    dump 成一行 —— 一屏白字里最吵的就是它，而且密钥尾号没必要进日志。改成一句摘要。
+        _roles = settings.get("roles") or {}
+        _custom = settings.get("custom_models") or []
+        _labels = [
+            str(m.get("label") or m.get("id") or "?") for m in _custom if isinstance(m, dict)
+        ]
+        logger.info(
+            "已应用本地模型设置：四个角色 → %s；自定义模型 %d 个%s；权限档=%s",
+            next(iter(set(_roles.values())), "") or "跟随 .env",
+            len(_labels),
+            f"（{' / '.join(_labels)}）" if _labels else "",
+            settings.get("permissionMode") or "confirm",
+        )
     await runtime.load()
     # RAG 的两个本地模型**不在仓库里**（各 ≈87MB，见 scripts/fetch_models.py）——
     # 启动时就把状态说清楚，别让用户"用到一半"才发现（缺向量模型时 RAG 的 4 个工具
@@ -377,8 +392,85 @@ async def lifespan(app: FastAPI):
     # 用户会以为项目坏了（界面第二轮反馈里就是这么踩的）。
     web_url = os.getenv("CODE_AGENT_WEB_URL", "").strip()
     if web_url:
-        logger.info(f"[OK] 已就绪 —— 在浏览器打开：{web_url}")
+        _log_ready_banner(web_url)
     yield
+
+
+def _log_stream():
+    """日志**真正**写去的那个流。
+
+    ⚠️ 这个项目的 logger 刻意写 **stderr**（`config.get_logger`；MCP server 的 stdout 是 JSON-RPC
+    通道，不能污染）⇒ 判断"是不是终端"必须看 stderr，而不是 stdout。
+    """
+    for handler in logging.getLogger().handlers + logging.getLogger("code_agent.web").handlers:
+        stream = getattr(handler, "stream", None)
+        if stream is not None:
+            return stream
+    return sys.stderr
+
+
+def _enable_ansi(is_stderr: bool) -> bool:
+    """Windows 控制台默认不解析 ANSI 转义 —— 显式开一下（失败就当作不支持）。"""
+    if os.name != "nt":  # pragma: no cover - 非 Windows 分支
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.GetStdHandle(-12 if is_stderr else -11)  # STD_ERROR/OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))  # VT_PROCESSING
+    except Exception:  # noqa: BLE001 —— 任何异常都只是"没有颜色"
+        return False
+
+
+def _color_enabled() -> bool:
+    """该不该上色：必须**是终端**（重定向到文件/CI 日志时不要污染），且尊重 `NO_COLOR`。"""
+    if os.environ.get("NO_COLOR"):
+        return False
+    stream = _log_stream()
+    try:
+        if not stream.isatty():
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    return _enable_ansi(stream is sys.stderr)
+
+
+def _log_ready_banner(web_url: str) -> None:
+    """启动完成时的**醒目**横幅：地址单独一行、带色 —— 用户 Ctrl+左键就能点开。
+
+    ⚠️ 原来的写法是一句普通 INFO（"`[OK] 已就绪 —— 在浏览器打开：…`"），它混在一屏白字里
+    根本认不出来（用户反馈："下面一大堆白字看着有点蒙"）。标记 `[OK] 已就绪` **必须保留** ——
+    启动脚本里写着"等出现「[OK] 已就绪」再打开浏览器"。
+    """
+    if _color_enabled():
+        bold, cyan, green, dim, reset = (
+            "\033[1m",
+            "\033[36m",
+            "\033[32m",
+            "\033[2m",
+            "\033[0m",
+        )
+        line = f"{cyan}{'=' * 62}{reset}"
+        logger.info(
+            "\n%s\n  %s[OK] 已就绪%s —— 在浏览器打开（%sCtrl + 左键点下面这行%s）：\n"
+            "  %s%s➜  %s%s\n%s",
+            line,
+            f"{bold}{green}",
+            reset,
+            dim,
+            reset,
+            bold,
+            green,
+            web_url,
+            reset,
+            line,
+        )
+    else:  # 重定向 / CI / 不支持 ANSI：退化成原来那句（不加转义字符，免得更乱）
+        logger.info("[OK] 已就绪 —— 在浏览器打开：%s", web_url)
 
 
 app = FastAPI(title="Code Agent Web", lifespan=lifespan)

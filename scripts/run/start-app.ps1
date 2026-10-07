@@ -133,9 +133,13 @@ if ($Dev) {
 Write-Host ""
 Write-Host "  正在启动，请稍候……" -ForegroundColor Yellow
 Write-Host "     要加载 32 个工具 + 知识库，通常 10~30 秒（首次更久）。" -ForegroundColor DarkGray
-Write-Host "     等下面出现「[OK] 已就绪」再打开浏览器 —— 提前点会打不开，那不是项目坏了。" -ForegroundColor DarkGray
+Write-Host "     等下面出现绿色方框里的「[OK] 已就绪」再打开浏览器 —— 提前点会打不开，那不是项目坏了。" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  停止:  在这个窗口按 Ctrl+C" -ForegroundColor DarkGray
 Write-Host ""
 $env:CODE_AGENT_WEB_URL = "http://127.0.0.1:$Port/"
-& uv run uvicorn app.web.server:app --port $Port
+# `--log-level warning`：uvicorn 自己那 4 行 INFO（Started server process / Waiting for
+# application startup / Application startup complete / Uvicorn running on …）纯属噪音 ——
+# 地址由后端在启动完成时用**绿色方框**打出来（见 server.py 的 `_log_ready_banner`）。
+# ⚠️ 只影响 uvicorn 自己的 logger，不影响本项目 `code_agent.*` 的日志（那是我们自己的配置）。
+& uv run uvicorn app.web.server:app --port $Port --log-level warning
