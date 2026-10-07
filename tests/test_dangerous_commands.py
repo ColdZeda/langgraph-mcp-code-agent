@@ -131,6 +131,10 @@ PS_SAFE = [
     'python -c "print(1)"',
     "git status",
     "Get-ChildItem -Recurse -Force",  # 只读列目录，名字里带这两个参数：不该拦
+    # ⚠️ 2026-10-07 实测订正：这两个是**纯排版** cmdlet，原来被 `\bFormat-\w+` 误伤
+    #    （用户白点一次"允许"、模型多跑 3 步绕开）⇒ 现在必须放行。
+    "Get-Process | Format-Table -AutoSize",
+    "Get-ChildItem | Format-List Name,Length",
 ]
 
 

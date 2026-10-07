@@ -4,6 +4,8 @@ import { reactive } from 'vue'
 export const store = reactive({
   wsStatus: 'connecting', // connecting | open | closed
   threadId: '',
+  // 阶段 8 · 实测修复：**执行中不许切会话**（点了就提示，不再静默吞掉）
+  notice: '',
   mode: 'auto', // 执行模式：auto | single | multi（由界面下拉框切换）
   // 权限模式（阶段 5）：readonly | confirm | open。
   // ⚠️ 与「执行模式」是**两条独立的轴**，名字不能都叫"模式"。
@@ -41,6 +43,7 @@ export const store = reactive({
   showHidden: false,
   showEval: false,
   showSettings: false,
+  showKnowledge: false,
   // 「当前生效模型」：四个角色**解析后**各自会用哪个（后端算好给前端 —— 兜底链有三层，
   // 前端自己拼容易算错）。阶段 6 加的：模型是全局配置、不随会话保存，
   // 不显示的话用户不知道"现在到底是谁在干活"（用户实测后提的需求）。
@@ -249,6 +252,12 @@ export function setPermissionMode(mode) {
 
 export function newSession() {
   if (store.wsStatus !== 'open') return
+  // ⚠️ 2026-10-07 实测：这里原来**没有** `sending` 守卫 ⇒ 执行中点它会清空本地消息并换 thread_id，
+  //    旧任务的 node/status/result 帧随后串进新会话（用户看到的就是"点不回去"）。
+  if (store.sending) {
+    setNotice('当前任务正在执行，请先点「停止任务」或等它跑完，再新建会话')
+    return
+  }
   store.messages = []
   ws.send(JSON.stringify({ type: 'new_session' }))
 }
@@ -320,8 +329,23 @@ export async function purgeSystemSessions() {
 }
 
 /** 切换到一个历史会话：告诉后端改用它，并把历史消息拉回来回放。 */
+/** 提示一行小字（几秒后自动消失；不弹窗、不打断）。 */
+let noticeTimer = null
+export function setNotice(text, ms = 5000) {
+  store.notice = text
+  if (noticeTimer) clearTimeout(noticeTimer)
+  if (text) noticeTimer = setTimeout(() => (store.notice = ''), ms)
+}
+
 export async function loadSession(threadId) {
-  if (store.wsStatus !== 'open' || store.sending) return
+  if (store.wsStatus !== 'open') return
+  if (threadId === store.threadId) return // 点自己：无动作、也不用提示（避免噪音）
+  // ⚠️ 2026-10-07 实测：原来这里是一句静默 `return` ⇒ 用户点了会话"啥也没有"。
+  //    现在的策略（用户定）：**执行中一律不许切走**，但必须**明确告诉他为什么**。
+  if (store.sending) {
+    setNotice('当前任务正在执行，请先点「停止任务」或等它跑完，再切换会话')
+    return
+  }
   ws.send(JSON.stringify({ type: 'load_session', threadId }))
   store.messages = []
   try {
@@ -399,5 +423,22 @@ export async function testSettings(payload) {
  */
 export async function testRoleModels() {
   const res = await fetch('/api/settings/test-roles', { method: 'POST' })
+  return res.json()
+}
+
+/** 列出知识库条目（自动沉淀会自己往里写，用户有权看到"它到底记住了什么"）。 */
+export async function loadKnowledge() {
+  try {
+    const res = await fetch('/api/knowledge')
+    const data = await res.json()
+    return data.ok ? data.items || [] : []
+  } catch {
+    return []
+  }
+}
+
+/** 删掉一条知识（文件 + 向量）；返回 {ok, error, items}。 */
+export async function deleteKnowledge(name) {
+  const res = await fetch(`/api/knowledge/${encodeURIComponent(name)}`, { method: 'DELETE' })
   return res.json()
 }

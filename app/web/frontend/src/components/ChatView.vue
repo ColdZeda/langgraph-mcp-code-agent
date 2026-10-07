@@ -87,6 +87,22 @@ defineExpose({ newSession: newSessionAndClear })
               <span v-if="status.pausedSec >= 1" class="sb-dim">
                 （人工确认等待 {{ fmtElapsed(status.pausedSec) }} 未计入）
               </span>
+              <!-- 阶段 8 · 实测新增：状态条右侧直接给一个**停止任务**按钮。
+                   ⚠️ 为什么加：用户实测时"没看到停止按钮" —— 它原来只在输入框右下角，
+                   而执行中人的视线在状态条那一行。名字用「停止任务」而不是"暂停"：
+                   本项目是**协作式停止**、**不能续跑**，叫暂停会让人以为能恢复。 -->
+              <button
+                class="sb-stop"
+                :disabled="store.stopping || store.wsStatus !== 'open'"
+                :title="
+                  store.stopping
+                    ? '已发出停止请求，会在下一步边界停下'
+                    : '停止当前任务（已产出的文件/数据一律保留）'
+                "
+                @click="stopTask()"
+              >
+                {{ store.stopping ? '停止中…' : '⏹ 停止任务' }}
+              </button>
             </div>
             <!-- 阶段 5（T5.6）：节点级进度，任务进行中就看得见走到哪一步 -->
             <ol v-if="store.progress.length" class="progress">
@@ -177,6 +193,11 @@ defineExpose({ newSession: newSessionAndClear })
   font-size: 12px; color: #cbd5e1; font-variant-numeric: tabular-nums; }
 .sb-item { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 2px 8px; }
 .sb-dim { color: #64748b; }
+/* 状态条上的停止按钮：红底、明显但不喧宾夺主（与输入区那个是同一个动作） */
+.sb-stop { margin-left: auto; padding: 3px 12px; font-size: 12px; border-radius: 6px;
+  border: 1px solid #b91c1c; background: #7f1d1d; color: #fecaca; cursor: pointer; }
+.sb-stop:hover:not(:disabled) { background: #b91c1c; }
+.sb-stop:disabled { opacity: 0.6; cursor: default; }
 .progress { margin: 8px 0 0 20px; padding: 0; list-style: none; font-style: normal; font-size: 12px; line-height: 1.9; color: #93c5fd; max-height: 220px; overflow-y: auto; }
 .progress li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .assistant-bubble { background: #1e293b; border: 1px solid #334155; }

@@ -31,7 +31,10 @@ _DANGEROUS_POWERSHELL_PATTERNS = [
     # 强制递归删除（顺序无关 + 认别名，见上面的订正说明）
     r"\b(?:Remove-Item|ri|rm|del|erase|rd|rmdir)\b"
     r"(?=[^|;&]*\s-(?:r|rec\w*)\b)(?=[^|;&]*\s-(?:fo|for\w*)\b)",
-    r"\bFormat-\w+",  # Format-Volume / Format-HardDisk
+    # ⚠️ 订正（2026-10-07 实测踩到）：原来是 `\bFormat-\w+`，把 **`Format-Table` / `Format-List`**
+    #    这些**纯排版**的 cmdlet 也一起拦了 —— 现场代价：用户白点了一次"允许"、模型还要多跑 3 步绕开。
+    #    真正的危险只有**格式化磁盘**那两个 ⇒ 收窄成白名单式的精确名。
+    r"\bFormat-(?:Volume|Disk)\b",  # 格式化磁盘（Format-Table / Format-List 不再误伤）
     r"\bdel\s+/[fsq]",  # del /f /s /q
     r"\brd\s+/[sq]\b",  # rd /s /q
     r"\brmdir\s+/[sq]\b",  # rmdir /s /q

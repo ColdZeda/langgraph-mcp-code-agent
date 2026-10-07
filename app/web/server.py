@@ -515,6 +515,57 @@ async def upsert_custom_model(body: dict):
     return {"ok": True, "id": mid, **masked_settings(load_settings())}
 
 
+@app.get("/api/knowledge")
+async def list_knowledge():
+    """列出知识库条目（Web 面板「知识库」）。
+
+    ⚠️ 为什么要有这个界面：**自动沉淀会自己往 `data/knowledge/` 写东西**（用户实测一晚写了 3 条），
+    而界面此前完全看不到 —— 「它到底记住了什么」「错的结论怎么删」都无从下手。
+    ⚠️ `store` 走**局部 import**：它一 import 就会拉起 chromadb/torch（毫秒级变秒级），
+    这是这个项目的既有约定（见 AGENTS「已知坑」的 RAG 一节）。
+    """
+    try:
+        from app.code_agent.rag import store
+
+        return {"ok": True, "items": store.list_documents()}
+    except Exception as exc:  # noqa: BLE001 —— 接口不该因为知识库坏了而 500
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "items": []}
+
+
+@app.delete("/api/knowledge/{name:path}")
+async def delete_knowledge(name: str):
+    """删掉一条知识：**文件 + 向量**一起删（否则检索还会命中"幽灵条目"）。
+
+    🔴 只接受**目录内的单层文件名**且扩展名必须是 `.txt` / `.md` ——
+    这是个"删文件"的接口，路径穿越（`../`）、别的前缀、隐藏文件一律拒绝。
+    """
+    cleaned = str(name or "").strip().replace("\\", "/")
+    if (
+        not cleaned
+        or "/" in cleaned
+        or cleaned.startswith(".")
+        or ".." in cleaned
+        or Path(cleaned).suffix.lower() not in (".txt", ".md")
+    ):
+        return {"ok": False, "error": "只接受知识库目录内的单层 .txt / .md 文件名"}
+
+    try:
+        from app.code_agent.rag import store
+
+        deleted_file, deleted_vector = store.delete_document_file(cleaned)
+        if not deleted_file and not deleted_vector:
+            return {"ok": False, "error": f"没找到条目：{cleaned}"}
+        logger.info("删除知识条目：%s（文件=%s 向量=%s）", cleaned, deleted_file, deleted_vector)
+        return {
+            "ok": True,
+            "deletedFile": deleted_file,
+            "deletedVector": deleted_vector,
+            "items": store.list_documents(),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 @app.delete("/api/settings/custom-model/{model_id}")
 async def delete_custom_model(model_id: str):
     """删掉一个自定义模型；**顺带清掉角色里指向它的引用**。

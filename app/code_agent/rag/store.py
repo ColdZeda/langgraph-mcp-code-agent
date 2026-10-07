@@ -399,5 +399,57 @@ def delete_document(title: str) -> tuple[bool, bool]:
     return deleted_file, deleted_vector
 
 
+def list_documents() -> list[dict]:
+    """列出知识库里的**文件条目**（给 Web 端的「知识库」面板用）。
+
+    返回 `[{name, size, mtime, preview}]`，按修改时间倒序。
+    ⚠️ 只读目录，不碰向量库 —— 面板要能"看一眼我库里到底有什么"（这是用户提的需求：
+    自动沉淀会自己往里写，界面上却什么都看不到）。
+    """
+    items: list[dict] = []
+    if not KNOWLEDGE_DIR.exists():
+        return items
+    for filepath in list(KNOWLEDGE_DIR.rglob("*.txt")) + list(KNOWLEDGE_DIR.rglob("*.md")):
+        try:
+            stat = filepath.stat()
+            text = filepath.read_text(encoding="utf-8", errors="replace")
+        except OSError:  # pragma: no cover —— 读不到就跳过（不该让接口 500）
+            continue
+        preview = " ".join(text.split())[:200]
+        items.append(
+            {
+                "name": filepath.relative_to(KNOWLEDGE_DIR).as_posix(),
+                "size": stat.st_size,
+                "mtime": stat.st_mtime,
+                "preview": preview,
+            }
+        )
+    items.sort(key=lambda it: it["mtime"], reverse=True)
+    return items
+
+
+def delete_document_file(name: str) -> tuple[bool, bool]:
+    """按**文件名**删除（`xxx.txt` / `xxx.md`）：删文件 + 删它的向量。
+
+    与 `delete_document(title)` 的区别：那个只认 `.txt`（自动沉淀的产物）；
+    面板里用户看到什么名字就删什么名字，所以这里按真实文件名删。
+    ⚠️ `name` 必须是**目录内的单层文件名** —— 调用方（Web 接口）负责挡住路径穿越，
+    这里再兜一层：解析后必须仍在 `KNOWLEDGE_DIR` 之内。
+    """
+    filepath = (KNOWLEDGE_DIR / name).resolve()
+    root = KNOWLEDGE_DIR.resolve()
+    if root not in filepath.parents or filepath.name != Path(name).name:
+        return False, False
+    deleted_file = False
+    if filepath.exists() and filepath.is_file():
+        filepath.unlink()
+        deleted_file = True
+    collection = get_collection()
+    before = collection.count()
+    _delete_source(filepath.name)
+    deleted_vector = collection.count() < before
+    return deleted_file, deleted_vector
+
+
 def document_exists(title: str) -> bool:
     return (KNOWLEDGE_DIR / f"{safe_title(title)}.txt").exists()

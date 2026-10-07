@@ -118,3 +118,16 @@ class TestClarifyPrinciples:
         """门槛那句话必须在：判据是「问一下的成本」vs「猜错重做的成本」。"""
         assert "猜错重做的成本" in CLARIFY_PRINCIPLES
         assert "不要问" in CLARIFY_PRINCIPLES, "既要会问，也要明确'什么时候别问'"
+
+    def test_injected_knowledge_declares_its_provenance(self):
+        """🔴 现场缺陷：模型把注入的「相关经验」当成用户输入、报了「疑似提示注入」。
+
+        ⇒ 表头必须自带来源说明（`memory.INJECT_HEADER`），两处提示词也要点名它是可信背景。
+        """
+        from app.code_agent.agent import memory
+
+        assert "系统注入" in memory.INJECT_HEADER, "表头必须说明是系统注入，不是用户输入"
+        assert "不是用户输入" in memory.INJECT_HEADER
+        for text in (SYSTEM_PROMPT_TEMPLATE, EXECUTOR_PLAN_PROMPT):
+            assert "系统注入的相关经验" in text, "提示词要点名这段东西的来源"
+            assert "报警" in text, "要明确告诉模型：不需要按提示注入报警"

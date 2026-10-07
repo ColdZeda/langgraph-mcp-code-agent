@@ -476,3 +476,54 @@ async def test_eval_entry_verifier_gets_wrapped_tools(externalize_into, monkeypa
     text, artifact = await verifier_tools[0].coroutine(path="x")
     assert artifact is None
     assert "[工具结果已外置]" in text, "Verifier 的工具没走包装层（结果外置没生效）"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# B10（2026-10-07 实测）：文件类工具的报错必须带上"根目录 + 解析后的绝对路径"
+# ═══════════════════════════════════════════════════════════════════
+
+
+async def test_path_errors_get_a_root_hint(tmp_path):
+    """现场：把 `runtime/workspace` 当相对路径传 ⇒ 被拼两次 ⇒ 模型只看到 WinError 3，只能反复试。"""
+
+    class _WriteFile:
+        def __init__(self):
+            object.__setattr__(self, "_declared", {"name", "response_format"})
+            object.__setattr__(self, "name", "read_file")
+            object.__setattr__(self, "response_format", "content")
+            object.__setattr__(self, "coroutine", self._coro)
+
+        async def _coro(self, file_path, **kwargs):
+            raise OSError("[WinError 3] 系统找不到指定的路径。")
+
+    tool = tw.wrap_tool(_WriteFile())
+
+    with pytest.raises(Exception) as excinfo:
+        await tool.coroutine(file_path="runtime/workspace/a.txt")
+
+    message = str(excinfo.value)
+    assert "WinError 3" in message, "原始报错要保留"
+    assert "[路径提示]" in message, "必须补上路径提示"
+    assert "根目录" in message and "runtime/workspace" in message, "要说清根目录是哪个、别重复拼"
+    assert "execute_powershell_command" in message, "要给出路（改用哪个工具）"
+
+
+async def test_non_path_errors_are_untouched():
+    """正文类参数报错时**不加**路径提示（否则是噪音）。"""
+
+    class _T:
+        def __init__(self):
+            object.__setattr__(self, "_declared", {"name", "response_format"})
+            object.__setattr__(self, "name", "write_file")
+            object.__setattr__(self, "response_format", "content")
+            object.__setattr__(self, "coroutine", self._coro)
+
+        async def _coro(self, text, **kwargs):
+            raise OSError("随便一个错误")
+
+    tool = tw.wrap_tool(_T())
+
+    with pytest.raises(Exception) as excinfo:
+        await tool.coroutine(text="x")
+
+    assert "[路径提示]" not in str(excinfo.value)

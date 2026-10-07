@@ -2,6 +2,7 @@
 import ChatView from './components/ChatView.vue'
 import PermissionDialog from './components/PermissionDialog.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
+import KnowledgePanel from './components/KnowledgePanel.vue'
 import { computed, onMounted, ref } from 'vue'
 import {
   connectWs,
@@ -180,6 +181,8 @@ async function doPurgeSystem() {
       </label>
       <!-- 阶段 6：常驻显示「当前生效模型」—— 模型是全局配置、不随会话保存，
            不显示的话用户不知道现在到底是谁在干活。点一下直接进模型设置。 -->
+      <!-- 执行中点会话/新会话时的提示（用户定的口径：不许切，但必须说清为什么） -->
+      <div v-if="store.notice" class="notice">⚠️ {{ store.notice }}</div>
       <div class="model-row" :title="modelTitle" @click="store.showSettings = true">
         <span class="session-title">当前生效模型</span>
         <!-- 阶段 7 · T7.6：没有可用模型时**别显示一个用不了的名字** ——
@@ -280,12 +283,15 @@ async function doPurgeSystem() {
         </button>
         <p v-if="sessionNotice" class="notice">{{ sessionNotice }}</p>
       </div>
+      <!-- 阶段 8 · 实测新增：知识库面板（自动沉淀会自己写进去，用户得能看到/删掉） -->
+      <button class="btn-settings" @click="store.showKnowledge = true">🧠 知识库</button>
       <button class="btn-settings" @click="store.showSettings = true">⚙ 模型设置</button>
     </aside>
     <main class="main">
       <ChatView ref="chat" />
     </main>
     <SettingsPanel v-if="store.showSettings" @close="store.showSettings = false" />
+    <KnowledgePanel v-if="store.showKnowledge" @close="store.showKnowledge = false" />
     <PermissionDialog />
   </div>
 </template>
@@ -301,6 +307,8 @@ body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f17
 .brand-dot.open { background: #22c55e; }
 .brand-dot.closed { background: #ef4444; }
 .brand-dot.connecting { background: #eab308; }
+.notice { margin: 6px 0; padding: 7px 10px; border-radius: 8px; background: #422006; border: 1px solid #854d0e;
+  color: #fde68a; font-size: 12px; line-height: 1.5; }
 .btn-new { padding: 9px; border: 1px solid #3b82f6; background: #2563eb; color: #fff; border-radius: 8px; cursor: pointer; font-size: 13px; }
 .btn-new:hover { background: #1d4ed8; }
 .session-title { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; }

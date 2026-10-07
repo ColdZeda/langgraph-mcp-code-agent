@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 import logging
 import re
@@ -123,6 +125,54 @@ class AgentState(TypedDict):
     #    那样即使接了 checkpointer，按 thread_id 也恢复不出对话。
     #    每轮由 run_multi_agent 在图跑完后追加一对 (任务, 最终回复)。
     messages: Annotated[list[AnyMessage], add_messages]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 阶段 8 · 实测修复：**每轮通道必须复位**（否则上一轮的值串到本轮）
+# ═══════════════════════════════════════════════════════════════════
+#
+# 🔴 为什么：LangGraph 的语义是"**没传进 `ainvoke` 的通道保留上一轮 checkpoint 的值**"。
+#    用户第 3 轮实测（2026-10-07 晚）撞到的现场：
+#      · `plan` 没复位 ⇒ `auto` 判成 `simple`（跳过 Planner）时，Executor 拿到的是**上一轮的计划**，
+#        对着旧计划干活（一句「你好」白跑 13 次工具调用 6 分钟、整段英文）；用户可见回复里
+#        还混进了上一轮计划的章节；
+#      · `verdict` 没复位 ⇒ 新一轮的**第一次** Executor 执行会被 `_is_retry_round` 当成"重跑轮"
+#        （`retry_count` 白加一次、提示词里多一段"被打回"的话）；
+#      · `executor_trace_list` 没复位 ⇒ 轨迹跨轮累加（实测 28 条 = 两轮混在一起）。
+#    ⇒ 教训与 F2（`step_count`）**同一个**：**新增任何"每轮"通道，必须同时进这张表**。
+#    机械守卫：`tests/test_per_turn_state.py` 会拿 `AgentState` 的**全部通道**对这张表 +
+#    `PER_TURN_ASSIGNED` + `CROSS_TURN_CHANNELS` 做覆盖校验 —— 漏一个就红。
+PER_TURN_RESET: dict[str, Any] = {
+    "plan": "",
+    "executor_result": "",
+    "executor_trace": "",
+    "verdict": "",  # ⚠️ 不复位会让新一轮被误判成"重跑轮"
+    "retry_count": 0,
+    "token_usage": 0,
+    "executor_trace_list": [],
+    "verifier_trace_list": [],
+    "executor_messages": [],
+    "verifier_messages": [],
+    "step_count": 0,
+    "route": "",
+    "planner_model": "",
+    "budget_exceeded": False,
+    "pruned_messages": 0,
+    "cancelled": False,
+    "cancel_reason": "",
+    "cancel_stage": "",
+}
+
+#: 每轮由 `run_multi_agent` **显式赋值**（不是复位成固定值）的通道。
+PER_TURN_ASSIGNED: tuple[str, ...] = ("user_input", "knowledge")
+
+#: 跨轮累积的通道（只有它一个：带 `add_messages` reducer）。
+CROSS_TURN_CHANNELS: tuple[str, ...] = ("messages",)
+
+
+def per_turn_reset() -> dict[str, Any]:
+    """给 `ainvoke` 用的复位字典（**每轮一份新对象**，避免共享可变默认值）。"""
+    return copy.deepcopy(PER_TURN_RESET)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1061,6 +1111,48 @@ def build_graph(
 # ═══════════════════════════════════════════════════════════════════
 
 
+def _interrupt_reason(exc: BaseException) -> str:
+    """把"为什么中断"翻译成给人看的一句中文。"""
+    if isinstance(exc, asyncio.CancelledError):
+        return "连接断开或任务被取消（例如页面被关闭 / 刷新）"
+    return f"任务被中断（{type(exc).__name__}: {exc}）"
+
+
+def _schedule_interruption_record(thread_id: str, user_input: str, reason: str) -> None:
+    """fire-and-forget：把"被中断的那一轮"补进跨轮记忆（见 `_record_interrupted_turn`）。"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:  # pragma: no cover —— 没有事件循环（纯同步调用）时静默跳过
+        return
+    loop.create_task(_record_interrupted_turn(thread_id, user_input, reason))
+
+
+async def _record_interrupted_turn(thread_id: str, user_input: str, reason: str) -> None:
+    """往线程记忆里补一对 `(用户说了什么, 本轮被中断)`。
+
+    ⚠️ 为什么要补：跨轮记忆的追加原本只在"图跑完之后"发生 ⇒ **没跑完 = 整轮消失**，
+    下一轮的模型既看不到用户说过什么，也不知道上一轮没做完（会接着上一轮的旧状态乱猜）。
+    """
+    if not thread_id or not user_input:
+        return
+    note = (
+        "【本轮被中断】" + reason + "，这个任务**没有跑完**。\n"
+        "已经发生的副作用（写好的文件 / 建好的目录 / 库里的数据）一律保留，不做回滚。\n"
+        "如需继续，请重新发一次任务（或把范围缩小后再发）。"
+    )
+    try:
+        CHECKPOINT_DB.parent.mkdir(parents=True, exist_ok=True)
+        async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_DB)) as saver:
+            app = build_graph(None, None, checkpointer=saver, mode="single")
+            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
+            await app.aupdate_state(
+                config,
+                {"messages": [HumanMessage(content=user_input), AIMessage(content=note)]},
+            )
+    except Exception as exc:  # noqa: BLE001 —— 补记失败不该影响任何主流程
+        logger.warning("中断补记失败（忽略）：%s: %s", type(exc).__name__, exc)
+
+
 async def run_multi_agent(
     user_input: str,
     all_tools: list,
@@ -1192,25 +1284,13 @@ async def run_multi_agent(
 
         try:
             state = await app.ainvoke(
-                # 只传增量：历史在 checkpoint 里，靠 messages 的 add_messages reducer 累积
+                # 只传增量：历史在 checkpoint 里，靠 messages 的 add_messages reducer 累积。
+                # ⚠️ **每轮通道全部复位**（见 `PER_TURN_RESET` 的说明）：不复位 = 上一轮的值串到本轮
+                #    （实测撞过：旧计划被当成本轮计划、轨迹跨轮累加、新一轮被误判成重跑轮）。
                 {
+                    **per_turn_reset(),
                     "user_input": user_input,
-                    "retry_count": 0,
-                    "token_usage": 0,
                     "knowledge": knowledge_text,
-                    "budget_exceeded": False,
-                    "pruned_messages": 0,
-                    # 阶段 8 · P0：每轮显式复位停止标记
-                    # （复用同一个 thread 的**下一轮**不该继承上一轮的停止）
-                    "cancelled": False,
-                    "cancel_reason": "",
-                    "cancel_stage": "",
-                    # ⚠️ 阶段 8 · P0（真机验收 F2）：`step_count` **必须每轮复位**。
-                    #    它是个只增不减的通道：不复位的话，同一个会话里第 N 个任务的卡片会把
-                    #    前 N-1 个任务的步数一起算进去（实测 35 → 40 → 51），
-                    #    而卡片上写的是"步数"、旁边就是"本轮实际使用模型" —— 用户只会读成"本轮"。
-                    #    （一轮**之内**的打回重跑仍然累加，那是这个数字的本意。）
-                    "step_count": 0,
                 },
                 config=config,
             )
@@ -1232,6 +1312,16 @@ async def run_multi_agent(
                     tokens_spent=0,
                 ),
             }
+        except BaseException as exc:  # noqa: BLE001
+            # ── 阶段 8 实测修复（B5）：**被硬中断的一轮也必须留档** ──
+            # 现场：用户在执行中关掉页面 ⇒ WS 断开 ⇒ 这个任务被 `cancel()` ⇒ 图没跑完 ⇒
+            # 原来那句"只在图跑完后写一次"的记忆追加**根本没执行** ⇒ 记忆里连"他说过什么"都没有。
+            # ⚠️ 这里**只补一条记录，然后把异常原样抛出去**（绝不吞）：Web 端要靠 `CancelledError`
+            #    正常收尾，吞掉它会让连接永远挂着。
+            # ⚠️ 补记用**另起一个 task**（fire-and-forget）：当前任务已在取消流程里，
+            #    任何 `await` 都会被立刻再取消一次；主循环还活着，所以新 task 能跑完。
+            _schedule_interruption_record(thread_id, user_input, _interrupt_reason(exc))
+            raise
 
         cancelled = bool(state.get("cancelled"))
         cancel_reason = str(state.get("cancel_reason") or "")

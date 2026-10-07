@@ -38,6 +38,7 @@ langchain_mcp_adapters/tools.py
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from app.code_agent.agent.cancel import raise_if_cancelled
@@ -91,6 +92,59 @@ def _reads_externalized_file(key_args: dict) -> bool:
     return False
 
 
+#: 参数名里出现这些片段就当"路径类参数"（与 `placeholder_guard.PATH_ARG_HINTS` 同一套口径）。
+_PATH_HINT_ARGS = (
+    "path",
+    "file",
+    "dir",
+    "folder",
+    "destination",
+    "source",
+    "target",
+    "root",
+    "cwd",
+    "workdir",
+)
+
+
+def _path_error_hint(name: str, args: dict) -> str:
+    """给"路径类参数"的报错补上根目录与解析后的绝对路径（**信息型增强，不改任何行为**）。
+
+    ⚠️ 现场（2026-10-07 实测 B10）：模型把 `runtime\\workspace` 当相对路径传进来，而文件工具的根目录
+    就是 `runtime\\workspace` ⇒ 被拼成 `…\\runtime\\workspace\\runtime\\workspace`，
+    模型只看到一句 `Error: [WinError 3] 系统找不到指定的路径。`（不知道根目录在哪、也不知道该怎么改），
+    于是反复试。这里把"根目录 + 解析后的绝对路径 + 该改用哪个工具"一次说清。
+    """
+    from app.code_agent.config import (
+        WORKSPACE_DIR,  # 局部 import：避免 import 期建目录的副作用顺序问题
+    )
+
+    parts: list[str] = []
+    for key, value in (args or {}).items():
+        if not any(hint in str(key).lower() for hint in _PATH_HINT_ARGS):
+            continue
+        text = str(value or "").strip()
+        if not text:
+            continue
+        parts.append(f"{key}={text}")
+        try:
+            candidate = Path(text)
+            resolved = (
+                candidate.resolve() if candidate.is_absolute() else (WORKSPACE_DIR / text).resolve()
+            )
+            parts.append(f"（解析后：{resolved}）")
+        except Exception:  # noqa: BLE001 —— 解析失败就只报原值
+            continue
+    if not parts:
+        return ""
+    return (
+        "[路径提示] 传入的路径：" + "；".join(parts) + "\n"
+        f"[路径提示] 文件工具的根目录是 {WORKSPACE_DIR} —— 参数应当是**相对该根目录**的路径"
+        "（不要把 `runtime/workspace` 再拼一次）；要读写根目录之外的位置，请改用 "
+        "`execute_powershell_command`（或先把文件放进工作区）。"
+    )
+
+
 def wrap_tool(tool: Any, cache: ToolCache | None = None) -> Any:
     """包装一个工具（有 `coroutine` 字段的原位替换，没有的返回一个代理工具）。"""
     name = getattr(tool, "name", "unknown")
@@ -137,10 +191,18 @@ def wrap_tool(tool: Any, cache: ToolCache | None = None) -> Any:
             raw = call()
             if asyncio.iscoroutine(raw):
                 raw = await raw
-        except BaseException:
+        except BaseException as exc:
             # 写操作失败也可能留下半成品 → 保守起见照样失效缓存
             if cache is not None and not cacheable:
                 await cache.invalidate()
+            # ⚠️ 2026-10-07 实测：文件工具的报错太糊，模型只能反复试。
+            #    现场（B10）：它把 `runtime\workspace` 当相对路径传进来，工具又拼了一次根目录
+            #    ⇒ `…\runtime\workspace\runtime\workspace`，用户看到的只有
+            #    `Error: [WinError 3] 系统找不到指定的路径。`（不知道根目录在哪、也不知道该怎么改）。
+            #    ⇒ 路径类参数报错时**补上根目录与解析后的绝对路径**（信息型增强，不改任何行为）。
+            hint = _path_error_hint(name, key_args)
+            if hint and isinstance(exc, Exception):
+                raise type(exc)(f"{exc}\n{hint}") from exc
             raise
 
         text, artifact, is_pair = split_tool_output(raw)
