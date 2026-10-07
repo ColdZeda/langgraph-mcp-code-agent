@@ -322,7 +322,16 @@ def apply_settings(settings: dict) -> None:
             api_key=settings.get("api_key") or None,
         )
     except ValueError as e:  # 典型：还没有任何可用的 key
-        logger.warning(f"暂时建不起模型（等用户在「模型设置」里填写）：{e}")
+        # ⚠️ 措辞（2026-10-08 按用户反馈改）：原来写「暂时建不起模型」——
+        #    "建不起"是**内部视角**的词（用户不知道在建什么），而且只指路 `.env` 会把人带偏：
+        #    面向用户的入口其实是界面里的「⚙ 模型设置 → 我的模型」（自带 API 地址 + 密钥）。
+        #    所以改成"说人话 + 两条路都写清"。
+        logger.warning("暂时没有可用模型（还没配置 API key）：%s", e)
+        logger.warning(
+            "→ 两种配法，任选其一：① 打开 http://127.0.0.1:8000 →「模型设置 → 我的模型」"
+            "填上 API 地址与密钥（推荐，改完即生效、不用重启）；"
+            "② 在 .env 里设置 MODEL_NAME / MODEL_BASE_URL / MODEL_API_KEY（改完要重启）。"
+        )
     roles = settings.get("roles") or {}
     # ⚠️ 这里必须**覆盖全部四个角色**（缺的用空串 = 恢复配置默认），不能只传文件里有的那几个：
     #    否则"删掉一个自定义模型"这种会让某个角色**从文件里消失**，

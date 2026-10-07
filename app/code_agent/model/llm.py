@@ -42,7 +42,13 @@ def build_llm(
     """构造 ChatOpenAI 实例（模型/地址/key/超时可覆盖，默认取 .env 配置）。"""
     resolved_key = api_key or MODEL_API_KEY
     if not resolved_key:
-        raise ValueError("模型 API key 未配置，请在 .env 中设置 MODEL_API_KEY")
+        raise ValueError(
+            # ⚠️ 文案（2026-10-08 按用户反馈改）：原来只说"请在 .env 里设置 MODEL_API_KEY"，
+            #    但**面向用户的入口是 Web 界面的「⚙ 模型设置 → 我的模型」**（自带 API 地址 + 密钥）。
+            #    两条路都写出来，用户才知道界面上也能配。
+            "模型 API key 未配置：可在 Web 界面的「模型设置 → 我的模型」里添加模型"
+            "（填 API 地址 + 密钥，保存即生效），或在 .env 里设置 MODEL_API_KEY"
+        )
     llm_kwargs = dict(
         model=model or MODEL_NAME,
         base_url=base_url or MODEL_BASE_URL,
