@@ -43,3 +43,6 @@ node_modules/
 .pytest_cache
 .zcode/
 .coverage
+
+# 本地草稿（例：tests/测试题.txt —— 一次 git add -A 把它误提交进了公开仓，2026-10-08 移出）
+tests/测试题.txt
