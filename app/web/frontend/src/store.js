@@ -26,6 +26,12 @@ export const store = reactive({
   permissionQueue: [],
   // 阶段 5（T5.6）：节点级进度（Planner/Executor 每步/Verifier），任务开始清空
   progress: [],
+  // 阶段 8 · P0：任务状态条（时长 / 步数 / 用量）。
+  // 由后端 `status` 事件刷新；两次事件之间的那 1 秒由本地计时器补 ——
+  // ⚠️ 弹出权限弹框时**冻结**（与后端口径一致：人工确认的等待不算任务时间）。
+  status: null,
+  // 已发出「停止」请求、正等任务在下一个检查点停下（按钮据此变成"停止中…"）
+  stopping: false,
   messages: [], // {id, role: 'user'|'assistant', text?, result?|error?}
   sending: false,
   sessions: [],
@@ -67,16 +73,41 @@ function progressLine(e) {
         ? `路由：${e.route === 'simple' ? '简单任务（只跑 Executor）' : '复杂任务（走完整三阶段）'}`
         : '判断任务复杂度…'
     case 'planner':
+      if (e.status === 'end' && e.cancelled) return '规划已取消（任务已停止）'
       return e.status === 'end' ? `计划已就绪（${e.steps} 步）` : 'Planner 规划中…'
     case 'executor':
       if (e.status === 'step') return `第 ${e.step} 步${tool ? `：调用 ${tool}` : ''}`
-      if (e.status === 'end') return e.budgetExceeded ? 'Executor 因 token 预算终止' : `Executor 完成（${e.steps} 步）`
+      if (e.status === 'end') {
+        // 阶段 8 · P0：停止与"运行结束""预算终止"是三种不同的事，文案必须分开
+        if (e.cancelled) return `Executor 已停止（第 ${e.steps} 步停下）`
+        return e.budgetExceeded ? 'Executor 因 token 预算终止' : `Executor 完成（${e.steps} 步）`
+      }
       return e.retry ? 'Executor 重跑中…' : 'Executor 开始执行…'
     case 'verifier':
-      return e.status === 'end' ? (e.passed ? '验收通过 ✅' : '验收未通过 ❌') : 'Verifier 验收中…'
+      if (e.status === 'end') {
+        if (e.cancelled) return '验收已停止'
+        return e.passed ? '验收通过 ✅' : '验收未通过 ❌'
+      }
+      return 'Verifier 验收中…'
     default:
       return `${e.node} ${e.status}`
   }
+}
+
+// ── 阶段 8 · P0：任务状态条的本地计时 ────────────────────────────────
+// 后端每走一步推一条 `status`（权威值），中间那 1 秒本地补 —— 不然计时看起来是"卡住的"。
+// ⚠️ 有权限弹框时**不补**：后端在人工确认期间暂停计时，前端跟着暂停才对得上。
+let tickTimer = null
+function startTicker() {
+  clearInterval(tickTimer)
+  tickTimer = setInterval(() => {
+    if (!store.sending || !store.status || store.permissionRequest) return
+    store.status = { ...store.status, elapsedSec: (store.status.elapsedSec || 0) + 1 }
+  }, 1000)
+}
+function stopTicker() {
+  clearInterval(tickTimer)
+  tickTimer = null
 }
 
 function handleWsMessage(msg) {
@@ -102,11 +133,29 @@ function handleWsMessage(msg) {
   }
   if (msg.type === 'start') {
     store.sending = true
+    store.stopping = false
     store.progress = []
+    // 状态条先按 0 起（墙钟上限来自后端，不在这里写死）
+    store.status = {
+      elapsedSec: 0, pausedSec: 0, steps: 0, tokens: 0, usageLimit: 0,
+      wallClockSec: msg.wallClockSec || 0, stage: '', cancelled: false,
+    }
+    startTicker()
     store.messages.push({
       id: `m_${Date.now()}`, role: 'assistant', phase: 'running',
       text: msg.message || '协作中...',
     })
+    return
+  }
+  // 阶段 8：后端已收到停止请求（协作式：会在下一个检查点停，不是立刻掐断）
+  if (msg.type === 'stopping') {
+    store.stopping = true
+    store.progress.push({ id: `p_stop_${Date.now()}`, text: '已请求停止：正在下一步边界停下…' })
+    return
+  }
+  // 阶段 8 · P0：任务状态条（时长 / 步数 / 用量）—— 后端每步推一次，权威值
+  if (msg.type === 'status') {
+    if (store.sending) store.status = { ...(store.status || {}), ...msg }
     return
   }
   // 阶段 5（T5.6）：节点级进度 —— 任务进行中就能看到走到哪一步了
@@ -117,6 +166,9 @@ function handleWsMessage(msg) {
   }
   if (msg.type === 'result') {
     store.sending = false
+    store.stopping = false
+    stopTicker()
+    store.status = null // 结果卡片里有最终数字，状态条不重复显示
     // 任务结束 → 弹框与队列都该清掉（后端不会再等它们了）
     store.permissionRequest = null
     store.permissionQueue = []
@@ -132,6 +184,9 @@ function handleWsMessage(msg) {
   }
   if (msg.type === 'error') {
     store.sending = false
+    store.stopping = false
+    stopTicker()
+    store.status = null
     store.permissionRequest = null
     store.permissionQueue = []
     // 同上的理由：把**那一条**占位气泡改成错误气泡（以前是"改 phase + 再 push 一条"，
@@ -169,6 +224,19 @@ export function respondPermission({ requestId, allow, alwaysAllow = false }) {
   ws.send(JSON.stringify({ type: 'permission_response', requestId, allow, alwaysAllow }))
   // 队列里还有就接着问下一个（没有则收起弹框）
   store.permissionRequest = store.permissionQueue.shift() || null
+}
+
+/**
+ * 阶段 8 · P0：停止当前任务。
+ *
+ * ⚠️ **协作式**：后端在下一个检查点（节点入口 / ReAct 每一步 / 每次工具调用前）才停，
+ * 正在飞的那一次模型调用不会被打断 —— 所以按钮会先变成「停止中…」。
+ * 若此刻正卡在权限弹框上，后端会立刻把弹框收掉再停（不用等确认超时）。
+ */
+export function stopTask() {
+  if (store.wsStatus !== 'open' || !store.sending || store.stopping) return
+  store.stopping = true
+  ws.send(JSON.stringify({ type: 'stop' }))
 }
 
 /** 切换权限模式：本连接立即生效，并按 D4 规则持久化（「放开」只生效不落盘）。 */

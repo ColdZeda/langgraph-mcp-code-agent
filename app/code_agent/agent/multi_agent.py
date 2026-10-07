@@ -29,6 +29,12 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
+from app.code_agent.agent.cancel import (
+    REASON_USER,
+    REASON_WALL_CLOCK,
+    TaskCancelled,
+    current_token,
+)
 from app.code_agent.agent.context import (
     compact_history,
     estimate_messages_tokens,
@@ -105,6 +111,10 @@ class AgentState(TypedDict):
     knowledge: str  # 任务开始时自动注入的相关经验（T4.4 ②；空串=没注入）
     budget_exceeded: bool  # 任务级 token 预算是否已击穿（T4.3）
     pruned_messages: int  # 节点级剪枝砍掉的消息条数（T4.3，用于留证据）
+    # ── 阶段 8 · P0：停止（协作式取消 / 墙钟）──
+    cancelled: bool  # 本次任务是否被停止（用户点停止 / 墙钟到点）
+    cancel_reason: str  # 停止原因码："user" / "wall_clock"（空串=没停）
+    cancel_stage: str  # 在哪个节点停下的："planner" / "executor" / "verifier"
     # ── 跨轮记忆（唯一的会话通道）──
     # ⚠️ 必须带 `add_messages` reducer：没 reducer 的通道是"新值覆盖旧值"，
     #    那样即使接了 checkpointer，按 thread_id 也恢复不出对话。
@@ -213,12 +223,147 @@ def _plan_to_text(plan: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 阶段 8 · P0：停止（协作式取消 + 墙钟）与任务状态条
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _cancel_reason_text(token: Any) -> str:
+    """停止原因 → 给用户看的中文（原因码本身在 `cancel.py` 里，是结构化的）。"""
+    reason = getattr(token, "reason", "") or REASON_USER
+    if reason != REASON_WALL_CLOCK:
+        return "你点了「停止」"
+    limit = float(getattr(token, "wall_clock", 0) or 0)
+    minutes = f"{limit / 60:.0f} 分钟" if limit >= 60 else f"{limit:.0f} 秒"
+    return f"达到单任务最长执行时间（{minutes}，CODE_AGENT_TASK_WALL_CLOCK）"
+
+
+def _cancel_where_text(stage: str, step_count: int, tool_calls: int) -> str:
+    """停在哪 —— **按真实发生的事说**，不能出现"一步都没跑"却已经跑过工具的情况。"""
+    if stage == "planner":
+        return "任务在「规划阶段」就停了（还没开始执行）"
+    if stage == "verifier":
+        return "产物已经产出，「验收环节」被停止"
+    if step_count > 0:
+        return f"任务在「第 {step_count} 步之后」停下"
+    if tool_calls > 0:
+        return "任务在「执行中途」停下（那一步没走完）"
+    return "任务在「开始执行前」就停了（一步都没跑）"
+
+
+def _cancel_message(
+    token: Any, *, stage: str, step_count: int, total_tokens: int, tool_calls: int, last: str = ""
+) -> str:
+    """停止后的**固定中文说明**。
+
+    为什么要"固定"：第 2 题现场是「因预算终止」却被拼成"验收未通过"+ 一句英文错误串，
+    用户根本看不出发生了什么（账本 R5）。停止也一样，必须一眼看懂：
+    **谁停的 / 停在哪 / 已经发生了什么 / 还能怎么办**。
+    """
+    elapsed = float(getattr(token, "elapsed", lambda: 0.0)())
+    minutes, seconds = divmod(int(elapsed), 60)
+    return (
+        f"【已停止】{_cancel_reason_text(token)} —— "
+        f"{_cancel_where_text(stage, step_count, tool_calls)}。\n"
+        f"已用 {minutes} 分 {seconds} 秒（不含人工确认的等待）· 累计 {total_tokens} token · "
+        f"已执行 {tool_calls} 次工具调用。\n"
+        "⚠️ 已经发生的副作用（写好的文件 / 建好的目录 / 库里的数据）一律保留 —— "
+        "停止只保证「后面不再继续」，不做回滚。\n"
+        f"停下前拿到的最后一段结论：{last[:500] or '（无）'}\n"
+        "如需继续，请重新发起任务、并把范围说小一点（例如只处理指定的那几个文件）。"
+    )
+
+
+def _stopped() -> Any:
+    """当前任务的停止开关是否已生效；返回 token（没绑定时 None）。"""
+    token = current_token()
+    return token if token is not None and token.cancelled else None
+
+
+async def _emit_status() -> None:
+    """推一条任务状态条事件（时长 / 步数 / 用量）。
+
+    ⚠️ **没有绑定停止开关时一个事件都不发** —— evals、单测、任何不关心界面状态的入口
+    零改动（与 `events.emit` 的"没绑 sink 就跳过"同一个设计）。
+    """
+    token = current_token()
+    if token is None:
+        return
+    await emit({"type": "status", **token.snapshot()})
+
+
+def _cancel_stop_result(
+    state: AgentState,
+    token: Any,
+    *,
+    stage: str,
+    step_count: int = 0,
+    tokens_spent: int = 0,
+    trace: list[dict] | None = None,
+    messages: list | None = None,
+    last_content: str = "",
+    pruned: int = 0,
+) -> dict:
+    """停止命中时的**统一返回**（executor 用；planner / verifier 见各自节点）。
+
+    与"预算击穿"那条路**刻意分开**：预算击穿是"钱烧完了"，停止是"人让它停/时间到了"，
+    两种终止的文案、`cancel_reason`、以及"要不要再去验收"都不一样。
+    """
+    trace = trace or []
+    prior_trace = list(state.get("executor_trace_list") or [])
+    total = state.get("token_usage", 0) + tokens_spent
+    return {
+        "executor_result": _cancel_message(
+            token,
+            stage=stage,
+            step_count=step_count,
+            total_tokens=total,
+            tool_calls=len(prior_trace) + len(trace),
+            last=last_content,
+        ),
+        "cancelled": True,
+        "cancel_reason": getattr(token, "reason", "") or REASON_USER,
+        "cancel_stage": stage,
+        # trace 沿用"跨轮累积"的规矩（修 D2）：被打回重跑过的话，前几轮真干的活也在
+        "executor_trace": _trace_to_text(prior_trace + trace),
+        "executor_trace_list": prior_trace + trace,
+        "executor_messages": messages or [],
+        "step_count": state.get("step_count", 0) + step_count,
+        "token_usage": total,
+        "pruned_messages": state.get("pruned_messages", 0) + pruned,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 节点实现
 # ═══════════════════════════════════════════════════════════════════
 
 
 async def planner_node(state: AgentState) -> dict:
     """纯 LLM 规划，产出结构化计划。"""
+    token = current_token()
+    if token is not None:
+        token.stage = "planner"
+    await emit({"type": "node", "node": "planner", "status": "start"})
+    # ── 阶段 8 · P0：节点入口的停止检查（"还没开始的节点"一步都不该跑）──
+    stopped = _stopped()
+    if stopped is not None:
+        logger.info("任务已停止（%s）：跳过 Planner", stopped.reason)
+        await emit(
+            {
+                "type": "node",
+                "node": "planner",
+                "status": "end",
+                "cancelled": True,
+                "cancelReason": stopped.reason,
+            }
+        )
+        # 只打标记：真正的终止文案由 executor 节点统一产出（planner 后面必然是 executor）
+        return {
+            "cancelled": True,
+            "cancel_reason": stopped.reason,
+            "cancel_stage": "planner",
+        }
+    await _emit_status()
     retry_context = ""
     if state["retry_count"] > 0:
         retry_context = (
@@ -226,7 +371,6 @@ async def planner_node(state: AgentState) -> dict:
             f"{state['verdict']}\n）"
         )
     prompt = PLANNER_PROMPT.format(user_input=state["user_input"], retry_context=retry_context)
-    await emit({"type": "node", "node": "planner", "status": "start"})
     # 走 planner 角色的降级链（模型报错/超时会自动换下一个）
     resp = await invoke_with_fallback(
         registry.chain("planner"),
@@ -237,6 +381,9 @@ async def planner_node(state: AgentState) -> dict:
     if parsed and parsed.get("steps"):
         plan_text = json.dumps(parsed, ensure_ascii=False, indent=2)
     planner_tokens = _msg_tokens(resp)
+    if token is not None:
+        token.tokens = state.get("token_usage", 0) + planner_tokens
+    await _emit_status()
     await emit(
         {
             "type": "node",
@@ -306,7 +453,39 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
       - T4.4 ②：把任务开始时检索到的相关经验拼在【任务】前面；
       - T4.3 节点级：进模型前按 NODE_TOKEN_BUDGET 剪枝（先砍最老的工具结果）；
       - T4.3 任务级：累计 token 已击穿 TASK_TOKEN_BUDGET → **直接终止并报告**。
+
+    **阶段 8 · P0 在这里加了停止**（协作式取消，三道检查点里的两道）：
+      - **节点入口**：进来先看停止开关（"还没开始执行"就该一步都不跑）；
+      - **ReAct 每一步**：`astream` 循环开头 —— 停止后**下一步不再开始**；
+      - 第三道在工具调用层（`utils/tool_wrap.py::_process`），兜住"这一步里的下一次调用"。
+    ⚠️ **正在飞的那一次模型调用不会被打断**（协作式的固有代价）：它返回后我们才发现已停止。
     """
+    # ── 阶段 8 · P0：① 节点入口的停止检查（与"预算击穿"分开：停是"人/时间"，击穿是"钱"）──
+    token = current_token()
+    if token is not None:
+        token.stage = "executor"
+        token.usage_limit = TASK_TOKEN_BUDGET
+        token.tokens = state.get("token_usage", 0)
+    stopped = _stopped()
+    if stopped is not None:
+        # 停止可能是在**上一个节点**就被发现的（例如 Planner 入口）—— 沿用那个 stage，
+        # 文案才准确（"在规划阶段就停了" vs "开始执行前就停了"）。
+        stage = str(state.get("cancel_stage") or "executor")
+        logger.info("任务已停止（%s）：跳过 Executor 本次执行", stopped.reason)
+        # 事件仍然成对（start → end），前端能正常收起"执行中"
+        await emit({"type": "node", "node": "executor", "status": "start"})
+        await emit(
+            {
+                "type": "node",
+                "node": "executor",
+                "status": "end",
+                "steps": 0,
+                "cancelled": True,
+                "cancelReason": stopped.reason,
+            }
+        )
+        return _cancel_stop_result(state, stopped, stage=stage)
+
     tokens_used = state.get("token_usage", 0)
     if over_task_budget(tokens_used, TASK_TOKEN_BUDGET):
         logger.warning(
@@ -368,49 +547,95 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             pruned,
         )
     budget_hit = False
+    cancelled_hit = False
     spent_before = state.get("token_usage", 0)
     await emit({"type": "node", "node": "executor", "status": "start", "retry": is_retry})
-    async for chunk in executor_agent.astream(
-        {"messages": input_messages}, config={"recursion_limit": 100}
-    ):
-        step_count += 1
-        step_tools: list[str] = []
-        for _node, output in chunk.items():
-            if "messages" not in output:
-                continue
-            for msg in output["messages"]:
-                messages.append(msg)
-                tokens += _msg_tokens(msg)
-                if isinstance(msg, AIMessage):
-                    if msg.content:
-                        last_content = (
-                            msg.content if isinstance(msg.content, str) else str(msg.content)
-                        )
-                    for tc in getattr(msg, "tool_calls", None) or []:
-                        trace.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
-                        step_tools.append(tc.get("name", "?"))
-        # T5.6：每步推一条进度（带本步调了哪些工具），界面上就能看到"正在读哪个文件/查哪张表"
+    try:
+        async for chunk in executor_agent.astream(
+            {"messages": input_messages}, config={"recursion_limit": 100}
+        ):
+            # ── 阶段 8 · P0：② **ReAct 每一步**的停止检查 ──
+            # 放在最前面：这一块（本步的模型输出 + 它要调的工具）**一个都不执行**。
+            # 停止是协作式的 ⇒ 正在飞的那次模型调用拦不住，但它之后的这一步一定不会开始。
+            if token is not None and token.cancelled:
+                cancelled_hit = True
+                logger.info(
+                    "任务已停止（%s）：在第 %d 步后停下（本步未执行）", token.reason, step_count
+                )
+                break
+            step_count += 1
+            step_tools: list[str] = []
+            for _node, output in chunk.items():
+                if "messages" not in output:
+                    continue
+                for msg in output["messages"]:
+                    messages.append(msg)
+                    tokens += _msg_tokens(msg)
+                    if isinstance(msg, AIMessage):
+                        if msg.content:
+                            last_content = (
+                                msg.content if isinstance(msg.content, str) else str(msg.content)
+                            )
+                        for tc in getattr(msg, "tool_calls", None) or []:
+                            trace.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
+                            step_tools.append(tc.get("name", "?"))
+            if token is not None:
+                token.steps = state.get("step_count", 0) + step_count
+                token.tokens = spent_before + tokens
+            # T5.6：每步推一条进度（带本步调了哪些工具），界面上就能看到"正在读哪个文件/查哪张表"
+            await emit(
+                {
+                    "type": "node",
+                    "node": "executor",
+                    "status": "step",
+                    "step": step_count,
+                    "tools": step_tools,
+                }
+            )
+            # 阶段 8 · P0：任务状态条（时长 / 步数 / 用量；没绑停止开关时不发）
+            await _emit_status()
+            # ⚠️ 任务级预算**必须在这里也要判**：单个 executor 节点内部的 ReAct 循环
+            #    是不经过图节点边界的，只在节点入口判的话，一次"读大文件 + 反复重读"
+            #    就能在**一次**节点调用里烧掉十几万 token 而永远不触发上限（实测 127,071）。
+            if over_task_budget(spent_before + tokens, TASK_TOKEN_BUDGET):
+                budget_hit = True
+                logger.warning(
+                    "任务级 token 预算击穿：本节点已用 %d（累计 %d / 上限 %d），终止 ReAct 循环",
+                    tokens,
+                    spent_before + tokens,
+                    TASK_TOKEN_BUDGET,
+                )
+                break
+    except TaskCancelled as exc:
+        # ③ 第三道检查点在工具调用层（`tool_wrap._process`）：那一句抛出的 `TaskCancelled`
+        #    会穿过 LangGraph 的 ToolNode（它 `except Exception` 抓不到 BaseException）
+        #    直接解栈到这里 —— 于是"这一步剩下的工具调用"一个都不会执行。
+        cancelled_hit = True
+        logger.info("任务已停止（%s）：第 %d 步的工具调用被拦下", exc.reason, step_count)
+
+    if cancelled_hit:
         await emit(
             {
                 "type": "node",
                 "node": "executor",
-                "status": "step",
-                "step": step_count,
-                "tools": step_tools,
+                "status": "end",
+                "steps": step_count,
+                "cancelled": True,
+                "cancelReason": token.reason if token is not None else "",
+                "tokens": tokens,
             }
         )
-        # ⚠️ 任务级预算**必须在这里也要判**：单个 executor 节点内部的 ReAct 循环
-        #    是不经过图节点边界的，只在节点入口判的话，一次"读大文件 + 反复重读"
-        #    就能在**一次**节点调用里烧掉十几万 token 而永远不触发上限（实测 127,071）。
-        if over_task_budget(spent_before + tokens, TASK_TOKEN_BUDGET):
-            budget_hit = True
-            logger.warning(
-                "任务级 token 预算击穿：本节点已用 %d（累计 %d / 上限 %d），提前终止 ReAct 循环",
-                tokens,
-                spent_before + tokens,
-                TASK_TOKEN_BUDGET,
-            )
-            break
+        return _cancel_stop_result(
+            state,
+            token,
+            stage="executor",
+            step_count=step_count,
+            tokens_spent=tokens,
+            trace=trace,
+            messages=messages,
+            last_content=last_content,
+            pruned=pruned,
+        )
 
     if budget_hit:
         await emit(
@@ -463,6 +688,33 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
 
 async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
     """只读验收：对照需求+计划+执行轨迹，输出 PASS/FAIL + 原因。"""
+    token = current_token()
+    if token is not None:
+        token.stage = "verifier"
+    await emit({"type": "node", "node": "verifier", "status": "start"})
+    # ── 阶段 8 · P0：节点入口的停止检查 ──
+    stopped = _stopped()
+    if stopped is not None:
+        logger.info("任务已停止（%s）：跳过 Verifier 验收", stopped.reason)
+        await emit(
+            {
+                "type": "node",
+                "node": "verifier",
+                "status": "end",
+                "cancelled": True,
+                "cancelReason": stopped.reason,
+                "tokens": 0,
+            }
+        )
+        # ⚠️ **不动 `executor_result`**：产物已经产出了，停止只是"不再验收"，
+        #    把 Executor 的结论丢掉反而会让用户以为白跑了。
+        return {
+            "cancelled": True,
+            "cancel_reason": stopped.reason,
+            "cancel_stage": "verifier",
+            "token_usage": state.get("token_usage", 0),
+        }
+    await _emit_status()
     prompt = VERIFIER_PROMPT.format(
         user_input=state["user_input"],
         plan=_plan_to_text(state["plan"]),
@@ -473,23 +725,55 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
     tokens = 0
     messages: list = []
     trace: list[dict] = []
-    await emit({"type": "node", "node": "verifier", "status": "start"})
-    async for chunk in verifier_agent.astream(
-        {"messages": [HumanMessage(content=prompt)]}, config={"recursion_limit": 20}
-    ):
-        for _node, output in chunk.items():
-            if "messages" not in output:
-                continue
-            for msg in output["messages"]:
-                messages.append(msg)
-                tokens += _msg_tokens(msg)
-                if isinstance(msg, AIMessage):
-                    if msg.content:
-                        verdict_text = (
-                            msg.content if isinstance(msg.content, str) else str(msg.content)
-                        )
-                    for tc in getattr(msg, "tool_calls", None) or []:
-                        trace.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
+    cancelled_hit = False
+    try:
+        async for chunk in verifier_agent.astream(
+            {"messages": [HumanMessage(content=prompt)]}, config={"recursion_limit": 20}
+        ):
+            # 阶段 8 · P0：验收内部的每一步同样受停止约束
+            if token is not None and token.cancelled:
+                cancelled_hit = True
+                break
+            for _node, output in chunk.items():
+                if "messages" not in output:
+                    continue
+                for msg in output["messages"]:
+                    messages.append(msg)
+                    tokens += _msg_tokens(msg)
+                    if isinstance(msg, AIMessage):
+                        if msg.content:
+                            verdict_text = (
+                                msg.content if isinstance(msg.content, str) else str(msg.content)
+                            )
+                        for tc in getattr(msg, "tool_calls", None) or []:
+                            trace.append({"name": tc.get("name", "?"), "args": tc.get("args", {})})
+    except TaskCancelled as exc:
+        # 工具层抛出的停止（理由同 executor_node 里的同一段注释）
+        cancelled_hit = True
+        logger.info("任务已停止（%s）：Verifier 的工具调用被拦下", exc.reason)
+
+    if token is not None:
+        token.tokens = state.get("token_usage", 0) + tokens
+    if cancelled_hit:
+        await emit(
+            {
+                "type": "node",
+                "node": "verifier",
+                "status": "end",
+                "cancelled": True,
+                "cancelReason": token.reason if token is not None else "",
+                "tokens": tokens,
+            }
+        )
+        return {
+            "cancelled": True,
+            "cancel_reason": token.reason if token is not None else "",
+            "cancel_stage": "verifier",
+            "verifier_trace_list": trace,
+            "verifier_messages": messages,
+            "token_usage": state.get("token_usage", 0) + tokens,
+        }
+    await _emit_status()
     parsed = _extract_json(verdict_text)
     if parsed and parsed.get("verdict"):
         verdict_text = json.dumps(parsed, ensure_ascii=False)
@@ -513,10 +797,13 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
 def decide_after_verify(state: AgentState) -> Literal["executor", "end"]:
     """条件边：PASS → 结束；FAIL 且未超限 → 打回 Executor；超限 → 结束。
 
-    另外两条**必须先判**的终止条件：
+    另外三条**必须先判**的终止条件：
+      - 任务被**停止**（阶段 8 · P0：用户点停止 / 墙钟到点）→ 结束，绝不打回重跑；
       - 任务级 token 预算击穿（T4.3）→ 直接结束，别再打回重跑烧 token；
       - 击穿过一次之后同样直接结束。
     """
+    if state.get("cancelled"):
+        return "end"
     if state.get("budget_exceeded"):
         return "end"
     if _verdict_passed(state.get("verdict", "")):
@@ -582,12 +869,15 @@ def _route_decide(state: AgentState) -> Literal["simple", "complex"]:
 
 
 def after_executor(state: AgentState) -> Literal["verifier", "end"]:
-    """auto 模式下 Executor 的收尾：simple 路径直接结束，complex 路径去验收。
+    """Executor 的收尾：simple 路径直接结束，complex 路径去验收。
 
-    预算击穿（T4.3）必须先结束 —— 击穿时 Executor 根本没执行，
-    再去跑 Verifier 只是白花一次模型调用。
+    两条**必须先结束**的情形（阶段 8 · P0 把这条判据统一给 multi 模式也用上了）：
+      - 任务被**停止**：停止的语义就是"后面不再继续"，再去跑验收等于没停；
+      - **预算击穿**（T4.3）：击穿时 Executor 根本没执行完，再去跑 Verifier 只是白花一次模型调用。
+         ⚠️ 这条以前只在 `auto` 模式下成立 —— `multi` 模式的 `executor → verifier` 是**无条件边**，
+         于是限额版评估里 E015 被掐断后照样调了一次 Verifier（阶段 6 的教训），P1 的账也是这一条。
     """
-    if state.get("budget_exceeded"):
+    if state.get("cancelled") or state.get("budget_exceeded"):
         return "end"
     return "end" if state.get("route") == "simple" else "verifier"
 
@@ -676,7 +966,12 @@ def build_graph(
     elif mode == "multi":
         graph.add_edge(START, "planner")
         graph.add_edge("planner", "executor")
-        graph.add_edge("executor", "verifier")
+        # ⚠️ 阶段 8 · P0：这里以前是**无条件边** `executor → verifier` ⇒
+        #    被"停止"或被"预算"终止之后**照样会跑一次验收**（白花一次模型调用，
+        #    而且会把"停止"包装成"验收未通过"）。现在与 auto 模式统一走 `after_executor`。
+        graph.add_conditional_edges(
+            "executor", after_executor, {"verifier": "verifier", "end": END}
+        )
         graph.add_conditional_edges(
             "verifier",
             decide_after_verify,
@@ -728,9 +1023,14 @@ async def run_multi_agent(
     `auto_inject` / `auto_deposit`（T4.4）：默认跟随配置；评估侧**必须**显式关掉沉淀
     （否则评测过程会改写知识库，后续题目不可比）。
 
+    **阶段 8 · P0 —— 停止怎么接**：本函数**不自己造停止开关**；调用方在**外面**用
+    `with bind_cancel(CancelToken(wall_clock=...))` 绑一次（Web 的每条消息、CLI 的每一轮各绑一次）。
+    没绑 ⇒ 这个入口不参与停止（evals / 单测零改动）。停止命中时返回值里
+    `cancelled=True` / `cancel_reason` / `cancel_stage` 会说清"谁停的、停在哪"。
+
     返回: {plan, executor_result, executor_trace, verdict, retry_count, token_usage,
            final_response, mode, route, knowledge_injected, compacted, budget_exceeded,
-           pruned_messages, deposited}
+           pruned_messages, deposited, cancelled, cancel_reason, cancel_stage, status}
     """
     if executor_agent is None:
         executor_agent = build_executor_agent(all_tools, mode=mode)
@@ -776,22 +1076,62 @@ async def run_multi_agent(
                     },
                 )
 
-        state = await app.ainvoke(
-            # 只传增量：历史在 checkpoint 里，靠 messages 的 add_messages reducer 累积
-            {
-                "user_input": user_input,
-                "retry_count": 0,
-                "token_usage": 0,
-                "knowledge": knowledge_text,
-                "budget_exceeded": False,
-                "pruned_messages": 0,
-            },
-            config=config,
-        )
+        try:
+            state = await app.ainvoke(
+                # 只传增量：历史在 checkpoint 里，靠 messages 的 add_messages reducer 累积
+                {
+                    "user_input": user_input,
+                    "retry_count": 0,
+                    "token_usage": 0,
+                    "knowledge": knowledge_text,
+                    "budget_exceeded": False,
+                    "pruned_messages": 0,
+                    # 阶段 8 · P0：每轮显式复位停止标记
+                    # （复用同一个 thread 的**下一轮**不该继承上一轮的停止）
+                    "cancelled": False,
+                    "cancel_reason": "",
+                    "cancel_stage": "",
+                },
+                config=config,
+            )
+        except TaskCancelled as exc:
+            # ── 阶段 8 · P0 的**兜底**（正常路径用不到）──
+            # 三道检查点里，工具层那道抛出的 `TaskCancelled` 要穿过**整张图**才能到节点里；
+            # 各节点都接了，但万一将来新增节点/子图没接住，绝不能让它变成一次"未处理异常"
+            # —— 那对 Web 端就是"任务永远不回包"（比停止失败更糟）。
+            # 这里把最后一次 checkpoint 的值捞回来，按同一条停止路径收尾。
+            logger.warning("停止信号穿出了整张图（%s）：按停止路径收尾", exc.reason)
+            snapshot = await app.aget_state(config)
+            values = dict(snapshot.values or {})
+            state = {
+                **values,
+                **_cancel_stop_result(
+                    values,
+                    current_token(),
+                    stage=str(values.get("cancel_stage") or "executor"),
+                    tokens_spent=0,
+                ),
+            }
 
+        cancelled = bool(state.get("cancelled"))
+        cancel_reason = str(state.get("cancel_reason") or "")
+        cancel_stage = str(state.get("cancel_stage") or "")
         final_response = state["executor_result"]
         verdict_text = str(state.get("verdict") or "")
-        if verdict_text.strip() and not _verdict_passed(verdict_text):
+        if cancelled:
+            # 阶段 8 · P0：**停止的文案必须是"已停止"**，绝不能拼成"验收未通过"
+            # （第 2 题现场就是因预算终止却显示"验收未通过 + 一句英文" —— 账本 R5）。
+            # 停在哪一段，说法不一样：
+            #   · executor 停 ⇒ 那段中文说明由 `_cancel_stop_result` 产出，直接用；
+            #   · planner 停  ⇒ 一步都没跑，同样由 executor 的入口检查产出（planner 后面必然是它）；
+            #   · verifier 停 ⇒ 产物已经产出了，**保留 Executor 的结论**，只在前面加一句"没验收"。
+            if cancel_stage == "verifier":
+                final_response = (
+                    "【验收已停止】任务在验收环节被停止，因此这一轮**没有验收结论**。\n"
+                    "以下是 Executor 已经产出的结果（副作用均已保留）：\n\n"
+                    f"{state['executor_result']}"
+                )
+        elif verdict_text.strip() and not _verdict_passed(verdict_text):
             # ⚠️ 判据走 `_verdict_passed`（修 D1）：裁定**无法解析**时也算"未通过"，
             #    否则上游返回错误串时会被当成"没失败"，回复里既不提示、也照样算成功。
             parsed = _extract_json(verdict_text)
@@ -822,9 +1162,12 @@ async def run_multi_agent(
     deposited: list[dict] = []
     # ⚠️ 判据走 `_verdict_passed`（修 D1）：**没有裁定**（single / auto-simple 路径）算成功（保持原行为），
     #    **有裁定就必须是 PASS** 才算成功 —— 裁定无法解析（上游错误串）时**不该沉淀经验**。
+    # 阶段 8 · P0：被**停止**的任务同样不沉淀（半途而废的"经验"存进去就是噪音）。
     verdict_text = str(state.get("verdict") or "")
-    succeeded = (not verdict_text.strip() or _verdict_passed(verdict_text)) and not state.get(
-        "budget_exceeded"
+    succeeded = (
+        (not verdict_text.strip() or _verdict_passed(verdict_text))
+        and not state.get("budget_exceeded")
+        and not cancelled
     )
     if succeeded:
         deposited = await maybe_deposit_knowledge(
@@ -856,6 +1199,12 @@ async def run_multi_agent(
         "budget_exceeded": bool(state.get("budget_exceeded")),
         "pruned_messages": state.get("pruned_messages", 0),
         "deposited": deposited,
+        # ── 阶段 8 · P0：停止（谁停的 / 停在哪 / 到这一刻的状态）──
+        "cancelled": cancelled,
+        "cancel_reason": cancel_reason,
+        "cancel_stage": cancel_stage,
+        # 状态条口径（时长**不含人工确认等待**）：没有停止开关时是 None
+        "status": (current_token().snapshot() if current_token() is not None else None),
         # ── 阶段 6：**本轮实际用了哪些模型**（服务端回报的名字，不是配置里的）──
         "models_used": {
             "planner": [m for m in [state.get("planner_model") or ""] if m],

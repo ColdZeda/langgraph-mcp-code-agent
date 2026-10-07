@@ -5,7 +5,8 @@
 所以在工具被交给 agent **之前**统一包一层，是最集中的做法
 （也因此这是工具调用的**唯一收口** —— 权限层放这里不用改 6 个 MCP server）。
 
-⚠️ **权限判定必须是 `_process` 的第一句（缓存查询之前）**，理由见该函数里的注释：
+⚠️ **权限判定必须是 `_process` 里"缓存查询之前"的第一句**（阶段 8 起它前面多了**停止检查**那一句，
+判据不变：仍然在缓存查询之前），理由见该函数里的注释：
 不然"曾经允许过"的缓存值会让已被拒绝的调用照样返回结果。
 
 ⚠️ **接口形状是实测确认的，两条路径都要处理**（照抄第六版示例会炸）：
@@ -39,6 +40,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from app.code_agent.agent.cancel import raise_if_cancelled
 from app.code_agent.agent.context import externalize_tool_result
 from app.code_agent.config import TOOL_RESULTS_DIR
 from app.code_agent.security.permissions import enforce, enforce_sync
@@ -107,6 +109,11 @@ def wrap_tool(tool: Any, cache: ToolCache | None = None) -> Any:
     async def _process(args: tuple, kwargs: dict, call) -> Any:
         key_args = _args_key(args, kwargs)
 
+        # 阶段 8 · P0：**每次工具调用之前**的停止检查（协作式取消的最后一个收口）。
+        # 为什么放在最前面（权限判定之前）：已经决定要停的任务不该再去问用户"允许吗"。
+        # 没有停止开关时是空操作（evals / 单测零改动）。
+        raise_if_cancelled()
+
         # ⚠️⚠️ **权限判定必须在缓存查询之前**（阶段 5 · B1+ 约束 1）：
         #     否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果 ——
         #     这比"拒绝结果被缓存"更隐蔽，因为它看起来一切正常。
@@ -172,8 +179,9 @@ def _proxy_sync_tool(tool: Any, make_coroutine) -> Any:
     sync_coroutine = make_coroutine(lambda *a, **k: asyncio.to_thread(original_run, *a, **k))
 
     def _sync(*args: Any, **kwargs: Any) -> Any:
-        # 同步路径同样要过权限层（不能因为"路径不同"就绕过人工确认）——
-        # 同步路径没法 await，用 `enforce_sync`；没有同步确认通道时它**拒绝**。
+        # 同步路径同样要过停止检查与权限层（不能因为"路径不同"就绕过）——
+        # 同步路径没法 await，权限层用 `enforce_sync`；没有同步确认通道时它**拒绝**。
+        raise_if_cancelled()
         enforce_sync(name, _args_key(args, kwargs))
         text, artifact, is_pair = split_tool_output(original_run(*args, **kwargs))
         text = externalize_tool_result(name, text)

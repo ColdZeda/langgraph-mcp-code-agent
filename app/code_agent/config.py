@@ -127,6 +127,15 @@ NODE_TOKEN_BUDGET = int(os.getenv("CODE_AGENT_NODE_TOKEN_BUDGET", "30000"))
 # 任务级硬上限：单任务累计 token 超了 → **主动终止并报告**（而不是烧到失控）
 TASK_TOKEN_BUDGET = int(os.getenv("CODE_AGENT_TASK_TOKEN_BUDGET", "200000"))
 
+# ── T8.1 任务级墙钟（阶段 8 · P0）──
+# 单个任务最长**执行**时间（秒）；到点自动停 —— 与用户点「停止」走**同一条**路径
+# （`agent/cancel.py` 的 CancelToken：协作式检查点）。
+# ⚠️ **人工确认（权限弹框）期间不计时**：人看弹框的时间不是任务时间
+#    （探索测试第 2 题的现场样本：24 分钟一次工具调用都没有）。
+# ⚠️ 取 900 秒（15 分钟）的依据：正常任务实测 1~5 分钟；第 2 题那种失控烧了 30 分钟 / 20.8 万 token。
+# 0 或负数 = 不限制（仅用户点停止能停）。
+TASK_WALL_CLOCK = float(os.getenv("CODE_AGENT_TASK_WALL_CLOCK", "900"))
+
 # ── T4.5 Redis 工具结果缓存 ──
 REDIS_URL = os.getenv("CODE_AGENT_REDIS_URL", "redis://127.0.0.1:6379/0")
 TOOL_CACHE_TTL = int(os.getenv("CODE_AGENT_TOOL_CACHE_TTL", "600"))  # 秒

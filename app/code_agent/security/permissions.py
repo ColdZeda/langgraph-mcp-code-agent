@@ -38,6 +38,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.code_agent.agent.cancel import pause_clock, raise_if_cancelled
 from app.code_agent.config import CONFIRM_TIMEOUT, PERMISSION_MODE, PERMISSIONS_LOG
 
 logger = logging.getLogger(__name__)
@@ -588,8 +589,11 @@ async def enforce(tool_name: str, args: Any = None) -> None:
 
     request = build_request(tool_name, args, session)
     try:
-        # B2：超时 / 无人应答 → 自动拒绝（安全侧）
-        allowed = await asyncio.wait_for(session.approver(request), timeout=session.timeout)
+        # 阶段 8 · P0：**人工确认期间暂停墙钟** —— 人看弹框的时间不是任务时间
+        # （`pause_clock()` 在没有停止开关时是空操作，evals / 单测零开销）
+        with pause_clock():
+            # B2：超时 / 无人应答 → 自动拒绝（安全侧）
+            allowed = await asyncio.wait_for(session.approver(request), timeout=session.timeout)
     except TimeoutError:
         _deny(
             tool_name,
@@ -607,6 +611,12 @@ async def enforce(tool_name: str, args: Any = None) -> None:
             _deny_message(tool_name, session, "deny_no_channel"),
             args,
         )
+
+    # 阶段 8 · P0：**停止优先于"允许/拒绝"**。
+    # 用户点「停止」时，`web/server.py` 会把待确认的弹框按"拒绝"收掉好让这里解栈；
+    # 若当成"用户拒绝了这次调用"，就会往轨迹里留一条误导性的 `denied_by_user`
+    # （模型还会据此换别的办法继续干）⇒ 这里先判停止，直接抛出 `TaskCancelled`。
+    raise_if_cancelled()
 
     if not allowed:
         _deny(
@@ -659,10 +669,14 @@ def enforce_sync(tool_name: str, args: Any = None) -> None:
 
     request = build_request(tool_name, args, session)
     try:
-        allowed = bool(session.sync_approver(request))
+        # 阶段 8 · P0：同 `enforce` —— 人工确认期间暂停墙钟（CLI 的 input() 也走这里）
+        with pause_clock():
+            allowed = bool(session.sync_approver(request))
     except Exception as exc:  # noqa: BLE001
         logger.warning("同步确认通道异常（按拒绝处理）：%s: %s", type(exc).__name__, exc)
         allowed = False
+    # 阶段 8 · P0：停止优先于"允许/拒绝"（理由见 `enforce` 里同一句）
+    raise_if_cancelled()
     if not allowed:
         _deny(
             tool_name,

@@ -1,6 +1,6 @@
 <script setup>
-import { nextTick, ref } from 'vue'
-import { newSession, sendChat, store } from '../store'
+import { computed, nextTick, ref } from 'vue'
+import { newSession, sendChat, stopTask, store } from '../store'
 import ResultCard from './ResultCard.vue'
 import MarkdownText from './MarkdownText.vue'
 
@@ -20,6 +20,26 @@ const send = () => {
 const newSessionAndClear = () => {
   store.messages = []
   newSession()
+}
+
+// ── 阶段 8 · P0：任务状态条 ────────────────────────────────────────
+// 数值全部来自后端（`status` 事件），前端只负责补中间那 1 秒与排版。
+const status = computed(() => store.status)
+
+/** 秒 → `12:34` / `1:02:03`（比 `754.3s` 好扫）。 */
+function fmtElapsed(sec) {
+  const total = Math.max(0, Math.floor(Number(sec) || 0))
+  const pad = (n) => String(n).padStart(2, '0')
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
+}
+
+/** token 数 → `1.2 万`（量级够看；精确值在结果卡片的 meta 行）。 */
+function fmtTokens(n) {
+  const v = Number(n) || 0
+  return v >= 10000 ? `${(v / 10000).toFixed(1)} 万` : String(v)
 }
 
 defineExpose({ newSession: newSessionAndClear })
@@ -49,6 +69,25 @@ defineExpose({ newSession: newSessionAndClear })
         <div v-else class="row assistant">
           <div v-if="m.phase === 'running'" class="bubble running-bubble">
             <div class="running-head"><span class="spinner"></span>{{ m.text }}</div>
+            <!-- 阶段 8 · P0：任务状态条（时长 / 步数 / 用量）—— 跑长任务时一眼看得出"烧到哪了" -->
+            <div v-if="status" class="statusbar">
+              <span class="sb-item">
+                ⏱ {{ fmtElapsed(status.elapsedSec) }}<span
+                  v-if="status.wallClockSec"
+                  class="sb-dim"
+                > / {{ fmtElapsed(status.wallClockSec) }}</span>
+              </span>
+              <span class="sb-item">第 {{ status.steps }} 步</span>
+              <span class="sb-item">
+                {{ fmtTokens(status.tokens) }}<span
+                  v-if="status.usageLimit"
+                  class="sb-dim"
+                > / {{ fmtTokens(status.usageLimit) }}</span> token
+              </span>
+              <span v-if="status.pausedSec >= 1" class="sb-dim">
+                （人工确认等待 {{ fmtElapsed(status.pausedSec) }} 未计入）
+              </span>
+            </div>
             <!-- 阶段 5（T5.6）：节点级进度，任务进行中就看得见走到哪一步 -->
             <ol v-if="store.progress.length" class="progress">
               <li v-for="p in store.progress" :key="p.id">{{ p.text }}</li>
@@ -89,8 +128,27 @@ defineExpose({ newSession: newSessionAndClear })
         :disabled="store.wsStatus !== 'open' || !store.modelReady"
         @keydown.enter.exact.prevent="send"
       ></textarea>
-      <button :disabled="store.sending || !store.modelReady || !input.trim()" @click="send">
-        {{ store.sending ? '执行中' : '发送' }}
+      <!-- 阶段 8 · P0：停止按钮。⚠️ 协作式：点了之后在**下一个检查点**停下，
+           所以按钮先变成「停止中…」（不是立刻消失）。 -->
+      <button
+        v-if="store.sending"
+        class="btn-stop"
+        :disabled="store.stopping || store.wsStatus !== 'open'"
+        :title="
+          store.stopping
+            ? '已发出停止请求，会在下一步边界停下'
+            : '停止当前任务（已产出的文件/数据一律保留）'
+        "
+        @click="stopTask()"
+      >
+        {{ store.stopping ? '停止中…' : '⏹ 停止' }}
+      </button>
+      <button
+        v-else
+        :disabled="!store.modelReady || !input.trim()"
+        @click="send"
+      >
+        发送
       </button>
     </div>
   </div>
@@ -114,6 +172,11 @@ defineExpose({ newSession: newSessionAndClear })
 .user-bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
 .running-bubble { background: #1e293b; border: 1px solid #334155; color: #94a3b8; font-style: italic; }
 .running-head { display: flex; align-items: center; }
+/* 阶段 8 · P0：任务状态条（等宽数字，避免每秒抖动） */
+.statusbar { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-style: normal;
+  font-size: 12px; color: #cbd5e1; font-variant-numeric: tabular-nums; }
+.sb-item { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 2px 8px; }
+.sb-dim { color: #64748b; }
 .progress { margin: 8px 0 0 20px; padding: 0; list-style: none; font-style: normal; font-size: 12px; line-height: 1.9; color: #93c5fd; max-height: 220px; overflow-y: auto; }
 .progress li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .assistant-bubble { background: #1e293b; border: 1px solid #334155; }
@@ -128,4 +191,8 @@ textarea { flex: 1; resize: none; height: 64px; padding: 10px 12px; border-radiu
 textarea:focus { outline: none; border-color: #3b82f6; }
 .input-area button { width: 90px; border: none; border-radius: 10px; background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; }
 .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 阶段 8 · P0：停止按钮（红底，和"发送"位置一致，不会点错） */
+.input-area button.btn-stop { background: #b91c1c; width: 110px; }
+.input-area button.btn-stop:hover:not(:disabled) { background: #dc2626; }
+.input-area button.btn-stop:disabled { background: #7f1d1d; color: #fecaca; }
 </style>

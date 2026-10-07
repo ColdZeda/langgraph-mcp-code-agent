@@ -5,6 +5,8 @@
 - WS `/ws/chat`：每个连接绑定 thread_id；**同一会话串行、不同会话可并发**（阶段 5 · B3）
 - WS 上还会跑**人工确认**：后端发 `permission_request` → 前端弹框 → 前端回 `permission_response`
   （超时 / 没人应答 → 自动拒绝，见 `security/permissions.py`）
+- 阶段 8 · P0：WS 上还能**停止**（前端发 `stop` → 协作式取消 + 墙钟，见 `agent/cancel.py`），
+  跑任务期间后端还会推 `status` 事件（任务状态条：时长 / 步数 / 用量）
 - REST：会话列表 / 模型设置（热切换）/ 连接测试 / 权限模式持久化
 - 前端构建产物（`app/web/frontend/dist`）存在时自动托管
 """
@@ -24,6 +26,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from app.code_agent.agent.cancel import CancelToken, TaskCancelled, bind_cancel
 from app.code_agent.agent.events import bind_sink as bind_event_sink
 from app.code_agent.agent.multi_agent import (
     build_executor_agent,
@@ -40,6 +43,7 @@ from app.code_agent.config import (
     POWERSHELL_SERVER_PATH,
     RAG_SERVER_PATH,
     RUNTIME_DIR,
+    TASK_WALL_CLOCK,
     VM_SERVER_PATH,
     setup_logging,
 )
@@ -829,6 +833,10 @@ async def _run_chat(
     """跑一次任务（在后台 task 里，所以人工确认期间主循环还能继续收消息）。
 
     同一 `thread_id` 用**同一把会话锁**串行（B3）；不同会话互不阻塞。
+
+    阶段 8 · P0：这里创建**本次任务的停止开关**（`CancelToken`），并放进 `state`
+    —— 主循环与跑任务的 task **不是同一个上下文**，主循环要能"点停止"就必须拿到同一个对象
+    （与 `state["pending"]` 的传法同理）。
     """
     thread_id = state["thread_id"]
     async with await get_session_lock(thread_id):
@@ -842,6 +850,8 @@ async def _run_chat(
                 "message": "Planner → Executor → Verifier 协作中...",
                 "permissionMode": permission_mode,
                 "permissionModeLabel": mode_label(permission_mode),
+                # 界面据此显示"墙钟上限"（0 = 不限制）
+                "wallClockSec": float(TASK_WALL_CLOCK or 0),
             },
         )
         # 权限会话：模式来自前端下拉框；确认通道是这条 WS；「总是允许」集合跨消息复用（B7）
@@ -852,14 +862,17 @@ async def _run_chat(
             timeout=state["confirm_timeout"],
             always_allow=state["always_allow"],
         )
+        # 阶段 8 · P0：一次任务一个停止开关（墙钟 + 界面「停止」）
+        token = CancelToken(wall_clock=TASK_WALL_CLOCK or None)
+        state["cancel"] = token
 
         async def _push_node_event(event: dict) -> None:
             """T5.6：把节点级进度直接推给前端（用现有 WS，不引 SSE）。"""
             await _send(ws, state, {**event, "threadId": thread_id})
 
         try:
-            # 同时绑「权限会话」与「进度事件接收器」（都在当前 task 的上下文里）
-            with bind_session(session), bind_event_sink(_push_node_event):
+            # 同时绑「权限会话」「进度事件接收器」「停止开关」（都在当前 task 的上下文里）
+            with bind_session(session), bind_event_sink(_push_node_event), bind_cancel(token):
                 result = await run_multi_agent(
                     user_input,
                     runtime.tools,
@@ -868,12 +881,33 @@ async def _run_chat(
                     thread_id=thread_id,
                     mode=exec_mode,
                 )
+        except TaskCancelled:
+            # 阶段 8 · P0 的**纵深防御**：正常路径下 `run_multi_agent` 自己会兜住停止信号
+            # （见那里的 `except TaskCancelled`），这里接住的是"连它都没接住"的情况。
+            # ⚠️ 必须显式写这一条：`TaskCancelled` 继承 `BaseException`（为了穿透 ToolNode），
+            #    下面那条 `except Exception` 抓不到它 ⇒ 漏了这行用户就会"点了停止之后一直没有回包"。
+            #    ⚠️ 也**不能**改成 `except BaseException`：那会把 `asyncio.CancelledError`
+            #    （WS 断开时的正常取消）一起吞掉。
+            logger.info("停止信号穿到了 WS 层（thread_id=%s）", thread_id)
+            await _send(
+                ws,
+                state,
+                {
+                    "type": "error",
+                    "code": "cancelled",
+                    "message": "任务已停止（已产出的文件 / 数据一律保留）。",
+                },
+            )
+            return
         except Exception as e:
             logger.exception("任务执行失败")
             await _send(ws, state, {"type": "error", "message": f"{type(e).__name__}: {e}"})
             return
+        finally:
+            state["cancel"] = None
 
         elapsed = round(time.time() - start, 1)
+        status = result.get("status") or {}
         # 跨轮记忆由 checkpointer 落库（run_multi_agent 内部完成），这里不再手写 history
         await _send(
             ws,
@@ -891,6 +925,14 @@ async def _run_chat(
                 "mode": result.get("mode", exec_mode),
                 "route": result.get("route", ""),
                 "elapsedSec": elapsed,
+                # ── 阶段 8 · P0：停止 + 状态条口径 ──
+                # ⚠️ `elapsedSec` 是**墙上时钟**（含人工确认等待），`status.elapsedSec` 是
+                #    **扣除确认等待**的净任务时长 —— 两个都发，界面才能如实解释"为什么等了很久"。
+                "cancelled": bool(result.get("cancelled")),
+                "cancelReason": result.get("cancel_reason", ""),
+                "cancelStage": result.get("cancel_stage", ""),
+                "pausedSec": status.get("pausedSec", 0),
+                "netElapsedSec": status.get("elapsedSec"),
                 # 阶段 6：**本轮实际使用的模型**（服务端回报的名字）—— 结果卡片显示，
                 # 与"配置里写的是谁"区分开（官方改名/中转别名时两者会不同）
                 "modelsUsed": result.get("models_used", {}),
@@ -913,6 +955,8 @@ async def ws_chat(ws: WebSocket):
         # requestId -> Future[(allow, always)]，由主循环收答案、由跑任务的 task 消费
         "pending": {},
         "run_task": None,
+        # 阶段 8 · P0：本次任务的停止开关（`_run_chat` 建、主循环点「停止」时置位）
+        "cancel": None,
         "send_lock": asyncio.Lock(),
     }
     # 阶段 7：登记"这个会话正被一条连接占用"（删会话时要用它挡住）
@@ -960,6 +1004,26 @@ async def ws_chat(ws: WebSocket):
                 future.set_result(
                     {"allow": bool(msg.get("allow")), "always": bool(msg.get("alwaysAllow"))}
                 )
+                continue
+
+            if mtype == "stop":
+                # 阶段 8 · P0：界面上的「停止」。
+                # 它是**协作式**的：这里只置位，任务在下一个检查点（节点入口 / ReAct 每一步 /
+                # 每次工具调用前）自己停下 —— 正在飞的那一次模型调用不会被打断。
+                token = state.get("cancel")
+                if token is None:
+                    logger.info("收到 stop，但当前没有正在跑的任务（忽略）")
+                    continue
+                if token.cancel("user"):
+                    logger.info("收到 stop：已请求停止 thread_id=%s", state["thread_id"])
+                # ⚠️ 若此刻正卡在权限弹框上（任务在等答案），必须**立刻**把弹框收掉，
+                #    否则要等确认超时（默认 120 秒）才有下一个检查点 —— 那"停止"就形同虚设。
+                #    这里按"拒绝"回答；`permissions.enforce` 拿到答案后**先判停止、再判允许/拒绝**
+                #    ⇒ 不会留下一条误导性的"用户拒绝了该工具"记录。
+                for pending in list(state["pending"].values()):
+                    if not pending.done():
+                        pending.set_result({"allow": False, "always": False})
+                await _send(ws, state, {"type": "stopping", "threadId": state["thread_id"]})
                 continue
 
             if mtype == "new_session":

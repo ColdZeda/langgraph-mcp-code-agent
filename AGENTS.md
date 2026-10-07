@@ -7,24 +7,28 @@
 
 ## 接活先看
 
-**当前状态（2026-10-03）**：
+**当前状态（2026-10-07）**：
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口 |
+| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口；**P0 已落地**（停止 + 墙钟 + 停止按钮 + 任务状态条） |
 | 最近提交 | `git log --oneline -1`（别在文档里写死 hash —— 提交一次就过期）|
 | 远端 | `origin` = Gitee（镜像）· `github` = GitHub（主仓）；**tag `v1.0.0` 两边都有** |
 | CI | **passing**（`.github/workflows/ci.yml`）；跑 `ruff check` → `ruff format --check` → `pytest tests/ -v`，**不需要 `.env`** |
-| 测试 | **629** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **76%** |
+| 测试 | **655** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **77%** |
 | 评估 | **single 30/30 · multi 30/30**（平均分 1.0000，163 条断言）→ 报告 `docs/evidence/评估报告.md` |
 | 仓库可见性 | **public**（2026-10-03 定：作为对招聘方展示的入口） |
 
 **待办（当前真正未做的）**：
 
-1. **阶段 8 修复（进行中）** —— **P0** 停止（协作式）+ 墙钟（⚠️ 权限弹框期间暂停计时）+ 前端停止按钮 + 任务状态条 · **P1** 轨迹文案 / 因预算或取消终止**不调 Verifier** / §十五A 提示词三条收敛原则 · **P1.5** 入口"模板未渲染"检测 · **P2** token 预算放宽 + 按模型窗口自动算阈值。
-   账本（现象→证据→根因→待修）：`docs/records/2026-10-07_探索测试第1-2轮与问题账.md`。
+1. **阶段 8 修复（进行中）** —— **P0 ✅ 已落地**（协作式停止 + 墙钟 15 分钟 + 界面停止按钮 + 任务状态条）·
+   **P1** 轨迹文案 / 因预算或取消终止**不调 Verifier**（图侧已在 P0 顺手统一，剩下文案与那条测试）/ §十五A 提示词三条收敛原则 ·
+   **P1.5** 入口"模板未渲染"检测 · **P2** token 预算放宽 + 按模型窗口自动算阈值。
+   账本（现象→证据→根因→待修）：`docs/records/2026-10-07_探索测试第1-2轮与问题账.md`；
+   修复账（做了什么→证据）：`docs/records/2026-10-07_阶段8修复账.md`。
    **计划书**（要做什么 / 验收标准 / 执行顺序）在**仓库外**的项目档案目录（开发者本地维护）里的 `阶段8_探索测试与稳健性修复.md`。
-2. **探索测试 12 题**：**第 1 题 ✅ 通过**；**第 2 题 ⚠️ 产物正确但过程失控**（30 分钟 / 56 步 / 20.8 万 token / 15 次弹框，4 个问题见上行）；**第 3~12 题待修完再跑**。
+2. **探索测试 12 题**：**第 1 题 ✅ 通过**；**第 2 题 ⚠️ 产物正确但过程失控**（30 分钟 / 56 步 / 20.8 万 token / 15 次弹框，4 个问题见上行）；
+   **第 3~12 题待修完再跑**（P0 之后要先清产物、重跑第 1、2 题做端到端人工验收）。
 3. 本机 `.temp/` 有约 100 MB 临时产物（**不入库**）—— 待清理。
 4. 后续不在本项目内：JD 分析 → 知识补课 → 面试追问演练；**项目 #2**（部署 / CI-CD 那条线）。
 
@@ -97,7 +101,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 | 指定权限模式 | `uv run python main.py --permission readonly`（readonly / confirm（默认）/ open） |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**629 个**） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**655 个**） |
 | **真集成测试**（要真 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑） | `uv run python -m pytest -m integration -v`（5 条） |
 | **装 / 查 RAG 的本地模型**（不在仓库里，各 ≈87MB） | `uv run python scripts/fetch_models.py`（`--dry-run` 只看状态；`--source modelscope` 换通道） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v4-single` |
@@ -177,8 +181,8 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 
 | 数字 | 值 | 怎么核 |
 |---|---|---|
-| 测试数 | **629**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
-| 覆盖率 | **76%**（会随环境波动：依赖容器在跑/全停时略不同） | 同上（`addopts` 自带 `--cov`，看 `TOTAL` 行） |
+| 测试数 | **655**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
+| 覆盖率 | **77%**（会随环境波动：依赖容器在跑/全停时略不同） | 同上（`addopts` 自带 `--cov`，看 `TOTAL` 行） |
 | 评估题数 / 断言数 | 30 题 / 163 条 | `uv run python evals/run_e2e.py --list` |
 | MCP 工具数 | 25（+ 7 文件工具 = **32**） | `git grep -c "@mcp.tool" -- app/code_agent` |
 | 知识库条目 | 测试语料 35；**产品库默认 0** | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
@@ -187,13 +191,43 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 ### 安全与权限（阶段 5，**主防线在应用层**）
 
 - **三档权限**（只读 / **需确认（默认）** / 放开）与 **32 个工具**的档位表在 `app/code_agent/security/permissions.py`（只读 14 / 写执行 18 / 高危 6）。
-- 🔴 **判定必须是 `tool_wrap._process` 的第一句**（在缓存查询**之前**）—— 否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果。测试守着 32 个工具一个不多一个不少 + 四条实现约束。
+- 🔴 **`tool_wrap._process` 里的顺序不许动**：**停止检查 → 权限判定 → 缓存查询**。
+  ① 停止检查必须在权限之前（已经决定要停的任务不该再弹框问用户）；
+  ② 权限判定必须在缓存查询**之前** —— 否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果。
+  测试守着 32 个工具一个不多一个不少 + 四条实现约束。
 - ⚠️ **内容级黑名单修过形同虚设的漏口**：旧模式 `\brm\s+-rf\s+/\s` 要求 `/` 后**还有空白** ⇒ 最经典的 **`rm -rf /`**（`/` 在结尾）直接放行；PowerShell 侧还要求 `-Recurse` 在 `-Force` 前、不认 `rm`/`del`/`rd`/`ri` 别名。现在两侧都是"flag 后瞻匹配、顺序无关"。
 - ⚠️ **别指望命令自带的开关**：GNU rm 的 `--preserve-root` **只管"参数就是 `/` 自身"**（`rm -rf /*`、`rm -rf /mnt/c/…` 都不管）；`chmod`/`chown`/`chgrp` 递归操作 `/` **默认不保护**。
 - **回归测试** `tests/test_dangerous_commands.py`：**打桩 `subprocess`，断言危险命令走不到"启动子进程"那一步**。⚠️ **别再真打危险命令去"验证"**（阶段 5 真踩过：`rm -rf /` 真的进了 WSL）。
 - 🔴 **WSL2 只是隔离执行环境，不是安全沙箱**：它默认挂 `/mnt/c`，而 `vm.py` 还主动用这条通道读写 Windows 文件 ⇒ 对外措辞**别说"沙箱"**。
 - **可达性**：`execute_powershell_command` 是**唯一能把原始命令透传下去**的入口；VM 四个工具都 `shlex.quote` 过参数（那边属纵深防御）。
 - **审计**：`runtime/permissions.log`（所有确认决定 + 放开档高危操作，一行一条 JSON）。
+
+### 停止与墙钟（阶段 8 · P0）
+
+- **停止是"协作式"的**：只在三个**检查点**生效 —— ① 节点入口（planner / executor / verifier）
+  ② executor 的 **ReAct 每一步**（`astream` 循环开头）③ **每次工具调用之前**（`utils/tool_wrap.py::_process`）。
+  ⇒ **正在飞的那一次模型调用不会被打断**（它返回后才发现已停），但它之后的步骤一定不会再开始。
+  已发生的副作用**一律保留**（不回滚：回滚自己也可能失败，还会掩盖现场）。
+- 🔴 **`TaskCancelled` 必须继承 `BaseException`**（`app/code_agent/agent/cancel.py`）：工具调用发生在
+  LangGraph 的 `ToolNode` 里，它 `except Exception` 会把异常**变成一条 ToolMessage**交给模型 ⇒
+  "停止"会退化成"模型看到一条奇怪的错误、再决定下一步"（多烧一次调用，还可能换个办法接着干）。
+  ⚠️ 代价：**所有可能穿过它的入口都要显式接住**（`multi_agent` 各节点 + `run_multi_agent` 兜底 + `web/server.py::_run_chat`）。
+  ⚠️ **不许**把 `_run_chat` 的 `except TaskCancelled` 写成 `except BaseException`（会吞掉 WS 断开时的 `asyncio.CancelledError`）。
+  回归测试：`tests/test_cancel.py::test_real_tool_node_lets_the_stop_signal_through`（**用真 `ToolNode`**）。
+- **停止优先于"允许/拒绝"**：Web 收到 `stop` 时会把待确认的弹框**按拒绝收掉**（否则要等满确认超时才有下一个检查点），
+  而 `permissions.enforce` 拿到答案后**先判停止、再判允许/拒绝** ⇒ 不会留一条误导性的 `denied_by_user` 审计。
+- **墙钟** `CODE_AGENT_TASK_WALL_CLOCK`（**默认 900 秒 = 15 分钟**，0/负数 = 不限制）：
+  到点走**同一条**停止路径，只有原因码不同（`wall_clock`）。⚠️ **人工确认（弹框）期间不计时**
+  （`cancel.pause_clock()` 包住 `enforce` 的等待段；恒等口径 = 净任务时长）。
+- ⚠️ **`CancelToken` 一次任务一个**（CLI 每轮 / Web 每条消息新建）：复用会让"单任务墙钟"变成"进程开了多久"，
+  于是进程满 15 分钟后**每个**新任务都被立刻掐掉。
+- **评估（evals）不绑停止开关** ⇒ evals 既不会被墙钟掐断、也不发状态条事件（`emit` 的设计：没绑就跳过）。
+- **终止之后**：不调 Verifier（`after_executor` 判 `cancelled` / `budget_exceeded`）、不打回重跑、
+  **不沉淀经验**（半途而废的"经验"是噪音）、文案固定中文（`multi_agent._cancel_message`）。
+- **任务状态条**：`status` 事件（`elapsedSec` / `pausedSec` / `steps` / `tokens` / `usageLimit` / `wallClockSec`），
+  前端 `store.status` + 本地 1 秒补时（**弹框期间冻结**，与后端口径一致）。
+- **前端「停止」按钮**（`store.stopTask()` → WS `{"type":"stop"}` → `stopping` 回执 → `result.cancelled`）：
+  结果卡片显示 `⏹ 已停止 · 你点了「停止」`，**不是**"验收未通过"。
 
 ### Web 端（会话管理与模型设置）
 
@@ -245,7 +279,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 ```text
 main.py                      CLI 入口（argparse）
 app/code_agent/              Agent 主体
-├── agent/                   状态图(multi_agent) · 上下文工程(context) · 分层记忆(memory)
+├── agent/                   状态图(multi_agent) · 停止与墙钟(cancel) · 上下文工程(context) · 分层记忆(memory)
 │                            · 节点级事件(events) · REPL 与非交互入口(code_agent) · 提示词(prompts)
 ├── model/llm.py             模型注册表：按角色取 / 降级链 / 热切换（build_llm / set_llm）
 ├── mcp_servers/             自建 MCP server：powershell(2) / browser(1) / mysql(10) / vm(4) / code_tools(4)
@@ -253,7 +287,8 @@ app/code_agent/              Agent 主体
 │                            · chunking.py（纯函数，不 import torch）
 ├── security/permissions.py  三档权限档位表（32 工具）+ 判定 + 人工确认闸门 + 审计
 ├── tools/file_tools.py      FileManagementToolkit(root_dir=WORKSPACE_DIR) → 7 个文件工具
-└── utils/                   mcp 工厂(load_mcp_tools) · tool_cache(Redis) · tool_wrap(权限→外置→缓存)
+└── utils/                   mcp 工厂(load_mcp_tools) · tool_cache(Redis)
+                             · tool_wrap(停止检查→权限→外置→缓存：工具调用的唯一收口)
 config/models.json           模型注册表（默认空 = 走 .env；**进版本控制**，用户自定义模型在 web-settings.json）
 app/web/                     server.py（FastAPI：WS /ws/chat + REST + 托管 dist + /api/sessions）
                              · sessions.py（会话侧车库 runtime/sessions.db）· frontend/（Vue3 源码 + 入库的 dist）
@@ -261,7 +296,7 @@ evals/                       评估体系：tasks(30 题) · verifiers(判定器
                              · preflight · report · rag_bench · rag_ablation · merge_runs
                              · reset_eval_threads · env(语料隔离) + fixtures/knowledge/(35 条夹具)
 scripts/                     probe_mcp_server.py · fetch_models.py · mysql-init/ · run/（启停脚本）
-tests/                       629 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
+tests/                       655 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
 docs/                        architecture.md（ADR）· archive/（冻结快照）
                              · evidence/（评估原始结果 + 报告 + 截图）· records/（过程账，可编辑）
 ```

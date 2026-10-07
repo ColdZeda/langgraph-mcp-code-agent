@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app.code_agent.agent.cancel import CancelToken, bind_cancel
 from app.code_agent.agent.events import bind_sink
 from app.code_agent.agent.multi_agent import (
     build_executor_agent,
@@ -21,6 +22,7 @@ from app.code_agent.config import (
     PERMISSION_MODE,
     POWERSHELL_SERVER_PATH,
     RAG_SERVER_PATH,
+    TASK_WALL_CLOCK,
     VM_SERVER_PATH,
     setup_logging,
 )
@@ -166,16 +168,26 @@ async def _repl_loop(tools, executor_agent, verifier_agent, thread_id, mode) -> 
         print("=" * 60)
         start_time = time.time()
 
-        result = await run_multi_agent(
-            user_input,
-            tools,
-            executor_agent=executor_agent,
-            verifier_agent=verifier_agent,
-            thread_id=thread_id,
-            mode=mode,
-        )
+        # ── 阶段 8 · P0：**每一轮**一个停止开关（墙钟在这里生效）──
+        # ⚠️ 必须每轮新建：`CancelToken` 的计时起点就是任务起点，跨轮复用等于把
+        #    "单任务墙钟"变成"进程开了多久"，进程开满 15 分钟后每个新任务都会被立刻掐掉。
+        # CLI 没有"停止按钮"（Ctrl+C 是杀进程），这里绑 token 主要是让**墙钟**生效。
+        token = CancelToken(wall_clock=TASK_WALL_CLOCK)
+        with bind_cancel(token):
+            result = await run_multi_agent(
+                user_input,
+                tools,
+                executor_agent=executor_agent,
+                verifier_agent=verifier_agent,
+                thread_id=thread_id,
+                mode=mode,
+            )
 
         elapsed = time.time() - start_time
+        if result.get("cancelled"):
+            print(
+                f"\n⏹ [已停止] 原因：{result.get('cancel_reason')}（停在哪：{result.get('cancel_stage')}）"
+            )
         print(f"\n📝 [Planner] 计划（{elapsed:.1f}s）：")
         print("-" * 30)
         print(result["plan"])

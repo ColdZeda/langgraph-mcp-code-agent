@@ -40,6 +40,23 @@ const noVerdictLabel = (() => {
 })()
 const showTrace = ref(false)
 
+/** 阶段 8 · P0：本轮是不是被**停止**的（用户点停止 / 墙钟到点）。
+ *  为什么要单独判：停止时根本没有验收结论，若走下面那条"未产出裁定"分支，
+ *  会把"人让它停"显示成"这轮没验收" —— 用户看不出到底发生了什么。 */
+const cancelLabel = (() => {
+  if (!props.result.cancelled) return ''
+  return props.result.cancelReason === 'wall_clock'
+    ? '达到单任务墙钟上限（自动停止）'
+    : '你点了「停止」'
+})()
+const cancelStageText = (() => {
+  const stage = props.result.cancelStage
+  if (!props.result.cancelled) return ''
+  if (stage === 'planner') return '停在规划阶段（还没开始执行）'
+  if (stage === 'verifier') return '停在验收环节（产物已产出）'
+  return `停在第 ${props.result.stepCount} 步之后`
+})()
+
 /** 阶段 6：**本轮实际使用的模型**（服务端在响应里回报的那个名字）。
  *  为什么要显示它：配置里写的是"我让谁答"，这里是"**真的谁答的**"——
  *  官方把旧模型名路由到新模型、或用中转别名时，两者会不一样。 */
@@ -89,15 +106,25 @@ const modelsUsed = (() => {
     </div>
 
     <div class="card footer-row">
-      <span v-if="hasVerdict" class="badge" :class="passed ? 'pass' : 'fail'">
+      <!-- 阶段 8 · P0：停止优先于验收结论（停止时压根没有验收） -->
+      <span v-if="result.cancelled" class="badge stop" :title="cancelStageText">
+        ⏹ 已停止 · {{ cancelLabel }}
+      </span>
+      <span v-else-if="hasVerdict" class="badge" :class="passed ? 'pass' : 'fail'">
         {{ passed ? '✓ 验收通过' : '✗ 验收未通过' }}
       </span>
       <span v-else class="badge none">— 本轮未验收（{{ noVerdictLabel }}）</span>
-      <span v-if="verdictObj?.reason && !passed" class="reason">{{ verdictObj.reason }}</span>
+      <span v-if="!result.cancelled && verdictObj?.reason && !passed" class="reason">{{ verdictObj.reason }}</span>
       <span v-if="modelsUsed.all.length" class="models" :title="modelsUsed.roles">
         🧠 本轮实际使用：{{ modelsUsed.all.join('、') }}
       </span>
-      <span class="meta">打回 {{ result.retryCount }} 次 · 步数 {{ result.stepCount }} · token {{ result.tokenUsage }} · 耗时 {{ result.elapsedSec }}s</span>
+      <span class="meta">
+        打回 {{ result.retryCount }} 次 · 步数 {{ result.stepCount }} · token {{ result.tokenUsage }} ·
+        耗时 {{ result.elapsedSec }}s<span
+          v-if="result.pausedSec >= 1"
+          class="meta-dim"
+        >（含人工确认等待 {{ Math.round(result.pausedSec) }}s）</span>
+      </span>
     </div>
   </div>
 </template>
@@ -118,7 +145,9 @@ const modelsUsed = (() => {
 .badge.pass { background: #14532d; color: #86efac; }
 .badge.fail { background: #450a0a; color: #fca5a5; }
 .badge.none { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+.badge.stop { background: #422006; color: #fbbf24; cursor: help; }
 .reason { font-size: 12px; color: #fca5a5; }
 .models { font-size: 12px; color: #93c5fd; cursor: help; }
 .meta { margin-left: auto; font-size: 12px; color: #64748b; }
+.meta-dim { color: #475569; }
 </style>
