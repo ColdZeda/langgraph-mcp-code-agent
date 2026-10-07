@@ -9,6 +9,7 @@
 | 没人声明窗口 ⇒ 回落默认 128k | 全新 clone 不配任何东西也必须能跑 |
 | 注册表里声明的窗口**真的**被用上 | 端到端把自定义模型挂到 executor 角色上，看阈值是否跟着变 |
 
+⚠️ 比例 2026-10-07 从 15%/35% 调成 **25%/50%**（`compact` 必须明显小于 `node`，见 config.py）。
 ⚠️ 任务级**刻意不是**窗口的小比例（候选池当时写的是 60~70%）：它是"成本保险丝"，
 一个任务本来就可能跑好几轮满上下文 —— 128k × 65% ≈ 8.3 万，比今天的 20 万还紧，
 与"预算放宽到 50 万~100 万"的结论相反。现在按 `max(50 万, 4 倍窗口)` 算。
@@ -33,8 +34,8 @@ from app.code_agent.model.llm import registry  # noqa: E402
 def test_128k_window_gives_the_expected_numbers():
     b = budgets_for_window(128_000)
 
-    assert b.compact == 19_200  # 15%
-    assert b.node == 44_800  # 35%
+    assert b.compact == 32_000  # 25%
+    assert b.node == 64_000  # 50%
     assert b.task == 512_000  # max(50 万, 4×窗口)
     assert b.context_window == 128_000
     assert b.source == "window"
@@ -50,11 +51,24 @@ def test_thresholds_grow_with_the_window_and_are_capped():
     assert small.node <= mid.node <= big.node
     assert small.task <= mid.task <= big.task
 
-    assert small.compact == config.COMPACT_MIN, "32k 窗口的压实阈值撞下限"
-    assert small.node == config.NODE_MIN, "32k 窗口的节点额度撞下限（否则一调用就撞窗口）"
+    assert small.compact == 8_000, "32k 窗口：压实按 25% 算（没撞下限）"
+    assert small.node == 16_000, "32k 窗口：单次输入按 50% 算 —— **不能**被下限顶到 3 万"
     assert small.task == config.TASK_MIN, "任务级有下限：小窗口也不能把任务掐得太死"
     assert big.compact == config.COMPACT_MAX and big.node == config.NODE_MAX
     assert big.task == config.TASK_MAX
+
+
+def test_node_never_eats_more_than_half_the_window():
+    """🔴 安全性质：单次调用输入**不得超过窗口的一半**（留一半给输出 + 工具 + 估算误差）。
+
+    这条是 2026-10-07 补的：原先 `NODE_MIN=30000` 会把 32k 窗口的额度顶到 3 万
+    （= 窗口的 94%）⇒ 反而制造了「一次调用就撞窗口」的风险，方向是**反**的。
+    """
+    for window in (8_000, 16_000, 32_000, 64_000, 128_000, 200_000, 1_000_000):
+        node = budgets_for_window(window).node
+        assert node <= max(config.NODE_MIN, window // 2), (
+            f"窗口 {window} 算出的 node={node} 超过了一半"
+        )
 
 
 def test_task_budget_is_a_cost_fuse_not_a_window_fraction():
@@ -105,7 +119,7 @@ def test_no_declared_window_falls_back_to_128k(clean_registry):
     b = token_budgets()
 
     assert b.context_window == config.DEFAULT_CONTEXT_WINDOW
-    assert b.compact == 19_200 and b.node == 44_800 and b.task == 512_000
+    assert b.compact == 32_000 and b.node == 64_000 and b.task == 512_000
 
 
 def test_declared_window_drives_the_thresholds(clean_registry, monkeypatch):
@@ -118,8 +132,8 @@ def test_declared_window_drives_the_thresholds(clean_registry, monkeypatch):
     b = token_budgets()
 
     assert b.context_window == 200_000
-    assert b.compact == 30_000  # 15%
-    assert b.node == 70_000  # 35%
+    assert b.compact == 50_000  # 25%
+    assert b.node == 100_000  # 50%
     assert b.task == 800_000  # max(50 万, 4×20 万)
     assert registry.context_window("executor") == 200_000
 
@@ -131,7 +145,7 @@ def test_env_window_overrides_the_registry(clean_registry, monkeypatch):
     b = token_budgets()
 
     assert b.context_window == 32_000
-    assert b.node == config.NODE_MIN
+    assert b.node == 16_000, "32k 窗口 ⇒ 单次输入 1.6 万（不再被下限顶到 3 万）"
 
 
 def test_custom_model_without_window_still_works(clean_registry):

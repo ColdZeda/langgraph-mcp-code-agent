@@ -121,7 +121,7 @@ EXTERNALIZE_EXEMPT_TOOLS = {
 # ═══════════════════════════════════════════════════════════════════
 #
 # **为什么**：这三个阈值以前是**全局写死**的，跟"当前用哪个模型"无关 ——
-#   · 换个 32k 窗口的模型，`NODE_TOKEN_BUDGET=30000` 可能直接撞窗口（一次调用就超）；
+#   · 换个 32k 窗口的模型，`NODE_TOKEN_BUDGET` 若按老的写死值算可能直接撞窗口（一次调用就超）；
 #   · 换个 1M 窗口的模型，压实阈值 6000 又过于保守（模型明明记得住，却一直在摘要）。
 #
 # **解析顺序**（高优先级在前）：
@@ -132,7 +132,12 @@ EXTERNALIZE_EXEMPT_TOOLS = {
 #      `context_window`（`config/models.json` 或 Web 面板里加的自定义模型）> 128000（默认）。
 #
 # **比例**（token 是**估算值** ⇒ 一律留足余量）：
-#   压实 **15%** · 单次调用输入 **35%** · 任务累计 **max(50 万, 4 倍窗口)** 并封顶 200 万。
+#   压实 **25%** · 单次调用输入 **50%** · 任务累计 **max(50 万, 4 倍窗口)** 并封顶 200 万。
+#   ⚠️ **顺序约束**：`compact` 必须**明显小于** `node` —— 两者都会动历史，但 compact 是
+#      "用摘要换掉老历史"（信息还在），node 超限是"**直接砍掉**最老的消息"（信息没了）。
+#      25% : 50% = 1:2，给摘要留出提前量（15%/35% 那版偏早，2026-10-07 调）。
+#   ⚠️ **上限备忘**：`COMPACT_MAX` / `NODE_MAX` 是"理智闸门"。真用上 >500k 窗口的模型时，
+#      要**连上限一起抬**（否则"按窗口算"会被上限卡回原地：1M 窗口也会退回 64k / 200k）。
 # ⚠️ **任务级刻意不是窗口的小比例**：它是"**成本保险丝**"，不是"能不能塞进一次调用"的问题 ——
 #    一个任务本来就可能跑好几轮满上下文。候选池 §十三① 当时写的是"TASK ≈ 60~70%（窗口）"，
 #    但那是**比今天还紧**的（128k × 65% ≈ 8.3 万 < 现在的 20 万），与"预算放宽到 50 万~100 万"
@@ -140,13 +145,13 @@ EXTERNALIZE_EXEMPT_TOOLS = {
 DEFAULT_CONTEXT_WINDOW = int(os.getenv("CODE_AGENT_CONTEXT_WINDOW", "128000"))
 # 压实后**原样保留**的最近消息条数（越近的信息越要逐字保留）
 COMPACT_KEEP_MESSAGES = int(os.getenv("CODE_AGENT_COMPACT_KEEP", "8"))
-COMPACT_RATIO = 0.15
-NODE_RATIO = 0.35
+COMPACT_RATIO = 0.25
+NODE_RATIO = 0.50
 TASK_WINDOW_MULTIPLE = 4
 TASK_MIN = 500_000
 TASK_MAX = 2_000_000
 COMPACT_MIN, COMPACT_MAX = 6_000, 64_000
-NODE_MIN, NODE_MAX = 30_000, 200_000
+NODE_MIN, NODE_MAX = 4_000, 200_000
 
 
 @dataclass(frozen=True)
@@ -238,8 +243,8 @@ def token_budgets(role: str = "executor") -> TokenBudgets:
 # ⚠️ 下面三个常量是**默认窗口下的静态快照**（给 import 期就要用值的读者 + 兼容老代码）。
 #    运行期请用 `token_budgets()` —— 否则换了模型它不会跟着变。
 _DEFAULT_BUDGETS = budgets_for_window(DEFAULT_CONTEXT_WINDOW)
-COMPACT_THRESHOLD_TOKENS = _DEFAULT_BUDGETS.compact  # 默认窗口 15%（128k → 19200）
-NODE_TOKEN_BUDGET = _DEFAULT_BUDGETS.node  # 默认窗口 35%（128k → 44800）
+COMPACT_THRESHOLD_TOKENS = _DEFAULT_BUDGETS.compact  # 默认窗口 25%（128k → 32000）
+NODE_TOKEN_BUDGET = _DEFAULT_BUDGETS.node  # 默认窗口 50%（128k → 64000）
 TASK_TOKEN_BUDGET = _DEFAULT_BUDGETS.task  # max(50 万, 4×窗口)（128k → 512000）
 
 # ── T8.1 任务级墙钟（阶段 8 · P0）──

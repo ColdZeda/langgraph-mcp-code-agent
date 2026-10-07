@@ -47,7 +47,8 @@
 
 **③ 上下文工程**：长工具结果**外置**到磁盘、上下文里只留预览 + 路径（`read_file*` 在豁免名单里 ——
 实测不豁免会让 token 涨 7.3 倍）；历史超阈值**压实**成四段式摘要（摘要失败就保留原文，省 token 不能丢历史）；
-**token 预算**分节点级与任务级，且任务级在 ReAct 循环**内部逐步判**（只在节点入口判会漏掉单节点烧十几万 token）。
+**token 预算**分节点级与任务级（阈值**按当前模型的上下文窗口自动算**，模型可在界面里声明窗口），
+且任务级在 ReAct 循环**内部逐步判**（只在节点入口判会漏掉单节点烧十几万 token）。
 
 **④ Agent 编排**：LangGraph `StateGraph` 三阶段 + `route_node` 复杂度路由（`auto` 模式），
 Verifier 打回上限 `MAX_RETRY=2`；执行过程通过 WebSocket 推**节点级进度**（不引 SSE）。
@@ -292,8 +293,8 @@ uv run uvicorn app.web.server:app --port 8000
 | 机制 | 做什么 | 关键参数（`.env` 可调） |
 |---|---|---|
 | **工具结果外置** | 过程性长输出落盘到 `runtime/tool_results/`，上下文里只留预览 + 路径 | `CODE_AGENT_EXTERNALIZE_THRESHOLD=6000`（字符）/ 150 行 |
-| **对话压实** | 历史超阈值 → 最老的一段压成「目标 / 约束 / 已完成 / 未决」四段式摘要 | `CODE_AGENT_COMPACT_THRESHOLD=6000`（估算 token） |
-| **token 预算** | 节点级超预算先剪枝（砍最老的工具结果）；任务级超限**主动终止并报告** | `*_NODE_TOKEN_BUDGET=30000` / `*_TASK_TOKEN_BUDGET=200000` |
+| **对话压实** | 历史超阈值 → 最老的一段压成「目标 / 约束 / 已完成 / 未决」四段式摘要 | **按模型窗口自动算**（窗口的 25%；128k → 32000） |
+| **token 预算** | 节点级（单次调用输入）超预算先剪枝（砍最老的工具结果）；任务级（单任务累计）超限**主动终止并报告** | 同上，窗口的 **50%** / `max(50 万, 4×窗口)`（128k → 64000 / 512000） |
 | **分层记忆** | 语义记忆 = ChromaDB 知识库：**按语义块**建索引 + CrossEncoder 精排；任务开始时**自动注入**相关经验，任务成功后**自动沉淀**新经验 | `CODE_AGENT_RAG_*` |
 
 > ⚠️ **`read_file_range` / `read_file` 故意不参与外置**：实测把"读全文"的结果藏起来，
@@ -708,7 +709,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | **628**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
+| 测试数 | **701**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | **测试语料** 35（7 文件 × 5 条）→ `evals/fixtures/knowledge/`；产品库默认空 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数，**2026-09-24 语料修订后**） | top-1 命中正解文件 **0.40 → 0.60**（对照 0.70）；⚠️ 旧语料基线是 **0.20** | `uv run python evals/rag_ablation.py --reps 10` |

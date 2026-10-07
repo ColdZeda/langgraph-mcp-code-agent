@@ -308,7 +308,7 @@ async function remove(id) {
         />
         <p class="hint">
           填了它，<b>压实阈值 / 单次输入上限 / 任务预算</b>会按窗口自动算
-          （15% / 35% / max(50 万, 4×窗口)）；不填按 128000 算。
+          （25% / 50% / max(50 万, 4×窗口)）；不填按 128000 算。
           <code>.env</code> 里显式设了值的仍以 <code>.env</code> 为准。
         </p>
         <div v-if="formTestResult" class="result" :class="formTestResult.ok ? 'ok' : 'bad'">
