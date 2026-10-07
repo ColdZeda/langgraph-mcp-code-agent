@@ -11,11 +11,11 @@
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口；**P0 已落地并做完真机验收**（停止 + 墙钟 + 停止按钮 + 任务状态条；真机撞出的 F1/F2 也已修）· **P1 已落地**（终止文案统一 + §十五A 三条提问原则 + 顺手修的 F3） |
+| 阶段 | **阶段 8（探索测试驱动的稳健性修复）进行中** —— 阶段 0–7 已完成收口；**P0 已落地并做完真机验收**（停止 + 墙钟 + 停止按钮 + 任务状态条；真机撞出的 F1/F2 也已修）· **P1 已落地**（终止文案统一 + §十五A 三条提问原则 + 顺手修的 F3）· **P1.5 已落地**（入口「模板没替换」检测，含 30 道评估题的护栏） |
 | 最近提交 | `git log --oneline -1`（别在文档里写死 hash —— 提交一次就过期）|
 | 远端 | `origin` = Gitee（镜像）· `github` = GitHub（主仓）；**tag `v1.0.0` 两边都有** |
 | CI | **passing**（`.github/workflows/ci.yml`）；跑 `ruff check` → `ruff format --check` → `pytest tests/ -v`，**不需要 `.env`** |
-| 测试 | **665** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **77%** |
+| 测试 | **690** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **78%** |
 | 评估 | **single 30/30 · multi 30/30**（平均分 1.0000，163 条断言）→ 报告 `docs/evidence/评估报告.md` |
 | 仓库可见性 | **public**（2026-10-03 定：作为对招聘方展示的入口） |
 
@@ -24,7 +24,8 @@
 1. **阶段 8 修复（进行中）** —— **P0 ✅ 已落地 + 真机验收通过**（协作式停止 + 墙钟 15 分钟 + 界面停止按钮 + 任务状态条；
    现场撞出的 **F1**「弹框遮罩挡住停止按钮」与 **F2**「卡片步数跨轮累积」也都已修，见修复账「真机验收」一节）·
    **P1 ✅ 已落地**（预算终止的固定中文说明 + R6 的"见上方轨迹"已删 + §十五A 三条提问原则；顺手修了 F3「终止那轮的重跑不计次」与"重跑撞预算被包装成验收失败"）·
-   **P1.5** 入口"模板未渲染"检测 · **P2** token 预算放宽 + 按模型窗口自动算阈值。
+   **P1.5 ✅ 已落地**（`utils/placeholder_guard.py`：命中就只回问、不进图；工具层拦路径参数）·
+   **P2** token 预算放宽 + 按模型窗口自动算阈值。
    账本（现象→证据→根因→待修）：`docs/records/2026-10-07_探索测试第1-2轮与问题账.md`；
    修复账（做了什么→证据）：`docs/records/2026-10-07_阶段8修复账.md`。
    **计划书**（要做什么 / 验收标准 / 执行顺序）在**仓库外**的项目档案目录（开发者本地维护）里的 `阶段8_探索测试与稳健性修复.md`。
@@ -102,7 +103,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 | 指定权限模式 | `uv run python main.py --permission readonly`（readonly / confirm（默认）/ open） |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**665 个**） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**690 个**） |
 | **真集成测试**（要真 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑） | `uv run python -m pytest -m integration -v`（5 条） |
 | **装 / 查 RAG 的本地模型**（不在仓库里，各 ≈87MB） | `uv run python scripts/fetch_models.py`（`--dry-run` 只看状态；`--source modelscope` 换通道） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v4-single` |
@@ -182,8 +183,8 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 
 | 数字 | 值 | 怎么核 |
 |---|---|---|
-| 测试数 | **665**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
-| 覆盖率 | **77%**（会随环境波动：依赖容器在跑/全停时略不同） | 同上（`addopts` 自带 `--cov`，看 `TOTAL` 行） |
+| 测试数 | **690**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
+| 覆盖率 | **78%**（会随环境波动：依赖容器在跑/全停时略不同） | 同上（`addopts` 自带 `--cov`，看 `TOTAL` 行） |
 | 评估题数 / 断言数 | 30 题 / 163 条 | `uv run python evals/run_e2e.py --list` |
 | MCP 工具数 | 25（+ 7 文件工具 = **32**） | `git grep -c "@mcp.tool" -- app/code_agent` |
 | 知识库条目 | 测试语料 35；**产品库默认 0** | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
@@ -244,6 +245,17 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - 🔴 **终止说明里不许写「见上方工具调用轨迹」**（账本 R6）：历史回放**只有最终回复、没有轨迹**
   （`web/server.py::get_session_messages` 只回 role+content），那句话会把人引到不存在的地方。
   守卫在 `tests/test_termination.py`（**AST 级**：只查字符串字面量，注释里提它是允许的）。
+
+### 「模板没替换」的检测（阶段 8 · P1.5，候选池 §十五B）
+
+- 判据在 `utils/placeholder_guard.py`，**两道口子共用**：① 任务入口（`run_multi_agent`：命中 ⇒ 只回问、**不进图**，0 次模型/工具调用）② 工具层（`tool_wrap._process`：**路径类参数**命中 ⇒ 抛 `PlaceholderArgError`，普通 `Exception` ⇒ ToolNode 变成 ToolMessage，模型自己改）。
+- 🔴 **判据是「形状 + 占位词」双条件，不是见到尖括号就拦** —— 实测两道评估题会被朴素实现误伤：
+  `E016` 的 `{"status": "ok"}`（JSON 例子，**单花括号一律不管**）、`E029` 的 `TOTAL=<数字>`（`<数字>` 是文件内容的描述）。
+  只认：内层是全大写标识符（`YOUR_API_KEY`）或含中文占位词（用户名/密码/密钥/路径/目录/地址…），外加 `你的XXX` 一种（XXX 里要含占位词）。`<h1>` / `${name}` / `{{ name }}` / `<T>` / `你的代码` 都不算。
+- ⚠️ **逃生口**：任务里出现 `按字面` / `原样处理` / `不要替换` / `字面处理` / `别替换` ⇒ 不拦。
+- ⚠️ **正文参数不查**（`text` / `content` / `command`）：写一个含 `<h1>` 的文件是正当需求。
+- 🔴 **护栏**：`tests/test_placeholder_guard.py::test_every_eval_task_prompt_passes_the_guard`
+  把**全部 30 道评估题**过一遍 —— 以后谁加了带真占位符的题会当场变红。
 
 ### 什么时候该先问一句（阶段 8 · P1，候选池 §十五A）
 
@@ -313,8 +325,8 @@ app/code_agent/              Agent 主体
 │                            · chunking.py（纯函数，不 import torch）
 ├── security/permissions.py  三档权限档位表（32 工具）+ 判定 + 人工确认闸门 + 审计
 ├── tools/file_tools.py      FileManagementToolkit(root_dir=WORKSPACE_DIR) → 7 个文件工具
-└── utils/                   mcp 工厂(load_mcp_tools) · tool_cache(Redis)
-                             · tool_wrap(停止检查→权限→外置→缓存：工具调用的唯一收口)
+└── utils/                   mcp 工厂(load_mcp_tools) · tool_cache(Redis) · 占位符守卫(placeholder_guard)
+                             · tool_wrap(停止检查→占位符→权限→外置→缓存：工具调用的唯一收口)
 config/models.json           模型注册表（默认空 = 走 .env；**进版本控制**，用户自定义模型在 web-settings.json）
 app/web/                     server.py（FastAPI：WS /ws/chat + REST + 托管 dist + /api/sessions）
                              · sessions.py（会话侧车库 runtime/sessions.db）· frontend/（Vue3 源码 + 入库的 dist）
@@ -322,7 +334,7 @@ evals/                       评估体系：tasks(30 题) · verifiers(判定器
                              · preflight · report · rag_bench · rag_ablation · merge_runs
                              · reset_eval_threads · env(语料隔离) + fixtures/knowledge/(35 条夹具)
 scripts/                     probe_mcp_server.py · fetch_models.py · mysql-init/ · run/（启停脚本）
-tests/                       665 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
+tests/                       690 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
 docs/                        architecture.md（ADR）· archive/（冻结快照）
                              · evidence/（评估原始结果 + 报告 + 截图）· records/（过程账，可编辑）
 ```

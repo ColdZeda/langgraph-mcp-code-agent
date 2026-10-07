@@ -106,8 +106,12 @@ const modelsUsed = (() => {
     </div>
 
     <div class="card footer-row">
+      <!-- 阶段 8 · P1.5：入口发现"模板没替换" ⇒ 只回问、**没进图**（不是"没验收"） -->
+      <span v-if="result.needsClarification" class="badge ask">
+        ❓ 需要你确认（我没开跑）
+      </span>
       <!-- 阶段 8 · P0：停止优先于验收结论（停止时压根没有验收） -->
-      <span v-if="result.cancelled" class="badge stop" :title="cancelStageText">
+      <span v-else-if="result.cancelled" class="badge stop" :title="cancelStageText">
         ⏹ 已停止 · {{ cancelLabel }}
       </span>
       <span v-else-if="hasVerdict" class="badge" :class="passed ? 'pass' : 'fail'">
@@ -146,6 +150,8 @@ const modelsUsed = (() => {
 .badge.fail { background: #450a0a; color: #fca5a5; }
 .badge.none { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
 .badge.stop { background: #422006; color: #fbbf24; cursor: help; }
+/* 阶段 8 · P1.5：入口回问（"模板没替换"）—— 与"没验收"要一眼可分 */
+.badge.ask { background: #1e3a8a; color: #bfdbfe; }
 .reason { font-size: 12px; color: #fca5a5; }
 .models { font-size: 12px; color: #93c5fd; cursor: help; }
 .meta { margin-left: auto; font-size: 12px; color: #64748b; }

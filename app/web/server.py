@@ -931,6 +931,10 @@ async def _run_chat(
                 "cancelled": bool(result.get("cancelled")),
                 "cancelReason": result.get("cancel_reason", ""),
                 "cancelStage": result.get("cancel_stage", ""),
+                # 阶段 8 · P1.5（§十五B）：入口发现"模板没替换" ⇒ 只回问、没进图；
+                # 界面据此显示「需要你确认」而不是「本轮未验收」
+                "needsClarification": bool(result.get("needs_clarification")),
+                "placeholders": result.get("placeholders", []),
                 "pausedSec": status.get("pausedSec", 0),
                 "netElapsedSec": status.get("elapsedSec"),
                 # 阶段 6：**本轮实际使用的模型**（服务端回报的名字）—— 结果卡片显示，

@@ -512,6 +512,8 @@ async def run_single_task(
         "budget_exceeded": bool(result.get("budget_exceeded")),
         "pruned_messages": result.get("pruned_messages", 0),
         "knowledge_injected": result.get("knowledge_injected", []),
+        # 阶段 8 · P1.5：入口检测到"模板没替换" ⇒ 只回问、**没进图**（评估侧据此能看出来）
+        "needs_clarification": bool(result.get("needs_clarification")),
         "thread_id": thread_id,
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
         "node_events": [{"t_ms": round((ts - started) * 1000, 1), **ev} for ts, ev in events],

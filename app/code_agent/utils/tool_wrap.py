@@ -44,6 +44,7 @@ from app.code_agent.agent.cancel import raise_if_cancelled
 from app.code_agent.agent.context import externalize_tool_result
 from app.code_agent.config import TOOL_RESULTS_DIR
 from app.code_agent.security.permissions import enforce, enforce_sync
+from app.code_agent.utils.placeholder_guard import check_tool_args
 from app.code_agent.utils.tool_cache import CACHEABLE_TOOL_NAMES, ToolCache
 
 
@@ -113,6 +114,11 @@ def wrap_tool(tool: Any, cache: ToolCache | None = None) -> Any:
         # 为什么放在最前面（权限判定之前）：已经决定要停的任务不该再去问用户"允许吗"。
         # 没有停止开关时是空操作（evals / 单测零改动）。
         raise_if_cancelled()
+
+        # 阶段 8 · P1.5（候选池 §十五B）：**路径类参数里不许有没替换的模板占位符**。
+        # 放在权限判定之前：拿一个 `<你的路径>/a.txt` 去问用户"允许写入吗"是浪费双方的时间。
+        # 抛的是普通 Exception ⇒ ToolNode 会把它变成一条 ToolMessage，模型能自己改对。
+        check_tool_args(name, key_args)
 
         # ⚠️⚠️ **权限判定必须在缓存查询之前**（阶段 5 · B1+ 约束 1）：
         #     否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果 ——

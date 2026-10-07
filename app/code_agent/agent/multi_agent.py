@@ -57,6 +57,11 @@ from app.code_agent.config import (
     TASK_TOKEN_BUDGET,
 )
 from app.code_agent.model.llm import get_llm, invoke_with_fallback, registry, with_fallback
+from app.code_agent.utils.placeholder_guard import (
+    clarify_reply,
+    find_placeholders,
+    is_explicitly_literal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1076,12 +1081,62 @@ async def run_multi_agent(
 
     返回: {plan, executor_result, executor_trace, verdict, retry_count, token_usage,
            final_response, mode, route, knowledge_injected, compacted, budget_exceeded,
-           pruned_messages, deposited, cancelled, cancel_reason, cancel_stage, status}
+           pruned_messages, deposited, cancelled, cancel_reason, cancel_stage, status,
+           needs_clarification, placeholders}
     """
     if executor_agent is None:
         executor_agent = build_executor_agent(all_tools, mode=mode)
     if verifier_agent is None:
         verifier_agent = build_verifier_agent(all_tools)
+
+    # ── 阶段 8 · P1.5（候选池 §十五B）：入口的"模板未渲染"检测 ──
+    # 任务里出现没替换的占位符（`<你的WSL用户名>` / `${YOUR_PATH}` / `你的API密钥` …）
+    # ⇒ **只回问、不进图**：0 次模型调用、0 次工具调用。
+    # 判据只认"形状 + 占位词"，**单花括号一律不管**（JSON / 字典 / f-string 太常见）——
+    # 细节与那两道会被误伤的评估题（E016 / E029）见 `utils/placeholder_guard.py`。
+    placeholders = find_placeholders(user_input)
+    if placeholders and not is_explicitly_literal(user_input):
+        reply = clarify_reply(placeholders)
+        logger.info("任务里有未替换的模板占位符 %s：只回问、不进图", placeholders)
+        # ⚠️ 仍然把这一轮 (任务, 回问) 写回线程记忆 —— 否则下一轮的历史里看不到"我问过什么"
+        CHECKPOINT_DB.parent.mkdir(parents=True, exist_ok=True)
+        async with AsyncSqliteSaver.from_conn_string(str(CHECKPOINT_DB)) as saver:
+            # 图只用来写记忆：两个 agent 传 None（永远不会被调用到）
+            app = build_graph(None, None, checkpointer=saver, mode="single")
+            config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
+            await app.aupdate_state(
+                config,
+                {"messages": [HumanMessage(content=user_input), AIMessage(content=reply)]},
+            )
+        return {
+            "plan": "",
+            "executor_result": reply,
+            "executor_trace": "",
+            "verdict": "",
+            "retry_count": 0,
+            "mode": mode,
+            "route": "",
+            "token_usage": 0,
+            "executor_trace_list": [],
+            "verifier_trace_list": [],
+            "executor_messages": [],
+            "verifier_messages": [],
+            "step_count": 0,
+            "final_response": reply,
+            "knowledge_injected": [],
+            "compacted": False,
+            "budget_exceeded": False,
+            "pruned_messages": 0,
+            "deposited": [],
+            "cancelled": False,
+            "cancel_reason": "",
+            "cancel_stage": "",
+            "status": None,
+            # P1.5：前端据此显示「需要你确认」，而不是「未验收」
+            "needs_clarification": True,
+            "placeholders": placeholders,
+            "models_used": {"planner": [], "executor": [], "verifier": []},
+        }
 
     # ── T4.4 ②：任务开始时自动检索一次相关知识（不走 MCP，见 memory.py 的说明）──
     inject_enabled = RAG_AUTO_INJECT if auto_inject is None else auto_inject
