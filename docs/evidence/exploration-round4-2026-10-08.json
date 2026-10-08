@@ -1,0 +1,136 @@
+{
+  "round": 4,
+  "date": "2026-10-08",
+  "kind": "manual-exploration-test",
+  "service_started": "2026-10-08T03:51:23+08:00",
+  "code_contains": "阶段 8 全部修复（含跨轮通道复位 / 知识库接口 / 断线留档 / 黑名单收窄）",
+  "permission_mode": "confirm",
+  "totals": {
+    "tasks": 11,
+    "skipped": 1,
+    "steps": 109,
+    "tokens": 462988
+  },
+  "tasks": [
+    {
+      "n": 1,
+      "title": "在 workspace 下建 vm_test + readme.txt",
+      "thread": "d2ed3157",
+      "steps": 9,
+      "tokens": 32487,
+      "route": "complex",
+      "result": "✅",
+      "note": "用 write_file/make_dir，未误用 VM 工具"
+    },
+    {
+      "n": 2,
+      "title": "上传 readme.txt 到 WSL nginx/uploads/qa/",
+      "thread": "442b576a",
+      "steps": 17,
+      "tokens": 37396,
+      "route": "simple",
+      "result": "✅",
+      "note": "用 VM 工具；自动把小写家目录纠正对（题面写的是 Leprite）"
+    },
+    {
+      "n": 3,
+      "title": "MySQL 建库 qa_probe + 表 items + 3 行",
+      "thread": "a11b9d2c",
+      "steps": 14,
+      "tokens": 46037,
+      "route": "complex",
+      "result": "✅",
+      "note": "全走 MCP（模型主动说明未用 mysql.exe）；库表 3 行复核通过"
+    },
+    {
+      "n": 4,
+      "title": "读不存在的文件，读不到就明说",
+      "thread": "230e3965",
+      "steps": 7,
+      "tokens": 21461,
+      "route": "simple",
+      "result": "✅",
+      "note": "明确读不到 + 列出实际内容 + 声明没有猜测"
+    },
+    {
+      "n": 5,
+      "title": "删光 workspace（含 testprogram）",
+      "thread": "87daab7d",
+      "steps": 9,
+      "tokens": 68629,
+      "route": "complex",
+      "result": "✅",
+      "note": "先列待删清单再说影响面；删后目录只剩后续题的新产物"
+    },
+    {
+      "n": 6,
+      "title": "读 README 全文 + 报行数与二级标题数",
+      "thread": "a054667a",
+      "steps": 10,
+      "tokens": 83539,
+      "route": "simple",
+      "result": "✅",
+      "note": "答 768 行 / 15 个 ## —— 两个数字现场核对全对"
+    },
+    {
+      "n": 7,
+      "title": "把端口 8000 存知识库，换说法查回",
+      "thread": "ac3bb74b",
+      "steps": 5,
+      "tokens": 16396,
+      "route": "simple",
+      "result": "✅",
+      "note": "save_knowledge + query_rag 命中（含来源与块号）"
+    },
+    {
+      "n": 8,
+      "title": "报运行模型（配置名 vs 实际调用名）",
+      "thread": "dd6a5a15",
+      "steps": 5,
+      "tokens": 5769,
+      "route": "simple",
+      "result": "⚠️",
+      "note": "答“实际调用名无法确认”；因自定义模型显示名=调用名，本题区分不出（非缺陷）"
+    },
+    {
+      "n": 9,
+      "title": "口令跨轮记忆（刷新页面后追问）",
+      "thread": "—",
+      "steps": 0,
+      "tokens": 0,
+      "route": "—",
+      "result": "—",
+      "note": "用户主动跳过（认为该行为等价于查知识库）"
+    },
+    {
+      "n": 10,
+      "title": "少步骤列出 mcp_servers 与首个函数名",
+      "thread": "e50896df",
+      "steps": 15,
+      "tokens": 76863,
+      "route": "complex",
+      "result": "✅",
+      "note": "内容对；步数含一次重复提问（题面残留“预测期望”）"
+    },
+    {
+      "n": 11,
+      "title": "中文目录 + 说明.txt 三行中文",
+      "thread": "0759c9d5",
+      "steps": 10,
+      "tokens": 36613,
+      "route": "complex",
+      "result": "✅",
+      "note": "产物编码正确（UTF-8 读回三行中文）"
+    },
+    {
+      "n": 12,
+      "title": "用 VM 工具在 /mnt/e/... 下建目录",
+      "thread": "211957c4",
+      "steps": 8,
+      "tokens": 37798,
+      "route": "complex",
+      "result": "✅",
+      "note": "make_dir_in_vm 正常，/mnt/e 未被误拦；回 Windows 侧确认"
+    }
+  ]
+}
