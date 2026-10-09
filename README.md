@@ -247,6 +247,12 @@ uv run uvicorn app.web.server:app --port 8000
 .\scripts\run\start-app.ps1 -Dev   # 另开一个窗口跑 npm run dev（前端热更新，5173）
 ```
 
+> **端口不是死的**：脚本会**实测**首选端口（默认 8000）能不能绑定，不行就自动退避
+> （8000 → 8010 → 8020 → 8300 → 8310 → 9000 → 9010 → 9200，每个都实测），并告诉你改用了哪个。
+> 这很有用：Windows 上 Hyper-V/WSL 会把 `7927–8126` 这类区间**保留**掉（报 `winerror 10013`），
+> 表现是"端口没人占用但绑不上"。想关掉自动换端口用 `-NoFallback`；细节见
+> [`scripts/run/README.md`](scripts/run/README.md)。
+
 > 运行期**只有一个进程**：前端 `dist/` 由 FastAPI 用 `app.mount("/", StaticFiles(...))` 直接托管。
 > 只有在改前端源码时才需要第二个窗口跑 `npm run dev`，那时请打开 **http://127.0.0.1:5173**
 > （Vite 把 `/api` 与 `/ws` 转发给 8000）。
