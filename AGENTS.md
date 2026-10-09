@@ -360,6 +360,25 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - ⚠️ **`dist/index.html` 被 git 判为二进制（`-text`）**，不做行尾规范化；Vite 模板若 CRLF ⇒ 本地产物 CRLF、Linux CI 产物 LF ⇒ 任何两端比对**必红**（排查过三轮）。
 - `.gitattributes` 已显式钉 LF：`app/web/frontend/index.html`、`public/**`、`dist/index.html`。
 
+### 启动脚本（Windows · 两次真机事故换来的）
+
+- 🔴 **`scripts/**/*.ps1` 必须带 UTF-8 BOM**：`start-app.cmd` 调的是 **Windows PowerShell 5.1**，
+  它读**无 BOM** 的 `.ps1` 会按 ANSI(GBK) 解 ⇒ 中文乱码，而且**中文字符串末尾的引号会被吞掉**
+  ⇒ 语法直接坏（实测解析报 `Unexpected token`）；而 `pwsh` 7 下一切正常 ⇒ **只有双击启动的人会撞上**。
+  守卫：`tests/test_launcher_scripts.py::test_every_powershell_script_keeps_the_utf8_bom`。
+  ⚠️ 用编辑器改这些文件后**要确认 BOM 还在**（改一次就可能被抹掉）。
+- 🔴 **`start-app.ps1` 结尾必须 `exit $LASTEXITCODE`**：`& uv run uvicorn …` 失败**不会**自动成为
+  `powershell.exe` 的退出码 ⇒ `.cmd` 里的 `if errorlevel 1 pause` 不触发 ⇒ **窗口闪退、用户看不到任何错误**
+  （现场：8000 绑定失败，双击后窗口一闪而过）。守卫：`test_start_app_propagates_exit_code`。
+- ⚠️ **端口可用性必须用「真 bind」判断**（`TcpListener`），**不能**只查 `Get-NetTCPConnection -State Listen` ——
+  后者只看得见"有没有人在监听"，**查不出"端口被系统保留"**（Windows 上 Hyper-V/WSL 的 `excludedportrange`
+  会随机划走 7927–8126 这类区间；那台机器上 8000/8001 就被划走了）。判据看错误码：
+  **`10048` = 有进程占用**（去 `netstat -ano` 找 PID）；**`10013` = 被系统保留**
+  （换端口，或管理员 `net stop winnat` → `netsh int ipv4 add excludedportrange protocol=tcp startport=<端口> numberofports=1 store=persistent` → `net start winnat`）。
+  **别去杀进程**。查保留区间：`netsh interface ipv4 show excludedportrange protocol=tcp`。
+- **端口候选顺序**（每个都实测，被占/被保留就跳到下一个）：`-Port`（默认 8000）→ 8010 → 8020 → 8300 →
+  8310 → 9000 → 9010 → 9200；`-NoFallback` 可关掉自动换端口（失败即退出，退出码 1）。
+
 ### 仓库整理
 
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 ⇒ **做全仓扫描必须排除**（否则扫到生成物）。
