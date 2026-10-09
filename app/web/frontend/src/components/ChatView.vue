@@ -83,6 +83,22 @@ defineExpose({ newSession })
                   class="sb-dim"
                 > / {{ fmtTokens(status.usageLimit) }}</span> token
               </span>
+              <!-- token **明细**（计费口径的三项；缺哪项就不显示哪项 —— 不拿 0 冒充"没有"）。
+                   ⚠️ 说明：这是**计费口径**（每次调用累加），不是上下文长度。 -->
+              <span
+                v-if="status.inputTokens != null || status.outputTokens != null"
+                class="sb-item sb-dim"
+              >
+                （输入 {{ fmtTokens(status.inputTokens) }} · 输出
+                {{ fmtTokens(status.outputTokens)
+                }}<template v-if="status.cacheReadTokens"
+                  > · 缓存命中 {{ fmtTokens(status.cacheReadTokens) }}</template
+                >）
+              </span>
+              <!-- provider 没返回 usage 的调用次数 >0 ⇒ 上面的数字**偏低**，必须说出来（别让人以为很省） -->
+              <span v-if="status.unmeteredCalls > 0" class="sb-item sb-warn">
+                ⚠️ {{ status.unmeteredCalls }} 次调用未计量（该模型未返回用量，实际用量更高）
+              </span>
               <span v-if="status.pausedSec >= 1" class="sb-dim">
                 （人工确认等待 {{ fmtElapsed(status.pausedSec) }} 未计入）
               </span>
@@ -192,6 +208,8 @@ defineExpose({ newSession })
   font-size: 12px; color: #cbd5e1; font-variant-numeric: tabular-nums; }
 .sb-item { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 2px 8px; }
 .sb-dim { color: #64748b; }
+/* 「N 次调用未计量」——警示色：数字偏低这件事必须显眼，否则会被误读成"很省" */
+.sb-warn { color: #fbbf24; border-color: #92400e; }
 /* 状态条上的停止按钮：红底、明显但不喧宾夺主（与输入区那个是同一个动作） */
 .sb-stop { margin-left: auto; padding: 3px 12px; font-size: 12px; border-radius: 6px;
   border: 1px solid #b91c1c; background: #7f1d1d; color: #fecaca; cursor: pointer; }

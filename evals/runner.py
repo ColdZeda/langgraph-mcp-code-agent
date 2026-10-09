@@ -485,6 +485,9 @@ async def run_one_task(
         # ── 过程指标 ──
         "elapsed_ms": elapsed_ms,
         "token_usage": int(result.get("token_usage") or 0),
+        # token **明细**（计费原料）：输入 / 输出 / 缓存命中 / 调用次数 / 未计量次数 / 首末时间 / 按模型分桶。
+        # ⚠️ 只计量、不算钱（没有价格表）。留下它 = 将来要按各家单价折算成本时，**历史轮次也能重算**。
+        "token_detail": result.get("token_detail") or {},
         "step_count": int(result.get("step_count") or 0),
         "tool_calls": len(result.get("tool_trace") or []),
         "tools_used": [str(t.get("name")) for t in (result.get("tool_trace") or [])],

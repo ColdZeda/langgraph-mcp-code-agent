@@ -50,6 +50,7 @@ from app.code_agent.agent.prompts import (
     SYSTEM_PROMPT_TEMPLATE,
     prompt_context,
 )
+from app.code_agent.agent.usage import empty_detail, merge_token_detail, normalize_usage
 from app.code_agent.config import (
     CHECKPOINT_DB,
     RAG_AUTO_DEPOSIT,
@@ -103,7 +104,8 @@ class AgentState(TypedDict):
     executor_trace: str  # Executor 工具调用摘要（供 Verifier 参考）
     verdict: str  # Verifier 判定（JSON：verdict/reason）
     retry_count: int  # 已打回次数
-    token_usage: int  # 全流程 token 累计
+    token_usage: int  # 全流程 token 累计（**计费口径**：每次调用累加，不是上下文长度）
+    token_detail: dict  # token 明细（计费原料）：{input, output, cache_read, calls, unmetered_calls, first_ts, last_ts, by_model}
     # evals 存档用（结构化输出）
     executor_trace_list: list[dict]  # Executor 工具调用 trace [{name, args}]
     verifier_trace_list: list[dict]  # Verifier 工具调用 trace
@@ -149,6 +151,7 @@ PER_TURN_RESET: dict[str, Any] = {
     "verdict": "",  # ⚠️ 不复位会让新一轮被误判成"重跑轮"
     "retry_count": 0,
     "token_usage": 0,
+    "token_detail": {},  # ⚠️ 明细同样必须复位（tokens 计数器的姊妹通道，漏了会跨轮累加）
     "executor_trace_list": [],
     "verifier_trace_list": [],
     "executor_messages": [],
@@ -246,9 +249,30 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+def _msg_usage(msg: Any) -> dict:
+    """取一条消息的 usage 明细（**计费原料**：输入 / 输出 / 缓存命中 / 模型名 / 时间 / 是否未计量）。
+
+    ⚠️ **只计量、不算钱**：项目里没有价格表（各家单价不同、还会调价），
+    这里负责把"将来能折算成本"的原料留下来；缺字段一律 `None`，**不猜 0**。
+    """
+    return normalize_usage(msg, model=_msg_model(msg))
+
+
 def _msg_tokens(msg: Any) -> int:
-    usage = getattr(msg, "usage_metadata", None)
-    return int(usage.get("total_tokens") or 0) if usage else 0
+    """取一条消息的 total token（**计费口径**：调用方按次累加 ⇒ 同一段历史会被反复计费）。
+
+    保留这个名字是为了不惊动既有调用点与测试；要明细请用 `_msg_usage`。
+    """
+    return int(_msg_usage(msg)["total"])
+
+
+def _merge_detail(state: dict, *usages: dict) -> dict:
+    """把若干次调用并进**本轮累计明细**（入参来自 `state["token_detail"]`）。"""
+    detail = dict(state.get("token_detail") or empty_detail())
+    for u in usages:
+        if u:
+            detail = merge_token_detail(detail, u)
+    return detail
 
 
 def _msg_model(msg: Any) -> str:
@@ -391,6 +415,7 @@ def _cancel_stop_result(
     last_content: str = "",
     pruned: int = 0,
     is_retry: bool = False,
+    token_detail: dict | None = None,
 ) -> dict:
     """停止命中时的**统一返回**（executor 用；planner / verifier 见各自节点）。
 
@@ -425,6 +450,9 @@ def _cancel_stop_result(
         # （否则卡片上会写「打回 0 次」，而实际上明明被打回过）
         "retry_count": state.get("retry_count", 0) + (1 if is_retry else 0),
         "token_usage": total,
+        "token_detail": token_detail
+        if token_detail is not None
+        else (state.get("token_detail") or {}),
         "pruned_messages": state.get("pruned_messages", 0) + pruned,
     }
 
@@ -476,9 +504,11 @@ async def planner_node(state: AgentState) -> dict:
     parsed = _extract_json(plan_text)
     if parsed and parsed.get("steps"):
         plan_text = json.dumps(parsed, ensure_ascii=False, indent=2)
-    planner_tokens = _msg_tokens(resp)
+    planner_usage = _msg_usage(resp)
+    planner_tokens = int(planner_usage["total"])
     if token is not None:
         token.tokens = state.get("token_usage", 0) + planner_tokens
+        token.add_usage(planner_usage)
     await _emit_status()
     await emit(
         {
@@ -493,6 +523,7 @@ async def planner_node(state: AgentState) -> dict:
     return {
         "plan": plan_text,
         "token_usage": state.get("token_usage", 0) + planner_tokens,
+        "token_detail": _merge_detail(state, planner_usage),
         # 结果卡片要显示"本轮实际用了哪个模型"（服务端回报的那个名字）
         "planner_model": _msg_model(resp),
     }
@@ -639,6 +670,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     #    这里先取出来，最后和本轮合并 —— 否则记录里只剩最后一次（见 D2 注释）。
     prior_trace = list(state.get("executor_trace_list") or [])
     tokens = 0
+    usage_detail = dict(state.get("token_detail") or empty_detail())  # 计费原料（本节点累加）
     messages: list = []
     step_count = 0
     # 跨轮记忆来自 state["messages"]（checkpointer 按 thread_id 恢复，add_messages 负责累积）
@@ -677,8 +709,15 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
                     continue
                 for msg in output["messages"]:
                     messages.append(msg)
-                    tokens += _msg_tokens(msg)
                     if isinstance(msg, AIMessage):
+                        # ⚠️ **只对模型输出计用量**：工具结果（ToolMessage）没有 usage_metadata，
+                        #    把它们也当"一次调用"会误报「N 次未计量」（2026-10-09 真机踩过：
+                        #    一次 14 步的任务报了 8 次"未返回用量"，其实全是工具结果）。
+                        usage = _msg_usage(msg)
+                        tokens += int(usage["total"])
+                        usage_detail = merge_token_detail(usage_detail, usage)
+                        if token is not None:
+                            token.add_usage(usage)
                         if msg.content:
                             last_content = (
                                 msg.content if isinstance(msg.content, str) else str(msg.content)
@@ -744,6 +783,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             pruned=pruned,
             # 阶段 8 · P1（F3）：被停止的这一轮若是重跑，同样要计一次打回
             is_retry=is_retry,
+            token_detail=usage_detail,
         )
 
     if budget_hit:
@@ -776,6 +816,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             "executor_messages": messages,
             "step_count": state.get("step_count", 0) + step_count,
             "token_usage": spent_before + tokens,
+            "token_detail": usage_detail,
             "pruned_messages": state.get("pruned_messages", 0) + pruned,
         }
 
@@ -792,6 +833,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         "step_count": state.get("step_count", 0) + step_count,
         "retry_count": retry_now,
         "token_usage": spent_before + tokens,
+        "token_detail": usage_detail,
         "pruned_messages": state.get("pruned_messages", 0) + pruned,
     }
 
@@ -823,6 +865,7 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
             "cancel_reason": stopped.reason,
             "cancel_stage": "verifier",
             "token_usage": state.get("token_usage", 0),
+            "token_detail": state.get("token_detail") or {},
         }
     await _emit_status()
     prompt = VERIFIER_PROMPT.format(
@@ -833,6 +876,7 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
     )
     verdict_text = ""
     tokens = 0
+    usage_detail = dict(state.get("token_detail") or empty_detail())  # 计费原料（本节点累加）
     messages: list = []
     trace: list[dict] = []
     cancelled_hit = False
@@ -849,8 +893,13 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
                     continue
                 for msg in output["messages"]:
                     messages.append(msg)
-                    tokens += _msg_tokens(msg)
                     if isinstance(msg, AIMessage):
+                        # ⚠️ 只对模型输出计用量（理由同 executor：工具结果没有 usage，计了会误报"未计量"）
+                        usage = _msg_usage(msg)
+                        tokens += int(usage["total"])
+                        usage_detail = merge_token_detail(usage_detail, usage)
+                        if token is not None:
+                            token.add_usage(usage)
                         if msg.content:
                             verdict_text = (
                                 msg.content if isinstance(msg.content, str) else str(msg.content)
@@ -882,6 +931,7 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
             "verifier_trace_list": trace,
             "verifier_messages": messages,
             "token_usage": state.get("token_usage", 0) + tokens,
+            "token_detail": usage_detail,
         }
     await _emit_status()
     parsed = _extract_json(verdict_text)
@@ -901,6 +951,7 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
         "verifier_trace_list": trace,
         "verifier_messages": messages,
         "token_usage": state.get("token_usage", 0) + tokens,
+        "token_detail": usage_detail,
     }
 
 
@@ -947,17 +998,21 @@ def route_task(task: str | dict) -> Literal["simple", "complex"]:
     text = task.get("user_input", "") if isinstance(task, dict) else str(task)
     if any(k in text for k in COMPLEX_KEYWORDS):
         return "complex"
-    return _llm_classify_complexity(text)
+    return _llm_classify_complexity(text)[0]
 
 
-def _llm_classify_complexity(task_text: str) -> Literal["simple", "complex"]:
-    """用一次轻量 LLM 调用判断复杂度；**失败时保守走 complex**（宁可多花 token 也别漏验证）。"""
+def _llm_classify_complexity(task_text: str) -> tuple[Literal["simple", "complex"], dict]:
+    """用一次轻量 LLM 调用判断复杂度；**失败时保守走 complex**（宁可多花 token 也别漏验证）。
+
+    返回 `(结论, usage 明细)` —— 这一跳**也是要花钱的**：以前只取结论、把用量丢了，
+    于是路由的成本从来没进过 token 统计（2026-10-09 真机核对时发现）。
+    """
     try:
         resp = get_llm("router").invoke(ROUTER_PROMPT.format(task=task_text))
         verdict = str(resp.content).strip().lower()
-        return "complex" if "complex" in verdict else "simple"
+        return ("complex" if "complex" in verdict else "simple"), _msg_usage(resp)
     except Exception:
-        return "complex"
+        return "complex", {}
 
 
 async def route_node(state: AgentState) -> dict:
@@ -968,9 +1023,23 @@ async def route_node(state: AgentState) -> dict:
     自己来自 simple 还是 complex 分支。
     """
     await emit({"type": "node", "node": "route", "status": "start"})
-    route = route_task(state)
+    text = state.get("user_input", "")
+    if any(k in text for k in COMPLEX_KEYWORDS):
+        route, usage = "complex", {}
+    else:
+        route, usage = _llm_classify_complexity(text)
+    if usage:
+        # 路由的用量同样计进本任务（含状态条）—— 它是一次真实的模型调用
+        token = current_token()
+        if token is not None:
+            token.tokens = state.get("token_usage", 0) + int(usage.get("total") or 0)
+            token.add_usage(usage)
     await emit({"type": "node", "node": "route", "status": "end", "route": route})
-    return {"route": route}
+    return {
+        "route": route,
+        "token_usage": state.get("token_usage", 0) + int(usage.get("total") or 0),
+        "token_detail": _merge_detail(state, usage) if usage else (state.get("token_detail") or {}),
+    }
 
 
 def _route_decide(state: AgentState) -> Literal["simple", "complex"]:
@@ -1218,6 +1287,7 @@ async def run_multi_agent(
             "mode": mode,
             "route": "",
             "token_usage": 0,
+            "token_detail": {},
             "executor_trace_list": [],
             "verifier_trace_list": [],
             "executor_messages": [],
@@ -1405,6 +1475,9 @@ async def run_multi_agent(
         "mode": mode,
         "route": state.get("route", ""),
         "token_usage": state.get("token_usage", 0),
+        # 计费原料（输入/输出/缓存命中/调用次数/未计量次数/首末时间/按模型分桶）
+        # ⚠️ **只计量、不算钱**：项目里没有价格表；将来要折算成本就用这份明细
+        "token_detail": state.get("token_detail") or {},
         "executor_trace_list": state.get("executor_trace_list", []),
         "verifier_trace_list": state.get("verifier_trace_list", []),
         "executor_messages": state.get("executor_messages", []),
