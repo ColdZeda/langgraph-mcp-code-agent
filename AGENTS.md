@@ -392,6 +392,13 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
   `records/`（**过程账，可编辑**：走查/修复/缺陷账，命名 `<日期>_<主题>.md`）。
 - ⚠️ **git 历史 2026-09-27 用 `filter-repo` 重写两次**（公开前脱敏），剔除 4 条路径（归档前后两批旧简历、`docs/handover.md`、`docs/resume-star.md`）⇒ **旧 hash 全部失效**，映射表与重写前整份备份在**本机备份（未入库）**。
 - 🔴 **脱敏核对不能只对路径，要对"值"**：第一次按路径核对，漏了**改名之前**的那批旧简历（`docs/interview/`），地基提交的树里还留着 8 个文件；第二次改成"把手机号/邮箱原文取出，`git grep -F` 跨**全部提交**核对"才查出来。
+- 🔴 **提交邮箱决定「贡献归属」，跟推送权限无关**（2026-10-09 踩过）：GitHub 只认**账号里已验证的邮箱**或
+  `<数字ID>+<用户名>@users.noreply.github.com`；Gitee 只认 `…@user.noreply.gitee.com` —— **两个平台互不认账**
+  （症状：push 成功、仓库也有内容，但 GitHub 主页热力图空白并提示 *"We need at least one non-empty commit with an email"*）。
+  本项目**本仓库（local）**已固定用 GitHub 的 noreply：`214781303+ColdZeda@users.noreply.github.com`
+  （**全局配置仍是 Gitee 身份**，其他项目不受影响）。
+  ⚠️ 一条提交**只能带一个邮箱** ⇒ **只能亮一边**；改邮箱只影响**之后**的提交（想让历史也归属必须重写历史：
+  hash 全变 + 两端 force push）。⚠️ 邮箱会写进每个提交、公开可查 ⇒ 优先用 noreply，别用真实邮箱。
 
 ## 代码地图
 
