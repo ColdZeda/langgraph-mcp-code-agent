@@ -11,10 +11,13 @@
       1. 检查 uv；
       2. 检查 4 个依赖容器（MySQL / Redis / SearXNG / nginx）——**只提示，不自动拉**；
       3. 检查前端产物是否存在；
-      4. 检查端口是否被占用。
+      4. **实测端口能否绑定**：不行就自动退避到下一个候选端口（见 -NoFallback）。
 
 .PARAMETER Port
-    后端端口，默认 8000。
+    期望端口，默认 8000。⚠️ 它只是**首选**：若被占用/被系统保留，脚本会自动换端口并告诉你。
+
+.PARAMETER NoFallback
+    关掉自动换端口：首选端口不可用就直接失败退出（exit 1）。
 
 .PARAMETER Dev
     额外**另开一个窗口**跑 `npm run dev`（Vite 热更新，5173）。
@@ -32,7 +35,8 @@
 param(
     [int]$Port = 8000,
     [switch]$Dev,
-    [switch]$SkipDeps
+    [switch]$SkipDeps,
+    [switch]$NoFallback
 )
 
 # ⚠️ 刻意不用 $ErrorActionPreference='Stop'：uvicorn 的日志走 **stderr**，
@@ -102,17 +106,82 @@ else {
     Write-Tip "构建一次： cd app\web\frontend ; npm install ; npm run build"
 }
 
-# ── 4) 端口 ──────────────────────────────────────────────
-Write-Step "检查端口 $Port 是否被占用"
-$busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-if ($busy) {
-    $ownerPid = ($busy | Select-Object -First 1).OwningProcess
-    $procName = (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue).ProcessName
-    Write-Host "      ✗ 端口 $Port 已被占用（PID $ownerPid / $procName）" -ForegroundColor Red
-    Write-Host "        要么关掉它，要么换端口： .\scripts\run\start-app.ps1 -Port 8001" -ForegroundColor Red
+# ── 4) 端口：**实测能否绑定**，不行自动退避 ──────────────
+# ⚠️ 为什么不查 `Get-NetTCPConnection -State Listen`（旧实现的做法）：
+#    那只查得到"有没有人在监听"，**查不出"端口被 Windows 保留"** ——
+#    2026-10-09 实测踩过：脚本打印"端口 8000 空闲"，随后 uvicorn 绑定报
+#    `[Errno 13] … [winerror 10013]`（Hyper-V/WSL 的 excludedportrange 把 7927–8126 划走了）。
+#    ⇒ 唯一可靠的判据是**真 bind 一次**：成功=可用；失败看错误码——
+#      10048 = 有进程占着（可查 PID）；10013 = 被系统保留（换端口或清保留，**别去杀进程**）。
+function Test-PortBindable {
+    param([int]$P)
+    $listener = $null
+    try {
+        $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $P)
+        $listener.Start()
+        return [pscustomobject]@{ Ok = $true; Code = 0 }
+    }
+    catch {
+        $code = 0
+        if ($_.Exception -is [System.Net.Sockets.SocketException]) { $code = $_.Exception.NativeErrorCode }
+        elseif ($_.Exception.InnerException -is [System.Net.Sockets.SocketException]) { $code = $_.Exception.InnerException.NativeErrorCode }
+        return [pscustomobject]@{ Ok = $false; Code = $code }
+    }
+    finally {
+        if ($listener) { try { $listener.Stop() } catch { } }
+    }
+}
+
+function Format-PortReason {
+    param([int]$P, [int]$Code)
+    if ($Code -eq 10048) {
+        $busy = Get-NetTCPConnection -LocalPort $P -State Listen -ErrorAction SilentlyContinue
+        $ownerPid = ($busy | Select-Object -First 1).OwningProcess
+        $procName = (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue).ProcessName
+        if ($ownerPid) { return "被占用（PID $ownerPid / $procName）" }
+        return '被占用（10048）'
+    }
+    if ($Code -eq 10013) {
+        return '被系统保留（Hyper-V/WSL 抢走的端口段；netsh interface ipv4 show excludedportrange protocol=tcp 可查）'
+    }
+    if ($Code -eq 0) { return '可用' }
+    return "绑定失败（错误码 $Code）"
+}
+
+Write-Step "检查端口 $Port（实测能否绑定；不行自动换）"
+# 候选顺序：先试你指定的那个，再试一组常见安全端口（都会**实测**，被保留的自动跳过）
+$candidates = @($Port) + @(8010, 8020, 8300, 8310, 9000, 9010, 9200) | Select-Object -Unique
+$chosen = 0
+$firstReason = ''
+foreach ($cand in $candidates) {
+    $probe = Test-PortBindable -P $cand
+    if ($probe.Ok) {
+        $chosen = $cand
+        if ($cand -eq $Port) {
+            Write-Ok "端口 $Port 可用（已实测绑定）"
+        }
+        elseif ($NoFallback) {
+            # -NoFallback：首选端口不可用就直接失败（**不**打印"已自动改用"，否则自相矛盾）
+            Write-Host "      ✗ 端口 $Port $firstReason（-NoFallback 已开启，不自动换端口）" -ForegroundColor Red
+            exit 1
+        }
+        else {
+            Write-Tip "✗ 端口 $Port $firstReason"
+            Write-Ok "→ 已自动改用端口 $chosen（同样经过实测）"
+            Write-Tip "想固定端口：关掉占用者，或用管理员把端口钉成保留 ——"
+            Write-Tip "  net stop winnat ; netsh int ipv4 add excludedportrange protocol=tcp startport=$Port numberofports=1 store=persistent ; net start winnat"
+        }
+        break
+    }
+    if ($cand -eq $Port) { $firstReason = Format-PortReason -P $cand -Code $probe.Code }
+}
+
+if ($chosen -eq 0) {
+    Write-Host "      ✗ 候选端口全部不可用（$($candidates -join ', ')）" -ForegroundColor Red
+    Write-Host "        首选端口 $Port $firstReason" -ForegroundColor Red
     exit 1
 }
-Write-Ok "端口 $Port 空闲"
+$Port = $chosen
 
 # ── 可选：前端热更新（另开窗口）──────────────────────────
 if ($Dev) {
@@ -143,3 +212,8 @@ $env:CODE_AGENT_WEB_URL = "http://127.0.0.1:$Port/"
 # 地址由后端在启动完成时用**绿色方框**打出来（见 server.py 的 `_log_ready_banner`）。
 # ⚠️ 只影响 uvicorn 自己的 logger，不影响本项目 `code_agent.*` 的日志（那是我们自己的配置）。
 & uv run uvicorn app.web.server:app --port $Port --log-level warning
+
+# ⚠️ **必须把退出码传出去**（2026-10-09 修）：`& uv run uvicorn …` 失败**不会**自动成为
+#    powershell.exe 的退出码 ⇒ 上层 `start-app.cmd` 的 `if errorlevel 1 pause` 不触发
+#    ⇒ 双击启动时"闪退"，用户看不到任何错误（现场：端口被系统保留，绑定报 10013）。
+exit $LASTEXITCODE
