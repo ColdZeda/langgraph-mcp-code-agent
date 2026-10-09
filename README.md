@@ -7,7 +7,7 @@
 
 [![CI](https://github.com/ColdZeda/langgraph-mcp-code-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/ColdZeda/langgraph-mcp-code-agent/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.13-blue)
-![Tests](https://img.shields.io/badge/tests-723%20%2B%205%20integration-brightgreen)
+![Tests](https://img.shields.io/badge/tests-743%20%2B%205%20integration-brightgreen)
 ![Eval](https://img.shields.io/badge/eval-30%2F30%20%C2%B7%20163%20assertions-success)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -23,7 +23,7 @@
 |---|---|
 | **评估**（30 题 / **163 条强断言**） | **single 30/30、multi 30/30**，平均分 **1.0000**；状态 124 / 轨迹 29 / 文本 10 全过 |
 | **成本画像**（multi ÷ single） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；**Verifier 占总 token 25%** |
-| **自动化测试** | **723** 条单元/工具级（约 30 秒跑完）+ **5** 条真集成测试（默认不跑，见「如何验证」） |
+| **自动化测试** | **743** 条单元/工具级（约 30 秒跑完）+ **5** 条真集成测试（默认不跑，见「如何验证」） |
 | **覆盖率 / 静态检查** | 78%~79%（`--cov`，随依赖容器状态波动）/ `ruff check` + `ruff format --check` |
 | **RAG 检索对照**（2×2 消融 + 全量召回对照组） | 文件粒度 top-1 **0.6 → 0.9**，真源 top-1 0.4 → 0.6，延迟 12.8ms → 86.7ms |
 | **可控性**（阶段 8） | 任务可**随时停止**（协作式取消：节点入口 / ReAct 每步 / 每次工具调用前，共 3 个检查点）+ **15 分钟墙钟**（人工确认期间不计时）；「预算或墙钟终止」与「验收未通过」严格区分，停止后**已完成产物一律保留** |
@@ -260,7 +260,7 @@ uv run uvicorn app.web.server:app --port 8000
 - 聊天界面：**执行过程实时可见**（阶段 5）—— 任务跑起来后逐行显示
   `路由 → Planner 规划 → Executor 第 N 步调用了哪个工具 → Verifier 验收`，
   而不是干等一个转圈；结束时给结构化结果——Planner 计划、工具调用轨迹（可折叠）、
-  Verifier 验收徽章、token / 耗时统计；**侧栏有执行模式与权限模式两个下拉框**
+  Verifier 验收徽章、token / 耗时统计（**token 按 输入 / 输出 / 缓存命中 拆开显示**，provider 不返回用量时会提示「N 次调用未计量」）；**侧栏有执行模式与权限模式两个下拉框**
 - **人工确认（阶段 5）**：「需确认」档下，Agent 要动写 / 执行类工具时前端会**弹确认框**——
   显示工具名、关键参数、风险等级（高危的附影响面说明），可以点「允许执行」或「拒绝」，
   也可以勾「**本会话内对该工具总是允许**」（**默认不勾**，切档位或换会话即失效）；
@@ -646,7 +646,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 做什么 | 命令 | 说明 |
 |---|---|---|
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -q` | **723 条，约 30 秒**；其中 5 条集成测试默认**不跑** |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -q` | **743 条，约 30 秒**；其中 5 条集成测试默认**不跑** |
 | 静态检查 | `uv run ruff check .` + `uv run ruff format --check .` | CI 里跑的就是这两条 |
 | **真集成测试**（要真依赖） | `uv run python -m pytest -m integration -v` | **5 条**：真 MySQL / 真 WSL / 真 SearXNG / 真 Redis / 真 RAG。环境不可用会**自动跳过**（不会红）<br>⚠️ 这层**只能在 Windows 本机跑**（GitHub 的 runner 是 Linux，没有 WSL），所以**不在 CI 里** |
 | 跑评估前的环境预检 | `uv run python evals/preflight.py --run-id check` | 验 `.env` 的 key / 容器 / WSL / 端口 / 知识库，**只报告不修** |
@@ -728,7 +728,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 
 | 数字 | 值 | 复核命令 |
 |---|---|---|
-| 测试数 | **723**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
+| 测试数 | **743**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
 | 知识库条目 | **测试语料** 35（7 文件 × 5 条）→ `evals/fixtures/knowledge/`；产品库默认空 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
 | RAG 消融（正式数，**2026-09-24 语料修订后**） | top-1 命中正解文件 **0.40 → 0.60**（对照 0.70）；⚠️ 旧语料基线是 **0.20** | `uv run python evals/rag_ablation.py --reps 10` |

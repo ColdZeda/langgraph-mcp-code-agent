@@ -15,7 +15,7 @@
 | 最近提交 | `git log --oneline -1`（别在文档里写死 hash —— 提交一次就过期）|
 | 远端 | `origin` = Gitee（镜像）· `github` = GitHub（主仓）；**tag `v1.0.0` 两边都有** |
 | CI | **passing**（`.github/workflows/ci.yml`）；跑 `ruff check` → `ruff format --check` → `pytest tests/ -v`，**不需要 `.env`** |
-| 测试 | **723** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **78%~79%**（同一提交在不同环境下实测区间） |
+| 测试 | **743** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **78%~79%**（同一提交在不同环境下实测区间） |
 | 评估 | **single 30/30 · multi 30/30**（平均分 1.0000，163 条断言）→ 报告 `docs/evidence/评估报告.md`；⚠️ **该成绩取自旧阈值口径**（压实 6000 / 单次输入 30000 / 任务 200000，且当时**还没有**按窗口推导）—— 与将来的新口径**不可直接对比** |
 | 仓库可见性 | **public**（2026-10-03 定：作为对招聘方展示的入口） |
 
@@ -50,7 +50,13 @@
 9. 📦 **仓库外文档清理（等本项目修完再做，用户定的）**：阶段 0–7 计划书归档 · `handover_交接文档.md` 归档 ·
    阶段 5 两份材料归档 · `支干得出结论/` 两份删除 · 《讨论结论汇总》正式标注冻结。
    ⚠️ **仓库内不动**：`docs/records/` 那两份老账不挪、`docs/archive/` 那两份 `-raw` 不删（用户明确要求保持不变）。
-10. 不在本项目内：JD 分析 → 知识补课 → 面试追问演练；**项目 #2**（部署 / CI-CD 那条线）。
+10. ✅ **2026-10-09 两项改动已落地（真机验收过）**：
+    ① **token 计量明细**：原来只统计总数、且 provider 不返回 usage 时**静默按 0**（预算闸门会失效）⇒ 现在
+    采 输入/输出/缓存命中 + 模型名/时间戳，缺失标「未计量」并在状态条与结果卡显式提示；
+    真机还抓出两个漏计（**工具结果被当成一次模型调用**、**router 那次调用从来没计**）。
+    ② **启动脚本**：端口改成真 bind 实测 + 自动退避（8000→8010→8020→8300→…），失败退出码非 0（不再闪退）。
+    ⚠️ 口径：**只计量、不算钱**（没有价格表）。账与证据见 `docs/records/2026-10-09_token计量与启动脚本修复账.md`。
+11. 不在本项目内：JD 分析 → 知识补课 → 面试追问演练；**项目 #2**（部署 / CI-CD 那条线）。
 
 > 已收口（2026-10-06）：**CI 截图存档** → `docs/evidence/CI运行成功-2026-10-06.png`；
 > 两份过程账的**口吻轻整理**（称谓层面，6 处）；`docs/evidence/README.md` 已写明本目录规则。
@@ -121,7 +127,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 | 指定权限模式 | `uv run python main.py --permission readonly`（readonly / confirm（默认）/ open） |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**723 个**） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**743 个**） |
 | **真集成测试**（要真 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑） | `uv run python -m pytest -m integration -v`（5 条） |
 | **装 / 查 RAG 的本地模型**（不在仓库里，各 ≈87MB） | `uv run python scripts/fetch_models.py`（`--dry-run` 只看状态；`--source modelscope` 换通道） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v4-single` |
@@ -218,7 +224,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 
 | 数字 | 值 | 怎么核 |
 |---|---|---|
-| 测试数 | **723**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
+| 测试数 | **743**（+ 5 条集成测试默认不跑） | `uv run python -m pytest tests/ -q` |
 | 覆盖率 | **78%~79%**（会随环境波动：依赖容器在跑/全停时略不同 —— 同一提交实测到过这两个值） | 同上（`addopts` 自带 `--cov`，看 `TOTAL` 行） |
 | 评估题数 / 断言数 | 30 题 / 163 条 | `uv run python evals/run_e2e.py --list` |
 | MCP 工具数 | 25（+ 7 文件工具 = **32**） | `git grep -c "@mcp.tool" -- app/code_agent` |
@@ -409,7 +415,7 @@ evals/                       评估体系：tasks(30 题) · verifiers(判定器
                              · preflight · report · rag_bench · rag_ablation · merge_runs
                              · reset_eval_threads · env(语料隔离) + fixtures/knowledge/(35 条夹具)
 scripts/                     probe_mcp_server.py · fetch_models.py · mysql-init/ · run/（启停脚本）
-tests/                       723 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
+tests/                       743 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
 docs/                        architecture.md（ADR）· archive/（冻结快照）
                              · evidence/（评估原始结果 + 报告 + 截图）· records/（过程账，可编辑）
 ```
