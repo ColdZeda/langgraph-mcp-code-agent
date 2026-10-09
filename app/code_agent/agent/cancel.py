@@ -40,6 +40,8 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
+from app.code_agent.agent.usage import merge_token_detail
+
 #: 停止原因码（给用户看的文案在展示端，这里只给结构化字段）
 REASON_USER = "user"
 REASON_WALL_CLOCK = "wall_clock"
@@ -74,7 +76,20 @@ class CancelToken:
     """已执行的 ReAct 步数（状态条用；由 executor 节点更新）。"""
 
     tokens: int = 0
-    """本任务累计 token（状态条用；由各节点更新）。"""
+    """本任务累计 token（状态条用；由各节点更新）。
+
+    ⚠️ **计费口径**：每次 LLM 调用累加（同一段历史会被反复计费），**不是**上下文长度。
+    """
+
+    token_detail: dict = field(default_factory=dict)
+    """本任务累计的 **token 明细**（计费原料）：`{input, output, cache_read, calls, unmetered_calls, first_ts, last_ts, by_model}`。
+
+    为什么要留：① 状态条能显示"输入/输出/缓存命中"三项；② 将来要按各家单价折算成本时，
+    这三项 + 时间戳就是**必需原料**（只留 total 就永远算不回来）。**这里只计量、不算钱**（价格表是另一件事）。
+    """
+
+    unmetered_calls: int = 0
+    """provider **没返回 usage** 的调用次数。>0 表示累计值**偏低**（预算闸门会偏松），界面要显式提示。"""
 
     usage_limit: int = 0
     """token 上限（状态条里 "已用 / 上限" 的分母；0 = 不显示分母）。"""
@@ -162,14 +177,31 @@ class CancelToken:
 
     # ── 状态条数据 ────────────────────────────────────────────────
 
+    def add_usage(self, usage: dict) -> None:
+        """把一个 LLM 调用的用量并进状态条明细（**只计量、不算钱**）。
+
+        `usage` 来自 `multi_agent._msg_usage()`（内部即 `usage.normalize_usage`）；
+        `tokens`（总数）仍由各节点按原口径赋值，这里只维护"计费原料"明细与未计量计数。
+        """
+        with self._lock:
+            self.token_detail = merge_token_detail(self.token_detail, usage)
+            self.unmetered_calls = int(self.token_detail.get("unmetered_calls") or 0)
+
     def snapshot(self) -> dict:
         """任务状态条要显示的东西（**结构化字段，文案在展示端**）。"""
+        detail = dict(self.token_detail or {})
         return {
             "elapsedSec": round(self.elapsed(), 1),
             "pausedSec": round(self.paused_seconds(), 1),
             "steps": self.steps,
             "tokens": self.tokens,
             "usageLimit": self.usage_limit,
+            # 计费口径的三项明细（取不到就是 None ⇒ 展示端隐藏对应字段，别显示 0）
+            "inputTokens": detail.get("input"),
+            "outputTokens": detail.get("output"),
+            "cacheReadTokens": detail.get("cache_read"),
+            # >0 = 有调用没拿到 usage ⇒ 累计值偏低，界面要提示「未计量」
+            "unmeteredCalls": self.unmetered_calls,
             "wallClockSec": float(self.wall_clock or 0),
             "stage": self.stage,
             "cancelled": self._event.is_set() or self._expired(),

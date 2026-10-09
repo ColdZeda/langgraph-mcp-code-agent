@@ -1093,6 +1093,9 @@ async def _run_chat(
                 "finalResponse": result["final_response"],
                 "toolTrace": _summarize_trace(result.get("executor_trace_list")),
                 "tokenUsage": result.get("token_usage", 0),
+                # token **明细**（计费原料）：输入 / 输出 / 缓存命中 / 调用次数 / 未计量次数 …
+                # ⚠️ 只计量、不算钱（没有价格表）；结果卡片用它显示拆分，缺口径时显示「未计量」
+                "tokenDetail": result.get("token_detail") or {},
                 "stepCount": result.get("step_count", 0),
                 "retryCount": result.get("retry_count", 0),
                 "mode": result.get("mode", exec_mode),

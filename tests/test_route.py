@@ -99,7 +99,8 @@ def test_route_keyword_fallback_does_not_call_llm(monkeypatch):
 
 def test_route_simple_query_uses_llm_classifier(monkeypatch):
     """简单查询 + LLM 判 simple → 走 simple。"""
-    monkeypatch.setattr(ma, "_llm_classify_complexity", lambda t: "simple")
+    # 2026-10-09 起分类器返回 (结论, usage 明细) —— 路由那一次调用同样要计量
+    monkeypatch.setattr(ma, "_llm_classify_complexity", lambda t: ("simple", {}))
     assert ma.route_task("查看 config.py 的前 20 行") == "simple"
 
 
@@ -110,9 +111,16 @@ def test_route_llm_failure_falls_back_to_complex(monkeypatch):
 
 
 async def test_route_node_persists_route_key(monkeypatch):
-    """route_node 必须把结论写进 state —— 否则条件边拿不到 route。"""
-    monkeypatch.setattr(ma, "route_task", lambda state: "simple")
-    assert await ma.route_node({"user_input": "x"}) == {"route": "simple"}
+    """route_node 必须把结论写进 state —— 否则条件边拿不到 route。
+
+    ⚠️ 2026-10-09 起它**还**要把路由这一次模型调用的用量写进 state（`token_usage` / `token_detail`），
+    以前只取结论、把用量丢了。这里的 patch 点因此从 `route_task` 换成真正干活的那个函数。
+    """
+    monkeypatch.setattr(ma, "_llm_classify_complexity", lambda t: ("simple", {}))
+    out = await ma.route_node({"user_input": "x", "token_usage": 0})  # type: ignore[arg-type]
+    assert out["route"] == "simple"
+    assert out["token_usage"] == 0
+    assert out["token_detail"] == {}
 
 
 def test_route_decide_reads_state_and_defaults_conservative():

@@ -177,6 +177,15 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
   ⚠️ 换模型**不必重启**（额度每次任务重新解析）；但**改了 `.env` 必须重启**（那是 import 期读的）。
   ⚠️ 阈值是**估算值** ⇒ 一律留足余量；`NODE` 不要设得接近窗口。
 - **token 预算**：额度见上一条（按窗口算，env 可覆盖）。⚠️ 任务级必须在 **executor 的 ReAct 循环内部逐步判** —— 只在节点入口判，一次"读大文件 + 反复重读"能在**单个节点调用**里烧掉十几万 token。
+- **token 计量口径 = 计费口径**：`token_usage` 是**每次 LLM 调用累加**（同一段历史会被反复计费）⇒ 数字大是正常的；它**不是**上下文长度，两个数字别混着讲。
+- **`token_detail` 是「计费原料」通道**（输入 / 输出 / 缓存命中 / 调用次数 / 未计量次数 / 首末时间 / `by_model` 分桶）：
+  归一化在 `agent/usage.py`（纯函数 `normalize_usage` + `merge_token_detail`），三家字段名都认
+  （langchain 给的是 `input_token_details.cache_read`；兜底认 `prompt_cache_hit_tokens` / `cache_read_input_tokens`）。
+  ⚠️ **本项目只计量、不算钱**：没有价格表（各家单价不同、会调价、还有峰谷价与缓存价）⇒ 成本的用途是**相对比较**，不是财务对账。
+  ⚠️ **缺失 usage 不许静默按 0**：`unmetered` 会一路带到状态条与结果卡（「N 次调用未计量」）——
+  否则"provider 不返回 usage"会让**预算闸门静默失效**。实测（2026-10-09 真实 DeepSeek 响应）：DeepSeek 同时返回
+  `prompt_cache_hit_tokens` 与 `prompt_tokens_details.cached_tokens`，并单列 `completion_tokens_details.reasoning_tokens`
+  （推理 token 按**输出**计价）。⚠️ **新增该通道必须同时进 `PER_TURN_RESET`**（见下方「跨轮状态必须复位」）。
 - **只读缓存**默认**不收** `mysql_execute_query`（只读但结果会变）；任何写操作后**清空本会话缓存**；Redis 挂了静默降级。
 - 🔴 **三条入口都必须接工具包装层**（权限 → 外置 → 缓存）：CLI（`run_agent`）/ evals（`run_single_task`）/ **Web（`AgentRuntime.load()`）**。漏一条，那条入口就没有外置、没有缓存、也没有权限层。
 - **自动注入 / 自动沉淀走进程内** `rag/store.py`（**不走 MCP**：每次调用都要新起子进程 import chromadb + torch，毫秒级变秒级）。评估里 `auto_inject=False` + `auto_deposit=False`，**且每题开跑前复位知识库**（模型自己会调 `save_knowledge` 写进去，这条路关不掉）。⚠️ 复位**不能调 `ensure_seeded()`**（进程级 `_seeded` 标志 ⇒ 第二次直接跳过 = 永远不清）。
@@ -365,7 +374,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 main.py                      CLI 入口（argparse）
 app/code_agent/              Agent 主体
 ├── agent/                   状态图(multi_agent) · 停止与墙钟(cancel) · 上下文工程(context) · 分层记忆(memory)
-│                            · 节点级事件(events) · REPL 与非交互入口(code_agent) · 提示词(prompts)
+│                            · **token 计量明细(usage)** · 节点级事件(events) · REPL 与非交互入口(code_agent) · 提示词(prompts)
 ├── model/llm.py             模型注册表：按角色取 / 降级链 / 热切换（build_llm / set_llm）
 ├── mcp_servers/             自建 MCP server：powershell(2) / browser(1) / mysql(10) / vm(4) / code_tools(4)
 ├── rag/                     rag.py（MCP 薄壳，4 工具）· store.py（分块 / 召回 / 精排，全懒加载）

@@ -33,8 +33,20 @@ const passed = verdictObj?.verdict?.toUpperCase() === 'PASS'
  *  于是**任何非 single 的情况都被说成"简单任务直通"**：multi 模式里 Verifier 没产出可解析裁定
  *  （上游抽风返回一整句错误文本是实测发生过的）也会被显示成"设计如此"，把"少验收了一次"粉饰掉。
  *  现在按**真实原因**分三种说：single 没有验收环节 / auto 路由判为简单任务 / 其余 = 未产出裁定。 */
-const noVerdictLabel = (() => {
-  if (props.result.mode === 'single') return 'single 模式，无验收环节'
+/** token 明细行（**计费口径**的三项；缺哪项不显示哪项 —— 不拿 0 冒充"没有"）。
+ *  为什么加：以前只报一个总数，看不出"输入多还是输出多、有没有命中缓存"；
+ *  而这三项正是将来按各家单价折算成本的原料（本项目**只计量、不算钱**）。 */
+const tokenSplit = (() => {
+  const d = props.result.tokenDetail
+  if (!d || (d.input == null && d.output == null)) return ''
+  const parts = []
+  if (d.input != null) parts.push(`输入 ${d.input}`)
+  if (d.output != null) parts.push(`输出 ${d.output}`)
+  if (d.cache_read) parts.push(`缓存命中 ${d.cache_read}`)
+  return parts.join(' / ')
+})()
+
+const noVerdictLabel = (() => {  if (props.result.mode === 'single') return 'single 模式，无验收环节'
   if (props.result.route === 'simple') return 'auto 判为简单任务，直通 Executor'
   return `${props.result.mode || '未知'} 模式未产出裁定`
 })()
@@ -123,11 +135,17 @@ const modelsUsed = (() => {
         🧠 本轮实际使用：{{ modelsUsed.all.join('、') }}
       </span>
       <span class="meta">
-        打回 {{ result.retryCount }} 次 · 步数 {{ result.stepCount }} · token {{ result.tokenUsage }} ·
-        耗时 {{ result.elapsedSec }}s<span
+        打回 {{ result.retryCount }} 次 · 步数 {{ result.stepCount }} · token {{ result.tokenUsage }}<span
+          v-if="tokenSplit"
+          class="meta-dim"
+        >（{{ tokenSplit }}）</span> · 耗时 {{ result.elapsedSec }}s<span
           v-if="result.pausedSec >= 1"
           class="meta-dim"
         >（含人工确认等待 {{ Math.round(result.pausedSec) }}s）</span>
+      </span>
+      <!-- provider 没返回 usage 的调用次数 >0 ⇒ token 数**偏低**，必须显式说明（别让人误读成"很省"） -->
+      <span v-if="result.tokenDetail?.unmetered_calls" class="meta-warn">
+        ⚠️ 有 {{ result.tokenDetail.unmetered_calls }} 次调用未返回用量，实际 token 高于此处统计
       </span>
     </div>
   </div>
@@ -156,4 +174,6 @@ const modelsUsed = (() => {
 .models { font-size: 12px; color: #93c5fd; cursor: help; }
 .meta { margin-left: auto; font-size: 12px; color: #64748b; }
 .meta-dim { color: #475569; }
+/* 「N 次调用未返回用量」= token 数偏低 —— 用警示色，别让人误读成"很省" */
+.meta-warn { color: #b45309; font-size: 0.92em; }
 </style>
