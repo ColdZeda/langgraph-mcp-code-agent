@@ -17,57 +17,13 @@
 | CI | **passing**（`.github/workflows/ci.yml`）；跑 `ruff check` → `ruff format --check` → `pytest tests/ -v`，**不需要 `.env`** |
 | 测试 | **743** 条通过（另有 5 条真集成测试**默认不跑**）；覆盖率 **78%~79%**（同一提交在不同环境下实测区间） |
 | 评估 | **single 30/30 · multi 30/30**（平均分 1.0000，163 条断言）→ 报告 `docs/evidence/评估报告.md`；⚠️ **该成绩取自旧阈值口径**（压实 6000 / 单次输入 30000 / 任务 200000，且当时**还没有**按窗口推导）—— 与将来的新口径**不可直接对比** |
-| 仓库可见性 | **public**（2026-10-03 定：作为对招聘方展示的入口） |
-
-**状态与未决事项**（✅ = 已完成，不占待办；每条标归属）：
-
-1. ✅ **阶段 8 助手侧已收口（2026-10-07）** —— P0（停止 / 墙钟 / 状态条 / 真机验收 + F1、F2）·
-   P1（终止文案统一 + §十五A 提问原则 + F3）· P1.5（入口「模板没替换」检测）· P2（阈值按窗口推导）
-   + 收尾补记（比例 15%/35% → **25%/50%**、`node` 下限 30000→4000、本机 `.env` 三行注释掉）。
-   账本：`docs/records/2026-10-07_探索测试第1-2轮与问题账.md`；
-   修复账：`docs/records/2026-10-07_阶段8修复账.md`（§一~§十，含**两处刻意偏离候选池**的留痕与用户第 3 轮实测）；
-   计划与结果快照：`docs/archive/阶段8-计划与结果-2026-10-07.md`；
-   设计取舍：`docs/architecture.md` **ADR-3 补充**（窗口 → 三项阈值）。
-2. ✅ **用户第 3 轮实测驱动的修复（2026-10-08 凌晨完成，见修复账 §十一）** ——
-   后端：**跨轮状态复位**（`PER_TURN_RESET` + 机械守卫，修掉"新任务拿到上一轮计划"）· 黑名单误伤 `Format-*` 收窄 ·
-   注入经验标明来源（模型不再报"疑似提示注入"）· 路径类报错补根目录 · **断线也留档**（关页面不再整轮消失）。
-   前端：**执行中拦住切会话/新会话 + 明确提示**（用户定的口径：不许切，但要说清为什么）· 状态条加「⏹ 停止任务」·
-   新增**知识库面板**（查看 + 单条删除，删文件同时删向量）。
-   ⚠️ **撤回三条**（不是缺陷）：B2 串味（同会话问两件事是正常用法，缺陷只有 B1）· B4 路由误判（simple 判得对，
-   问题是代价失控，归 C/D/E）· B6 弹框数量（`always_allow` 是工具级，用户点的是拒绝，再问一次是对的）。
-3. ✅ **探索测试：第 4 轮（2026-10-08）11 题全部通过**，未发现必须修复的缺陷 ⇒ 阶段 8 收尾依据；结果归档在 `docs/evidence/探索测试第4轮-2026-10-08.md`（另附机器可读的 JSON）。
-   ⏸ **第 9 题（口令跨轮记忆）用户主动跳过**；本轮记录的三件小事（模型名表述 / 步数偏多 / 弹框次数）**都判定为不修**，其中「步数偏多」归 C/D/E 等数据。
-4. **P3（暂缓，还不是很有必要）**：候选池 §十三③ 的「缓存命中显示」· 轨迹持久化+回放 · R4 减少弹框 —— 想做时从候选池取。
-5. **C（结构化提问出口）/ D / E（循环与无进展检测）**：按原计划**等真实数据**（跑题时的现场记录）。
-   ⚠️ 与 P3 是**两回事**：P3 是"想做但暂缓的功能"，C/D/E 是"要等数据才能定的方案"。
-6. 本机 `.env` 的三项阈值已**注释掉** ⇒ 走窗口推导（128k 兜底 → `32000 / 64000 / 512000`）；
-   模型窗口可在 Web 面板「我的模型」里填（**填了更准**：兜底 128k 只是保守假设）。
-7. **用户侧**：本机 `.temp/` 有临时产物（不入库）；12 题继续测（助手**不接手**）。
-8. ✅ **2026-10-08 已定的小事**（都做完，不再挂着）：执行中点「＋新会话」不再清空界面（`ChatView` 的
-   wrapper 去掉、直接暴露 store 的函数）· README 补「文档地图」+ 数字对齐（723 条 / 覆盖率 78%~79% / 语句 2557）+
-   写明「**多标签页可各跑一个任务**」这条边界（不堵后端，按用户定的口径）·
-   《讨论结论汇总》**降级为历史档案**：新结论只写仓库内，**不再逐条追加订正记录**。
-9. 📦 **仓库外文档清理（等本项目修完再做，用户定的）**：阶段 0–7 计划书归档 · `handover_交接文档.md` 归档 ·
-   阶段 5 两份材料归档 · `支干得出结论/` 两份删除 · 《讨论结论汇总》正式标注冻结。
-   ⚠️ **仓库内不动**：`docs/records/` 那两份老账不挪、`docs/archive/` 那两份 `-raw` 不删（用户明确要求保持不变）。
-10. ✅ **2026-10-09 两项改动已落地（真机验收过）**：
-    ① **token 计量明细**：原来只统计总数、且 provider 不返回 usage 时**静默按 0**（预算闸门会失效）⇒ 现在
-    采 输入/输出/缓存命中 + 模型名/时间戳，缺失标「未计量」并在状态条与结果卡显式提示；
-    真机还抓出两个漏计（**工具结果被当成一次模型调用**、**router 那次调用从来没计**）。
-    ② **启动脚本**：端口改成真 bind 实测 + 自动退避（8000→8010→8020→8300→…），失败退出码非 0（不再闪退）。
-    ⚠️ 口径：**只计量、不算钱**（没有价格表）。账与证据见 `docs/records/2026-10-09_token计量与启动脚本修复账.md`。
-11. 不在本项目内：JD 分析 → 知识补课 → 面试追问演练；**项目 #2**（部署 / CI-CD 那条线）。
-
-> 已收口（2026-10-06）：**CI 截图存档** → `docs/evidence/CI运行成功-2026-10-06.png`；
-> 两份过程账的**口吻轻整理**（称谓层面，6 处）；`docs/evidence/README.md` 已写明本目录规则。
-
-> 历史待办（`handover` 的 5 条：E013 无限打回 / checkpointer 未接线 / `file_saver.py` 待删 / 全新 clone 缺运行时目录 / 评估体系重做）**已全部关闭**，证据见 `docs/archive/handover-2026-10-03.md`。
+| 仓库可见性 | **public** |
 
 ### 文档导航
 
 | 文档 | 管什么 | 什么时候读 |
 |---|---|---|
-| [`README.md`](README.md) | **怎么用**（安装 / 跑起来 / 评估结果 / 已知边界） | 使用者、面试官先读 |
+| [`README.md`](README.md) | **怎么用**（安装 / 跑起来 / 评估结果 / 已知边界） | 使用者先读 |
 | [`docs/architecture.md`](docs/architecture.md) | **设计取舍与代价**（6 条 ADR） | 改架构、或要回答"为什么这么选" |
 | 本文件 | **操作手册**（约定 / 命令 / 坑 / 当前状态） | 动手前必读 |
 | [`docs/archive/`](docs/archive/) | **历史冻结快照**（不更新） | 想知道"当时怎么做的" |
@@ -75,11 +31,11 @@
 
 ### 考古与备份
 
-- **改造前的历史不在 `master` 上**：地基提交是**单提交重建**的 ⇒ 要用 `git log --all -S '<关键词>'` 去 `refs/remotes/raw-origin/*` 挖。
-- **git 历史 2026-09-27 用 `filter-repo` 重写两次**（公开前脱敏）⇒ **旧 hash 全部失效**；映射表与重写前的整份备份都在**本机备份（未入库）**。
-- 🔴 **`raw-origin` 对应的远端是私有仓**（改造前的历史，**含已失效的旧 key**）⇒ **不要把它公开，也绝不要把它的 refs 推给主仓**（例如 `git push github 'refs/remotes/raw-origin/*'` 这类操作禁止）。
-  2026-10-06 实测：主仓（GitHub/Gitee）**不含**这些提交（查那个 SHA 返回 422）、`code_agent_raw` 匿名访问返回 **403** ✓。
-- 项目过程档案（阶段方案 / 讨论结论汇总 / 交接文档）在**仓库外的项目档案目录（开发者本地维护）**；仓库内只保留冻结快照 `docs/archive/handover-*.md`。
+- 本项目是**从 `code_agent_raw` 改造过来的**（改造前的历史不在 `master` 上 —— 地基提交是**单提交重建**的）。
+  要挖旧实现：`git log --all -S '<关键词>'`（本地仍配着 `raw-origin` 远端，指向那个仓）。
+- **git 历史 2026-09-27 用 `filter-repo` 重写两次**（公开前脱敏）⇒ **旧 hash 全部失效**；映射表与重写前的备份在**本机备份（未入库）**。
+- 🔴 **那个仓是私有的**（改造前的历史，**含已失效的旧 key**）⇒ 别公开它，也**别把它的 refs 推给主仓**。
+- 项目过程档案（阶段方案 / 讨论结论汇总 / 交接文档）在**仓库外的项目档案目录（开发者本地维护）**；仓库内只保留冻结快照 `docs/archive/`。
 
 ## 项目一句话与定位
 
@@ -88,7 +44,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 双入口（CLI `main.py` / Web UI `app/web/server.py`）。
 
 **定位 = 本机单用户**（2026-09-30 定）：**不做公网部署、不做多用户账号** —— 它会执行 shell / 读写主机文件，
-公网开放等于给陌生人一个远程代码执行入口；**部署与 CI/CD 留给第二个项目**。对外展示 = **GitHub 主仓库 + Gitee 镜像**。
+公网开放等于给陌生人一个远程代码执行入口；**部署与 CI/CD 留给第二个项目**。代码托管 = **GitHub 主仓 + Gitee 镜像**。
 ⚠️ **改造前那批旧分数（baseline 0.983 / optimized 1.0 / 0.967）一律不可比**：旧题集已删、口径已换；
 当前成绩只看**阶段 6 重建后的两轮**（见「评估」）。
 
@@ -127,7 +83,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 | 指定权限模式 | `uv run python main.py --permission readonly`（readonly / confirm（默认）/ open） |
 | 起 Web UI | `uv run uvicorn app.web.server:app --port 8000` |
 | 一键起 Web UI（**前台**跑；`-Dev` 另开窗口跑热更新） | `.\scripts\run\start-app.ps1`（或双击 `scripts\run\start-app.cmd`；换端口 `-Port 8001`） |
-| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v`（**743 个**） |
+| 单元 + 工具级测试 | `uv run python -m pytest tests/ -v` |
 | **真集成测试**（要真 MySQL / WSL / Redis / SearXNG；**只能在 Windows 本机跑**，CI 没有 WSL；默认不跑） | `uv run python -m pytest -m integration -v`（5 条） |
 | **装 / 查 RAG 的本地模型**（不在仓库里，各 ≈87MB） | `uv run python scripts/fetch_models.py`（`--dry-run` 只看状态；`--source modelscope` 换通道） |
 | **跑评估前先预检**（容器 / WSL / `.env` key / 端口 / 知识库，**不修任何东西**） | `uv run python evals/preflight.py --run-id v4-single` |
@@ -170,27 +126,20 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 
 - **工具结果外置**：≥6000 字符或 150 行 ⇒ 落盘 `runtime/tool_results/`，上下文只留预览 + 路径。⚠️ **`read_file` / `read_file_range` 在豁免名单，不许外置** —— 实测同一道"读全文并总结"：外置后模型看不见内容、改用分段读绕过，**token 从 17,361 涨到 127,071（7.3 倍）**。读 `tool_results/` 里的文件**不再外置**（同内容同 hash ⇒ 死循环）。
 - **对话压实**：历史超阈值 ⇒ 最老一段压成四段式摘要；**摘要失败就原样保留**（省 token 不能把历史弄丢）。
-  ⚠️ **阶段 8 · P2 起三项阈值是运行期按「当前模型窗口」算的**（`config.token_budgets()`）：
-  压实 **25%** · 单次调用输入 **50%** · 任务累计 **max(50 万, 4×窗口)**（各带上下限封顶）。
-  128k 窗口 → `32000 / 64000 / 512000`；1M 窗口 → `64000 / 200000 / 2000000`。
-  🔴 **顺序约束**：压实必须**明显小于**单次输入 —— 前者是「用摘要换掉老历史」（信息还在），
-  后者超限是「**直接砍掉**最老的消息」（信息没了）。25%:50% = 1:2 是刻意的。
-  ⚠️ **上限是理智闸门**：用 >500k 窗口的模型时要**连上限一起抬**（否则 1M 窗口也退回 64k / 200k）。
-  ⚠️ **`node` 下限不许设高**：曾设 30000，会把 32k 窗口顶到窗口的 94%（方向反了）⇒ 现为 4000，
-  并有「`node` 不得超过窗口一半」的回归断言（`tests/test_token_budgets.py`）。
-  **解析顺序（高→低）**：`.env` 显式设的三个老名字 > 该角色模型的 `context_window`
-  （`config/models.json`，或 Web 面板「我的模型」里填）> `CODE_AGENT_CONTEXT_WINDOW`（全局覆盖）> 128000。
-  ⚠️ 换模型**不必重启**（额度每次任务重新解析）；但**改了 `.env` 必须重启**（那是 import 期读的）。
-  ⚠️ 阈值是**估算值** ⇒ 一律留足余量；`NODE` 不要设得接近窗口。
+  三项阈值**运行期按当前模型窗口算**（`config.token_budgets()`）：压实 **25%** · 单次调用输入 **50%** ·
+  任务累计 **max(50 万, 4×窗口)**（带上下限封顶；128k → `32000 / 64000 / 512000`）。
+  🔴 **顺序约束**：压实必须**明显小于**单次输入（1:2 是刻意的）—— 前者是「用摘要换掉老历史」（信息还在），
+  后者超限是「**直接砍掉**最老的消息」（信息没了）。
+  **解析顺序（高→低）**：`.env` 三个老名字 > 模型 `context_window` > `CODE_AGENT_CONTEXT_WINDOW` > 128000。
+  ⚠️ >500k 窗口要**连上限一起抬**；`node` 不得超过窗口一半（`tests/test_token_budgets.py`）；
+  换模型**不必重启**，但改 `.env` **必须重启**；阈值是估算值 ⇒ 留足余量。
 - **token 预算**：额度见上一条（按窗口算，env 可覆盖）。⚠️ 任务级必须在 **executor 的 ReAct 循环内部逐步判** —— 只在节点入口判，一次"读大文件 + 反复重读"能在**单个节点调用**里烧掉十几万 token。
 - **token 计量口径 = 计费口径**：`token_usage` 是**每次 LLM 调用累加**（同一段历史会被反复计费）⇒ 数字大是正常的；它**不是**上下文长度，两个数字别混着讲。
 - **`token_detail` 是「计费原料」通道**（输入 / 输出 / 缓存命中 / 调用次数 / 未计量次数 / 首末时间 / `by_model` 分桶）：
-  归一化在 `agent/usage.py`（纯函数 `normalize_usage` + `merge_token_detail`），三家字段名都认
-  （langchain 给的是 `input_token_details.cache_read`；兜底认 `prompt_cache_hit_tokens` / `cache_read_input_tokens`）。
-  ⚠️ **本项目只计量、不算钱**：没有价格表（各家单价不同、会调价、还有峰谷价与缓存价）⇒ 成本的用途是**相对比较**，不是财务对账。
+  归一化在 `agent/usage.py`（纯函数 `normalize_usage` + `merge_token_detail`）—— 三家 provider 的字段名都认。
+  ⚠️ **本项目只计量、不算钱**：没有价格表 ⇒ 成本的用途是**相对比较**，不是财务对账。
   ⚠️ **缺失 usage 不许静默按 0**：`unmetered` 会一路带到状态条与结果卡（「N 次调用未计量」）——
-  否则"provider 不返回 usage"会让**预算闸门静默失效**。实测（2026-10-09 真实 DeepSeek 响应）：DeepSeek 同时返回
-  `prompt_cache_hit_tokens` 与 `prompt_tokens_details.cached_tokens`，并单列 `completion_tokens_details.reasoning_tokens`
+  否则"provider 不返回 usage"会让**预算闸门静默失效**。实测 DeepSeek 会同时给缓存命中与推理 token
   （推理 token 按**输出**计价）。⚠️ **新增该通道必须同时进 `PER_TURN_RESET`**（见下方「跨轮状态必须复位」）。
 - **只读缓存**默认**不收** `mysql_execute_query`（只读但结果会变）；任何写操作后**清空本会话缓存**；Redis 挂了静默降级。
 - 🔴 **三条入口都必须接工具包装层**（权限 → 外置 → 缓存）：CLI（`run_agent`）/ evals（`run_single_task`）/ **Web（`AgentRuntime.load()`）**。漏一条，那条入口就没有外置、没有缓存、也没有权限层。
@@ -214,7 +163,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - **规模与成绩**：30 题 / **163 条断言**（状态 **124** / 轨迹 29 / 文本 10；**LLM 评分档 0 条**）；**single 30/30、multi 30/30**，平均分都是 **1.0000**；打回 / 击穿预算 / 超时 / 未测 / 异常全 **0**。
 - **成本画像**：multi/single 的 token **中位 1.58×**、时间 **2.07×**；其中 **Verifier 占总 token 25%**、Planner 2.4%。
 - **四条口径（不许放松）**：① **通过 = 满分**（部分分单列 `partial` 并披露占比）；② **`skip` ≠ 0 分**（环境不可用记 `ok=None`；全 skip 的题标 `unavailable` 且**不进分母**）；③ **超时/异常也跑判定器**（产物可能已经写出来了）；④ 判定器按**真实 MCP 工具名 + 真实参数名**写（`assert_known_tools()` 对着 `permissions.ALL_TOOLS` 校验，危险命令扫描**整个 args**）。
-- ⚠️ **人为闸门会制造假失败**：限额版 multi（`TASK_TOKEN_BUDGET=200k`）是 **29/30 且更贵**（1.78M token，E015 被掐断烧掉 257k 仍失败）；改成"只计量"后 **30/30 且更省**（1.64M）⇒ 生产口径只计量，归档里那份限额版就是这条教训的证据。
+- ⚠️ **人为闸门会制造假失败**（对照见 `docs/evidence/v3-multi-limit200k.json`）：`TASK_TOKEN_BUDGET=200k` 时 **29/30 且更贵**；改成"只计量"后 **30/30 且更省** ⇒ 生产口径只计量。
 - **跑法**：`reset_eval_threads.py --yes` → `preflight.py --run-id …` → **逐题** `run_e2e.py` → `merge_runs.py --archive` → `report.py`。⚠️ **别用 `--all`**：结果 JSON 只在整轮结束写一次，被掐断就整轮白跑（E016 的教训）。⚠️ **每个 run-id 只能用一次**（复用会读到上一轮 checkpoint）。
 - **隔离**：评估只用 `runtime/eval_knowledge/` + `runtime/chroma_db_eval/`（夹具在 `evals/fixtures/knowledge/`，35 条 = 7 文件 × 5 条），**绝不碰产品的 `data/knowledge/`**；跑评估时别用 Web/CLI 干活（共用 `runtime/workspace/`）。
 - **已知局限（如实写，别外推）**：每题每轮只跑 1 次（方差量化不出来）；题集对当前模型**已饱和**（两轮都满分 ⇒ 架构差异不体现在分数上，只能看成本侧）。
@@ -234,12 +183,10 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 ### 安全与权限（阶段 5，**主防线在应用层**）
 
 - **三档权限**（只读 / **需确认（默认）** / 放开）与 **32 个工具**的档位表在 `app/code_agent/security/permissions.py`（只读 14 / 写执行 18 / 高危 6）。
-- 🔴 **`tool_wrap._process` 里的顺序不许动**：**停止检查 → 权限判定 → 缓存查询**。
-  ① 停止检查必须在权限之前（已经决定要停的任务不该再弹框问用户）；
-  ② 权限判定必须在缓存查询**之前** —— 否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果。
-  测试守着 32 个工具一个不多一个不少 + 四条实现约束。
-- ⚠️ **内容级黑名单修过形同虚设的漏口**：旧模式 `\brm\s+-rf\s+/\s` 要求 `/` 后**还有空白** ⇒ 最经典的 **`rm -rf /`**（`/` 在结尾）直接放行；PowerShell 侧还要求 `-Recurse` 在 `-Force` 前、不认 `rm`/`del`/`rd`/`ri` 别名。现在两侧都是"flag 后瞻匹配、顺序无关"。
-- ⚠️ **别指望命令自带的开关**：GNU rm 的 `--preserve-root` **只管"参数就是 `/` 自身"**（`rm -rf /*`、`rm -rf /mnt/c/…` 都不管）；`chmod`/`chown`/`chgrp` 递归操作 `/` **默认不保护**。
+- 🔴 **`tool_wrap._process` 里的顺序不许动**（完整顺序见「代码地图」）：① 停止检查必须在权限之前（已决定要停的
+  任务不该再弹框问用户）；② 权限判定必须在缓存查询**之前** —— 否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果。测试守着工具数一个不多一个不少 + 四条实现约束。
+- ⚠️ **内容级黑名单**两侧都是"flag 后瞻匹配、顺序无关"（曾漏掉 `rm -rf /`、`rm -fr /` 与 `rm`/`del`/`rd`/`ri` 别名）；
+  且**别指望命令自带的开关** —— GNU rm 的 `--preserve-root` **只管"参数就是 `/` 自身"**（`rm -rf /*`、`rm -rf /mnt/c/…` 都不管），`chmod`/`chown`/`chgrp` 递归操作 `/` **默认不保护**。
 - **回归测试** `tests/test_dangerous_commands.py`：**打桩 `subprocess`，断言危险命令走不到"启动子进程"那一步**。⚠️ **别再真打危险命令去"验证"**（阶段 5 真踩过：`rm -rf /` 真的进了 WSL）。
 - 🔴 **WSL2 只是隔离执行环境，不是安全沙箱**：它默认挂 `/mnt/c`，而 `vm.py` 还主动用这条通道读写 Windows 文件 ⇒ 对外措辞**别说"沙箱"**。
 - **可达性**：`execute_powershell_command` 是**唯一能把原始命令透传下去**的入口；VM 四个工具都 `shlex.quote` 过参数（那边属纵深防御）。
@@ -247,12 +194,9 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 
 ### 跨轮状态必须复位（阶段 8 · 实测，**最容易复发的一类**）
 
-- 🔴 **症状**：新任务**带着上一轮的"计划/轨迹/判定"跑**。现场：用户只发「你好」，Executor 拿到的是上一轮的
-  上传计划 ⇒ 13 次工具调用 / 6 分钟 / 整段英文；回复里还混进上一轮计划的章节。
-- **根因**：LangGraph 的语义是"**没传进 `ainvoke` 的通道保留上一轮 checkpoint 的值**"。`plan` 从不在复位字典里；
-  `auto` 判 `simple` 时会**跳过 Planner**（于是也不会产生新计划）⇒ 旧计划被当成本轮计划。
-  同一根因还造成：`verdict` 残留 ⇒ 新一轮第一次执行被 `_is_retry_round` 当成"重跑轮"；`executor_trace_list`
-  残留 ⇒ 轨迹跨轮累加（实测 28 条 = 两轮混在一起）。**这跟 P0 修过的 F2（`step_count`）是同一个坑。**
+- 🔴 **症状**：新任务**带着上一轮的"计划/轨迹/判定"跑**（回复里还会混进上一轮计划的章节）。
+- **根因**：LangGraph 的语义是"**没传进 `ainvoke` 的通道保留上一轮 checkpoint 的值**" ⇒ `plan` / `verdict` /
+  `executor_trace_list` / `step_count` 残留都会串味；其中 `auto` 判 `simple` 会**跳过 Planner**（不产生新计划）。
 - ✅ **怎么办**：所有"每轮"通道集中在 `multi_agent.PER_TURN_RESET`，`ainvoke` 输入用
   `{**per_turn_reset(), "user_input": …, "knowledge": …}`。**新增任何每轮通道，必须同时进这张表** ——
   `tests/test_per_turn_state.py::test_every_state_channel_is_classified` 会拿 `AgentState` 的**全部通道**
@@ -261,9 +205,8 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 ### 停止 / 墙钟 / 终止文案（阶段 8 · P0 + P1）
 
 - **停止是"协作式"的**：只在三个**检查点**生效 —— ① 节点入口（planner / executor / verifier）
-  ② executor 的 **ReAct 每一步**（`astream` 循环开头）③ **每次工具调用之前**（`utils/tool_wrap.py::_process`）。
-  ⇒ **正在飞的那一次模型调用不会被打断**（它返回后才发现已停），但它之后的步骤一定不会再开始。
-  已发生的副作用**一律保留**（不回滚：回滚自己也可能失败，还会掩盖现场）。
+  ② executor 的 **ReAct 每一步** ③ **每次工具调用之前**（`utils/tool_wrap.py::_process`）。
+  ⇒ **正在飞的那次模型调用不会被打断**，但它之后的步骤一定不会再开始；已发生的副作用**一律保留**（不回滚）。
 - 🔴 **`TaskCancelled` 必须继承 `BaseException`**（`app/code_agent/agent/cancel.py`）：工具调用发生在
   LangGraph 的 `ToolNode` 里，它 `except Exception` 会把异常**变成一条 ToolMessage**交给模型 ⇒
   "停止"会退化成"模型看到一条奇怪的错误、再决定下一步"（多烧一次调用，还可能换个办法接着干）。
@@ -280,26 +223,14 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - **评估（evals）不绑停止开关** ⇒ evals 既不会被墙钟掐断、也不发状态条事件（`emit` 的设计：没绑就跳过）。
 - **终止之后**：不调 Verifier（`after_executor` 判 `cancelled` / `budget_exceeded`）、不打回重跑、
   **不沉淀经验**（半途而废的"经验"是噪音）、文案固定中文（`multi_agent._cancel_message`）。
-- **任务状态条**：`status` 事件（`elapsedSec` / `pausedSec` / `steps` / `tokens` / `usageLimit` / `wallClockSec`），
-  前端 `store.status` + 本地 1 秒补时（**弹框期间冻结**，与后端口径一致）。
-- **前端「停止」有两个入口**（都是 `store.stopTask()` → WS `{"type":"stop"}` → `stopping` 回执 → `result.cancelled`）：
-  ① 输入区右下角 `⏹ 停止`；② **任务状态条右侧 `⏹ 停止任务`**（2026-10-07 实测新增：用户视线在状态条那一行，
-  原来只有输入区那个，他会"看不到停止按钮"）。结果卡片显示 `⏹ 已停止 · 你点了「停止」`，**不是**"验收未通过"。
-  ⚠️ 叫"停止"不叫"暂停"：协作式停止**不可续跑**，叫暂停会让人以为能恢复。
-- 🔴 **执行中不许切会话**（用户 2026-10-07 定的口径）：`loadSession` / `newSession` 都有 `sending` 守卫，
-  点了会显示一行黄字提示（`setNotice`，5 秒自动消失），**不是静默忽略**（原来的静默 `return` 让用户以为"点了没反应"）；
-  点"当前会话"本身不提示。**权限弹框期间**则保持"整屏遮罩挡着、点不到"（用户明确要求保持现状）。
-- **知识库面板**（2026-10-07 新增）：侧栏「🧠 知识库」→ `GET /api/knowledge` 列表 + `DELETE /api/knowledge/{name}`
-  单条删除（**只收单层 `.txt`/`.md`**，路径穿越一律拒）。⚠️ 删除**同时删向量**（`store.delete_document_file`），
-  否则检索会命中"幽灵条目"。背景：自动沉淀会自己往 `data/knowledge/` 写，而界面此前完全看不到。
-- 🔴 **权限弹框是 `position: fixed; inset: 0` 的全屏遮罩** ⇒ 它**盖住输入区的停止按钮**（实测 `elementFromPoint` 命中 `div.overlay`）。
-  所以弹框里**必须**有「⏹ 停止任务」（已加，`PermissionDialog.vue`）：点了 `stopTask()` + 清本地弹框，**不发** `permission_response`（那个 Future 由后端结算）。
-  ⚠️ **停止 ≠ 拒绝**：拒绝只否掉这一次调用，任务会换个办法接着干；停止是整轮停下。
-- ⚠️ **`step_count` 每轮必须复位**（`run_multi_agent` 的输入里带 `"step_count": 0`）：它是个只增不减的通道，
-  不复位的话同一会话里第 N 张卡片会把前 N-1 轮的步数一起算进去（实测 35 → 40 → 51）—— 而卡片上写的就是"步数"。
-  **一轮之内的打回重跑仍然累加**（那是它本来的意思）；停止文案与卡片必须报**同口径**的步数。
-- ⚠️ **`retry_count` 在终止路径上也要计**（阶段 8 · P1 修的 F3）：`is_retry` 必须在**所有终止分支之前**算，
-  否则「被打回后发起的、却被预算/停止掐断」的那一轮不计数 ⇒ 卡片写「打回 0 次」而实际被打回过。
+- **任务状态条**：`status` 事件（时长 / 步数 / token / 预算 / 墙钟），前端本地 1 秒补时（**弹框期间冻结**）。
+- **前端「停止」有两个入口**（输入区 + 任务状态条），都走 `store.stopTask()` → WS `{"type":"stop"}`。
+  结果卡片显示"已停止"而**不是**"验收未通过"。⚠️ 叫"停止"不叫"暂停"：协作式停止**不可续跑**。
+- 🔴 **执行中不许切会话**：`loadSession` / `newSession` 必须有 `sending` 守卫，且**必须给可见提示**（静默忽略会让用户以为"点了没反应"）；权限弹框期间保持整屏遮罩。
+- 🔴 **权限弹框是全屏遮罩**（`position: fixed; inset: 0`）⇒ 它**盖住输入区的停止按钮**，所以弹框里**必须**有「⏹ 停止任务」（`PermissionDialog.vue`）。
+  ⚠️ **停止 ≠ 拒绝**：拒绝只否掉这一次调用（任务会换个办法接着干）；停止是整轮停下。
+- ⚠️ **`step_count` 每轮必须复位**（`run_multi_agent` 输入里带 `"step_count": 0`）：它只增不减，不复位会把前几轮的步数算进来；**一轮之内的打回重跑仍然累加**。停止文案与卡片必须报**同口径**的步数。
+- ⚠️ **`retry_count` 在终止路径上也要计**（`is_retry` 必须在**所有终止分支之前**算），否则「被打回后发起的、却被预算/停止掐断」的那一轮不计数。
 - 🔴 **预算终止 ≠ 验收未通过**：① 出边判 `budget_exceeded` ⇒ **不调 Verifier**；
   ② `run_multi_agent` 里**不许**把预算终止套上「任务执行完成，但验收未通过」那层包装
   （重跑轮撞预算时 `verdict` 还留着上一轮的 FAIL，一包装就是第 2 题现场那句看不懂的混合文案）；
@@ -335,27 +266,23 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - **删除永远先软删除**：`deleted_at` 一置 → 回收站（可「恢复」）；只有回收站里再点「彻底删除」才真删，且顺序不能反（`writes → checkpoints`）。
 - 🔴 **"会话正被使用"不能用 `_session_locks` 判断**：它按设计**不回收**（连接断了空 Lock 还留着）⇒ 会把早已断开的会话当成活的、**永远删不掉**。要用 **`_active_threads` 计数**（WS 建立 / `new_session` / `load_session` / 消息带 `threadId` / 断开 五处维护）；活会话一律 `409`。
 - **系统线程**（前缀 `eval-` / `probe-` / `smoke` / `nowrap-`）默认不在列表显示，底部一行小字可展开 + 「清空系统线程」；计数为 0 时**一个字都不显示**。
+- **知识库面板**：侧栏「🧠 知识库」→ `GET /api/knowledge` 列表 + `DELETE /api/knowledge/{name}` 单条删除（**只收单层 `.txt`/`.md`**，路径穿越一律拒）。⚠️ 删除**同时删向量**（`store.delete_document_file`），否则检索会命中"幽灵条目"。
 - 🔴 **`llm.py` 不许出现模块级 `llm = get_llm()`**（已改成 PEP 562 惰性 `__getattr__`）：那行会在 **import 期**建 LLM ⇒ 没配 key 时 import 直接抛（**服务起不来、pytest 收集也炸**）。有源码级守卫 `tests/test_web_no_model.py`。
 - ⚠️ **"还没有可用模型"不是错误状态**：`rebuild_agents()` / `apply_settings()` 捕获缺 key 的 `ValueError`（只警告 + agent 置空）；启动顺序**先 `apply_settings()` 再 `runtime.load()`**；前端据 `modelReady` 显示引导。**别在 WS 层拦 `chat`**（实测会让按协议等消息的测试卡死）。
 - **用户加的第一个自定义模型 = 四个角色的默认模型**（否则未指定的角色回落 `.env` 的 `MODEL_NAME`，而面向用户的 `.env` 往往是空的）。`/api/settings` 的"系统默认模型"界面已不露出，CLI/evals 也完全不读。
-- ✅ **界面第二轮反馈 6 条已全部有结论**（测试四个角色 ✅ / 侧栏文案 ✅ / 会话行按钮维持 hover / 小字已精简 / 防缓存不做 / 两个测试会话不处理）—— 论证在 `docs/records/2026-10-02_WEB端走查与修复账.md` §七。
 
 ### 工具参数校验与跨平台路径（两次实锤事故）
 
-- 🔴 **`make_dir_in_vm` 收到 Windows 路径会造出畸形目录**：`shlex.quote` 把整串包成**一个**参数，而 **Linux 里反斜杠不是分隔符** ⇒ 整串被当成文件名；Windows 又不允许文件名含 `:` ⇒ WSL/驱动层写**私用区替身**（`:`→**U+F03A**、`\`→**U+F05C**）。⚠️ 那个目录是**空的** ⇒ **git 完全看不见它**（`git status` 一直干净），排查花了三轮。
+- 🔴 **VM 工具收到 Windows 路径会造出畸形目录**：`shlex.quote` 把整串包成**一个**参数，而 **Linux 里反斜杠不是分隔符** ⇒ 整串被当成文件名，WSL/驱动层改写私用区替身。⚠️ 那目录是**空的** ⇒ **git 完全看不见它**，所以必须靠 `ensure_wsl_path()` 拦。
 - **防线**：`vm.py::ensure_wsl_path()` —— 四个 VM 工具的 WSL 侧路径参数（`make_dir_in_vm.dir_path` / `list_files_in_vm.dir_path` / `write_file_to_vm.file_path` / `upload_directory_to_vm.vm_dest_dir`）收到 Windows 路径或含 `\` ⇒ 抛 `VmPathError`，消息里带两条出路（改用 `execute_powershell_command`，或写成 `/mnt/<盘符>/…`）。⚠️ **刻意不自动转换**（静默转换会掩盖"用错工具"，让它一直错下去）。
 - **工具描述要写"什么时候不要用它"**：事故直接原因是模型按工具名（`make_dir`）匹配、忽略了 `in_vm`；四个工具的 description 现在都点名"只接受 WSL 内路径"。回归测试 `tests/test_vm_path_guard.py`（打桩 subprocess，断言**走不到执行那一步**；去掉校验 7 条红）。
 - 🔴 **路径转换不许先无条件 `os.path.abspath()`**：Linux 上 `os.path.abspath("E:\…\a\b")` 会把它当**相对路径**、拼上当前目录 ⇒ 盘符正则永远匹配不上（CI 就是这么红的）。**修法**：先按**语法**判盘符（`^[A-Za-z]:[\\/]`）再决定要不要 abspath ⇒ 跨平台一致，Windows 行为不变。
-- **CI 三条教训**：① **本机绿 ≠ CI 绿**（路径语法 / 行尾 / 权限 / 大小写要专门过一遍）；② **断言别写脆**（别断言"默认目录 == 仓库上级目录" —— 用户按 `.env.example` 设了环境变量就不成立）；③ **GitHub 的 job 日志接口即使仓库公开也要求 admin 权限** ⇒ 读不到日志时先做"最小复现"，或让人贴日志。
 
 ### CI 与徽章（GitHub Actions / Gitee，2026-10-06 实测）
 
-- ⚠️ **徽章会落后于最新提交**：它显示的是"**最近一次*完成*的运行**"。实例：run #11 的 job 从未启动、
-  被 GitHub 取消（列表里是红叉），而徽章仍写着 `passing`。
-  ⇒ **判断"我这次提交绿没绿"，要看 run 列表里对应 commit 的那一条，别信徽章。**
-- ⚠️ **"红"不一定是测试失败**：那次 job 的 `conclusion=cancelled`、`steps: []`、`runner_id: 0`
-  ⇒ **它从未获取到 runner**（队列里排 15 分钟后被取消）。**重推一次即通过**（实测 48 秒）。
-  排查口诀：**先看 `steps` 是否为空** —— 空 = 没跑过，别去翻测试日志。
+- ⚠️ **徽章会落后于最新提交**（它显示"最近一次*完成*的运行"）⇒ 判断绿没绿要**看 run 列表里对应 commit 的那一条**。
+- ⚠️ **"红"不一定是测试失败**：若 `steps: []` / `runner_id: 0` ⇒ **从未获取到 runner**，重推一次即可（别去翻测试日志）。
+- **本地自查三条**：① **本机绿 ≠ CI 绿**（路径语法 / 行尾 / 权限 / 大小写要专门过一遍）；② **断言别写脆**（别断言"默认目录 == 仓库上级目录"，用户按 `.env.example` 设了环境变量就不成立）；③ **job 日志接口要 admin 权限** ⇒ 读不到日志时先做"最小复现"，或让人贴日志。
 - **怎么查状态**（匿名可读）：`api.github.com/repos/<owner>/<repo>/actions/runs?per_page=1`
   （`status` / `conclusion` / `run_number`）；**job 详情**加 `/jobs`；
   ⚠️ **日志接口要 admin 权限**，匿名问必然 403；匿名 API 另有 **60 次/小时**限流，被限流时改用徽章或稍后再试。
@@ -377,28 +304,19 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
   `powershell.exe` 的退出码 ⇒ `.cmd` 里的 `if errorlevel 1 pause` 不触发 ⇒ **窗口闪退、用户看不到任何错误**
   （现场：8000 绑定失败，双击后窗口一闪而过）。守卫：`test_start_app_propagates_exit_code`。
 - ⚠️ **端口可用性必须用「真 bind」判断**（`TcpListener`），**不能**只查 `Get-NetTCPConnection -State Listen` ——
-  后者只看得见"有没有人在监听"，**查不出"端口被系统保留"**（Windows 上 Hyper-V/WSL 的 `excludedportrange`
-  会随机划走 7927–8126 这类区间；那台机器上 8000/8001 就被划走了）。判据看错误码：
-  **`10048` = 有进程占用**（去 `netstat -ano` 找 PID）；**`10013` = 被系统保留**
-  （换端口，或管理员 `net stop winnat` → `netsh int ipv4 add excludedportrange protocol=tcp startport=<端口> numberofports=1 store=persistent` → `net start winnat`）。
-  **别去杀进程**。查保留区间：`netsh interface ipv4 show excludedportrange protocol=tcp`。
-- **端口候选顺序**（每个都实测，被占/被保留就跳到下一个）：`-Port`（默认 8000）→ 8010 → 8020 → 8300 →
-  8310 → 9000 → 9010 → 9200；`-NoFallback` 可关掉自动换端口（失败即退出，退出码 1）。
+  后者查不出"端口被系统保留"（Hyper-V/WSL 的 `excludedportrange` 会随机划走区间）。看错误码：
+  **`10048` = 有进程占用**；**`10013` = 被系统保留**（换端口即可，**别去杀进程**）。
+- **端口候选顺序**（逐个实测，被占/被保留就跳下一个）：`-Port`（默认 8000）→ 8010 → 8020 → 8300 → 8310 → 9000 → 9010 → 9200；`-NoFallback` 关掉自动换端口。
 
 ### 仓库整理
 
 - `runtime/` 与 `.temp/` 都是 gitignore 的运行时目录 ⇒ **做全仓扫描必须排除**（否则扫到生成物）。
 - `docs/` 四块：`architecture.md`（设计取舍）、`archive/`（**冻结快照**）、`evidence/`（评估原始结果，**只追加、不改写**）、
   `records/`（**过程账，可编辑**：走查/修复/缺陷账，命名 `<日期>_<主题>.md`）。
-- ⚠️ **git 历史 2026-09-27 用 `filter-repo` 重写两次**（公开前脱敏），剔除 4 条路径（归档前后两批旧简历、`docs/handover.md`、`docs/resume-star.md`）⇒ **旧 hash 全部失效**，映射表与重写前整份备份在**本机备份（未入库）**。
-- 🔴 **脱敏核对不能只对路径，要对"值"**：第一次按路径核对，漏了**改名之前**的那批旧简历（`docs/interview/`），地基提交的树里还留着 8 个文件；第二次改成"把手机号/邮箱原文取出，`git grep -F` 跨**全部提交**核对"才查出来。
-- 🔴 **提交邮箱决定「贡献归属」，跟推送权限无关**（2026-10-09 踩过）：GitHub 只认**账号里已验证的邮箱**或
-  `<数字ID>+<用户名>@users.noreply.github.com`；Gitee 只认 `…@user.noreply.gitee.com` —— **两个平台互不认账**
-  （症状：push 成功、仓库也有内容，但 GitHub 主页热力图空白并提示 *"We need at least one non-empty commit with an email"*）。
-  本项目**本仓库（local）**已固定用 GitHub 的 noreply：`214781303+ColdZeda@users.noreply.github.com`
-  （**全局配置仍是 Gitee 身份**，其他项目不受影响）。
-  ⚠️ 一条提交**只能带一个邮箱** ⇒ **只能亮一边**；改邮箱只影响**之后**的提交（想让历史也归属必须重写历史：
-  hash 全变 + 两端 force push）。⚠️ 邮箱会写进每个提交、公开可查 ⇒ 优先用 noreply，别用真实邮箱。
+- 🔴 **脱敏核对不能只对路径，要对"值"**：要把手机号/邮箱原文取出，用 `git grep -F` 跨**全部提交**核对（只对路径会漏掉改名前的文件）。
+- 🔴 **提交邮箱决定「贡献归属」，跟推送权限无关**：GitHub 只认已验证邮箱或 `<ID>+<用户名>@users.noreply.github.com`，
+  Gitee 只认 `…@user.noreply.gitee.com`（**两个平台互不认账**）。本仓库已固定用 GitHub noreply：
+  `214781303+ColdZeda@users.noreply.github.com`。⚠️ 一条提交**只能带一个邮箱**；邮箱公开可查 ⇒ 优先 noreply。
 
 ## 代码地图
 
@@ -422,7 +340,7 @@ evals/                       评估体系：tasks(30 题) · verifiers(判定器
                              · preflight · report · rag_bench · rag_ablation · merge_runs
                              · reset_eval_threads · env(语料隔离) + fixtures/knowledge/(35 条夹具)
 scripts/                     probe_mcp_server.py · fetch_models.py · mysql-init/ · run/（启停脚本）
-tests/                       743 条测试（含 5 条默认不跑的集成测试 tests/test_integration_mcp.py）
+tests/                       单元/工具级测试（含默认不跑的集成测试 tests/test_integration_mcp.py）
 docs/                        architecture.md（ADR）· archive/（冻结快照）
                              · evidence/（评估原始结果 + 报告 + 截图）· records/（过程账，可编辑）
 ```
@@ -451,12 +369,8 @@ docs/                        architecture.md（ADR）· archive/（冻结快照�
 
 ## 历史与档案
 
-- [`docs/archive/`](docs/archive/) = **冻结快照区，不再更新**。现有：
-  `agent-history-raw-2026-10-03.md`（本文件的历史版本，**未清洗**）·
-  `agent-history-2026-10-03.md`（同上的去冗余版）·
-  `handover-raw-2026-10-03.md` / `handover-2026-10-03.md`（旧的"交接文档"原始版与清理版）·
-  `阶段8-计划与结果-2026-10-07.md`（2026-10-07：阶段 8 的**计划书中性化简写** + 实际结果对照 + 口径声明）。
-  **想看"当时怎么做的"翻这里；当前规范一律以本文件为准**。
+- [`docs/archive/`](docs/archive/) = **冻结档案（历史快照，不再更新）**。
+  想知道"当时怎么做的"翻这里；**当前规范一律以本文件为准**。
 - [`docs/evidence/`](docs/evidence/) = 评估**原始结果**（`v3-*.json` / RAG 消融）+ 生成物（`评估报告.md`）+ 截图，
   **只追加、不改写**（里面的本机路径属原始证据，刻意保留）；规则见 [`docs/evidence/README.md`](docs/evidence/README.md)。
 - [`docs/records/`](docs/records/) = **过程账（可编辑）**：缺陷账 / 走查与修复账，每条都带"现象 → 根因 → 修法 → 证据"；
