@@ -7,11 +7,11 @@
 
 ## 接活先看
 
-**当前状态（2026-10-07）**：
+**状态速览（2026-10-13 刷新）**：
 
 | 项 | 值 |
 |---|---|
-| 阶段 | **阶段 8（探索测试驱动的稳健性修复）✅ 已收口（2026-10-08）** —— 阶段 0–7 已完成收口；**P0 已落地并做完真机验收**（停止 + 墙钟 + 停止按钮 + 任务状态条；真机撞出的 F1/F2 也已修）· **P1 已落地**（终止文案统一 + §十五A 三条提问原则 + 顺手修的 F3）· **P1.5 已落地**（入口「模板没替换」检测，含 30 道评估题的护栏）· **P2 已落地**（三项阈值按模型窗口自动算 + 任务预算放宽到 50 万~200 万；比例 2026-10-07 定为 **压实 25% / 单次输入 50% / 任务 max(50 万, 4×窗口)**）—— **阶段 8 助手侧已收口**；另有**一轮用户实测驱动的修复**（2026-10-07 深夜：跨轮串味 / 黑名单误伤 / 注入来源 / 路径报错 / 断线留档 + 执行中拦住切会话 + 状态条停止按钮 + 知识库面板），见修复账 §十一 |
+| 当前状态 | **已定档**（最后一轮大改 2026-10-07/08 收口）：停止 + 墙钟 + 终止文案 · 入口「模板没替换」检测 · 三项阈值按模型窗口自动算 —— 均已落地；之后只有零散修复。改了什么、为什么 → [`docs/records/`](docs/records/) |
 | 最近提交 | `git log --oneline -1`（别在文档里写死 hash —— 提交一次就过期）|
 | 远端 | `origin` = Gitee（镜像）· `github` = GitHub（主仓）；**tag `v1.0.0` 两边都有** |
 | CI | **passing**（`.github/workflows/ci.yml`）；跑 `ruff check` → `ruff format --check` → `pytest tests/ -v`，**不需要 `.env`** |
@@ -46,7 +46,7 @@ Python 3.13 的本地多 Agent 编程助手：LangGraph StateGraph（Planner →
 **定位 = 本机单用户**（2026-09-30 定）：**不做公网部署、不做多用户账号** —— 它会执行 shell / 读写主机文件，
 公网开放等于给陌生人一个远程代码执行入口；**部署与 CI/CD 留给第二个项目**。代码托管 = **GitHub 主仓 + Gitee 镜像**。
 ⚠️ **改造前那批旧分数（baseline 0.983 / optimized 1.0 / 0.967）一律不可比**：旧题集已删、口径已换；
-当前成绩只看**阶段 6 重建后的两轮**（见「评估」）。
+当前成绩只看**当前题集**（重建后）跑出的两轮（见「评估」）。
 
 ## 必须遵守的约定
 
@@ -108,8 +108,8 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - **执行模式** `single` / `multi` / `auto`：`auto` 先由 `route_node` 判复杂度（simple 只跑 Executor，complex 走完整三阶段）；CLI `--mode` 与 Web 下拉框都能选。
 - **Verifier 打回上限**：`retry_count` 只在"重跑那一次" +1 ⇒ 最多打回 `MAX_RETRY`(2) 次，Executor 共跑 3 次。
 - **模型按角色配**：注册表 `config/models.json`（**默认空** ⇒ 四个角色走 `.env` 的 `MODEL_NAME`，即界面里的「使用配置默认」）；`get_llm(role)`。⚠️ **测试里必须同时 patch `ma.get_llm` 与 `ma.registry`**，否则 planner 会真调模型（实测让 pytest 从 8s 变 104s）。
-- **三处配置的优先级**：`runtime/web-settings.json`（界面点的）**>** `config/models.json` **>** `.env`。⚠️ **CLI 与 evals 根本不读 `web-settings.json`** ⇒ 跑评估前必须确认 `.env` 的 `MODEL_API_KEY` 有效（界面里那把 key 帮不上忙）。
-- **提示词里的模型名必须运行期取**（订正 #37）：`prompts.PROMPT_CONTEXT` **故意不含 `model_name`**，一律走 `prompt_context(role)` → 取**实际调用名**。拿静态 `PROMPT_CONTEXT` 去 format 会 `KeyError: 'model_name'` —— **这是故意的**：宁可响亮失败，别静默报错名字。
+- **配模型：Web 用户在界面「⚙ 模型设置」里配即可，不用改 `.env`**。三处配置的优先级：`runtime/web-settings.json`（界面点的）**>** `config/models.json` **>** `.env`。⚠️ **`web-settings.json` 只有 Web 进程读写**（`app/web/server.py`）⇒ **CLI 与 evals 只认 `config/models.json` + `.env`**：跑评估前必须确认 `.env` 的 `MODEL_API_KEY` 有效（界面里那把 key 帮不上忙）。
+- **提示词里的模型名必须运行期取**：`prompts.PROMPT_CONTEXT` **故意不含 `model_name`**，一律走 `prompt_context(role)` → 取**实际调用名**。拿静态 `PROMPT_CONTEXT` 去 format 会 `KeyError: 'model_name'` —— **这是故意的**：宁可响亮失败，别静默报错名字。
 - **显示名 ≠ 调用名**：`models.json` 的键是给用户看的**显示名**，`model` 字段才是发给 API 的名字（官方改名时只动一行）。
 
 ### 环境与工具链
@@ -118,11 +118,11 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - **运行时目录**由 `config.py` 创建（全新 clone 不会因目录缺失失败）。⚠️ `runtime/checkpoint/`（单数）已彻底移除，并留了"不存在"的断言防回归。
 - **依赖服务**：`agent-mysql` / `searxng` / `redis-stack-server` 由仓库根 `docker-compose.yml` 管理（`name: code-agent-deps`）；**`my-nginx` 归 WSL 里的 `~/nginx`**（挂载源是 WSL 路径，搬到 Windows 侧 compose 会**静默挂空目录**）。一键脚本 `scripts/run/start-deps.ps1` / `stop-deps.ps1`；4 个容器都 `restart: unless-stopped`。
 - ⚠️ **WSL 那份 nginx compose 不要用「单文件挂载」**：跨发行版单文件挂载会失败**且故障固化**（暂存位按源路径 hash 命名，重启 Docker 也没用）⇒ 只挂目录 + 自定义配置写 `conf/conf.d/*.conf`；已踩过就 `docker compose up -d --force-recreate`。
-- ⚠️ **`powershell_tools.py` 的三个缺陷已修（订正 #39）**：旧写法 `shell=True` + 列表 ⇒ 实际走 `cmd.exe /c powershell -Command "<整条>"` ⇒ ①**多行命令在第一个换行处被截断**（还返回"成功但没输出"）②命令里的 `&` 被 cmd 当分隔符 ③固定 `encoding="gbk"` 与子进程的 UTF-8 混流 ⇒ 乱码。**修法**：`shell=False` + **逐行解码** + stderr 回显。
+- ⚠️ **`powershell_tools.py` 的三个缺陷已修**：旧写法 `shell=True` + 列表 ⇒ 实际走 `cmd.exe /c powershell -Command "<整条>"` ⇒ ①**多行命令在第一个换行处被截断**（还返回"成功但没输出"）②命令里的 `&` 被 cmd 当分隔符 ③固定 `encoding="gbk"` 与子进程的 UTF-8 混流 ⇒ 乱码。**修法**：`shell=False` + **逐行解码** + stderr 回显。
 - 🔴 **逐行解码的判据要两条**：只写"先 UTF-8、失败退 GBK"不够 —— **GBK 字节有时恰好是合法 UTF-8**（`目录` 的 `C4 BF BC` 解成 `Ŀ¼`）⇒ 必须再加"**解出的字符落在 `U+0080–U+02FF` 就改用 GBK**"。已知假阳性（刻意接受）：真 UTF-8 拉丁文本（`café`）会被按 GBK 解成 `caf茅`。回归测试 `tests/test_powershell_exec.py`（**3 条必须真起子进程**，因为破坏发生在 cmd.exe 解析阶段）。
 - **搜索不依赖浏览器**：`browser_tools.py` 只调 SearXNG JSON API（文件名是历史遗留）；Selenium / Edge / msedgedriver 都不需要。
 
-### 上下文工程与分层记忆（阶段 4，都是实测结论）
+### 上下文工程与分层记忆（都是实测结论）
 
 - **工具结果外置**：≥6000 字符或 150 行 ⇒ 落盘 `runtime/tool_results/`，上下文只留预览 + 路径。⚠️ **`read_file` / `read_file_range` 在豁免名单，不许外置** —— 实测同一道"读全文并总结"：外置后模型看不见内容、改用分段读绕过，**token 从 17,361 涨到 127,071（7.3 倍）**。读 `tool_results/` 里的文件**不再外置**（同内容同 hash ⇒ 死循环）。
 - **对话压实**：历史超阈值 ⇒ 最老一段压成四段式摘要；**摘要失败就原样保留**（省 token 不能把历史弄丢）。
@@ -151,14 +151,14 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - ⚠️ **代价说清**：这么改之后**每个 RAG 工具调用付 ≈8 秒**子进程启动（`rag` 的 initialize 8.0–10.6s，而 `code_tools` 只有 0.9s）。改进方向：把 `query_rag` 改成本地工具，或让 MCP server 常驻。
 - **自动沉淀走 `store.save_document`（进程内），不走 MCP 工具**；它**不走三档权限弹框**（那是应用自己的记账，不是模型的自主动作），但**「只读」档下仍然不写**。模型**自己**调 `save_knowledge` 时照旧弹框。
 - **排错工具**：`scripts/probe_mcp_server.py` —— 从 Agent 侧看，"服务端不回"与"客户端读不到"是**同一种症状**，只有手工发 JSON-RPC 才能分清。
-- **检索质量（阶段 6 消融，实测）**：文件粒度 top-1 命中 **0.6 → 0.9**；真源 top-1 **0.4 → 0.6**；干扰项命中 **0.6 → 0.4**；稳态延迟 **12.8 → 86.7 ms**（全量召回对照 289.7 ms）。⚠️ **语料只有 35 条原子** ⇒ 数字是**真实下界，别外推**；`RAG_RECALL_K=10` **不动**（2026-09-23 定），对照组差异作为**局限**写进报告。
+- **检索质量（消融实测）**：文件粒度 top-1 命中 **0.6 → 0.9**；真源 top-1 **0.4 → 0.6**；干扰项命中 **0.6 → 0.4**；稳态延迟 **12.8 → 86.7 ms**（全量召回对照 289.7 ms）。⚠️ **语料只有 35 条原子** ⇒ 数字是**真实下界，别外推**；`RAG_RECALL_K=10` **不动**（2026-09-23 定），对照组差异作为**局限**写进报告。
 - **RAG 的定位 = 语义记忆**（记录使用中积累的经验/习惯），**不是企业知识库问答**；别为了指标好看扩语料或换模型。
 - **两个本地模型不进版本控制**（各 ≈87MB）：`all-MiniLM-L6-v2`（向量）+ `ms-marco-MiniLM-L-6-v2`（精排）；默认位置 `<仓库上级目录>/embedding-model/…`（**不写死任何人的路径**）。装法 `uv run python scripts/fetch_models.py`。
 - 🔴 **不许恢复"缺模型就自动下载"**：实测那条路要 **236 秒 / 下 671 MB**（`ignore_file_pattern` 没滤掉 ONNX/OpenVINO，真正需要只有 87 MB），而且外层 `redirect_stderr(None)` 把下载器的报错也堵死 ⇒ 用户只看得到 `AttributeError: 'NoneType' object has no attribute 'write'`。
 - **现在的行为**：缺向量模型 ⇒ `store.RagModelMissing`，**0.06 秒**抛出（判据放在 `import sentence_transformers` **之前**），消息里给两条出路；缺精排 ⇒ **优雅降级**（纯向量召回，不抛）。Web 启动会打两行 `[RAG] …` 状态。
 - **MCP 生命周期**：`MultiServerMCPClient.get_tools()` 的 docstring 明写"每次工具调用新建会话" ⇒ 没有长期连接、**没有需要关闭的 client**；`__aexit__` 是普通函数，调用即抛 `NotImplementedError`（不能当上下文管理器）。
 
-### 评估（阶段 6 重建，口径**别改回去**）
+### 评估（口径**别改回去**）
 
 - **规模与成绩**：30 题 / **163 条断言**（状态 **124** / 轨迹 29 / 文本 10；**LLM 评分档 0 条**）；**single 30/30、multi 30/30**，平均分都是 **1.0000**；打回 / 击穿预算 / 超时 / 未测 / 异常全 **0**。
 - **成本画像**：multi/single 的 token **中位 1.58×**、时间 **2.07×**；其中 **Verifier 占总 token 25%**、Planner 2.4%。
@@ -180,19 +180,19 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 | 知识库条目 | 测试语料 35；**产品库默认 0** | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
 | RAG 消融 | top-1 正解 0.40 → 0.60（对照 0.70）；干扰 0.60 → 0.40 | `uv run python evals/rag_ablation.py --reps 10` |
 
-### 安全与权限（阶段 5，**主防线在应用层**）
+### 安全与权限（**主防线在应用层**）
 
 - **三档权限**（只读 / **需确认（默认）** / 放开）与 **32 个工具**的档位表在 `app/code_agent/security/permissions.py`（只读 14 / 写执行 18 / 高危 6）。
 - 🔴 **`tool_wrap._process` 里的顺序不许动**（完整顺序见「代码地图」）：① 停止检查必须在权限之前（已决定要停的
   任务不该再弹框问用户）；② 权限判定必须在缓存查询**之前** —— 否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果。测试守着工具数一个不多一个不少 + 四条实现约束。
 - ⚠️ **内容级黑名单**两侧都是"flag 后瞻匹配、顺序无关"（曾漏掉 `rm -rf /`、`rm -fr /` 与 `rm`/`del`/`rd`/`ri` 别名）；
   且**别指望命令自带的开关** —— GNU rm 的 `--preserve-root` **只管"参数就是 `/` 自身"**（`rm -rf /*`、`rm -rf /mnt/c/…` 都不管），`chmod`/`chown`/`chgrp` 递归操作 `/` **默认不保护**。
-- **回归测试** `tests/test_dangerous_commands.py`：**打桩 `subprocess`，断言危险命令走不到"启动子进程"那一步**。⚠️ **别再真打危险命令去"验证"**（阶段 5 真踩过：`rm -rf /` 真的进了 WSL）。
+- **回归测试** `tests/test_dangerous_commands.py`：**打桩 `subprocess`，断言危险命令走不到"启动子进程"那一步**。⚠️ **别再真打危险命令去"验证"**（真踩过：`rm -rf /` 真的进了 WSL）。
 - 🔴 **WSL2 只是隔离执行环境，不是安全沙箱**：它默认挂 `/mnt/c`，而 `vm.py` 还主动用这条通道读写 Windows 文件 ⇒ 对外措辞**别说"沙箱"**。
 - **可达性**：`execute_powershell_command` 是**唯一能把原始命令透传下去**的入口；VM 四个工具都 `shlex.quote` 过参数（那边属纵深防御）。
 - **审计**：`runtime/permissions.log`（所有确认决定 + 放开档高危操作，一行一条 JSON）。
 
-### 跨轮状态必须复位（阶段 8 · 实测，**最容易复发的一类**）
+### 跨轮状态必须复位（实测，**最容易复发的一类**）
 
 - 🔴 **症状**：新任务**带着上一轮的"计划/轨迹/判定"跑**（回复里还会混进上一轮计划的章节）。
 - **根因**：LangGraph 的语义是"**没传进 `ainvoke` 的通道保留上一轮 checkpoint 的值**" ⇒ `plan` / `verdict` /
@@ -202,7 +202,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
   `tests/test_per_turn_state.py::test_every_state_channel_is_classified` 会拿 `AgentState` 的**全部通道**
   做覆盖校验，漏一个当场变红（跨轮累积只允许 `messages`）。
 
-### 停止 / 墙钟 / 终止文案（阶段 8 · P0 + P1）
+### 停止 / 墙钟 / 终止文案
 
 - **停止是"协作式"的**：只在三个**检查点**生效 —— ① 节点入口（planner / executor / verifier）
   ② executor 的 **ReAct 每一步** ③ **每次工具调用之前**（`utils/tool_wrap.py::_process`）。
@@ -235,11 +235,11 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
   ② `run_multi_agent` 里**不许**把预算终止套上「任务执行完成，但验收未通过」那层包装
   （重跑轮撞预算时 `verdict` 还留着上一轮的 FAIL，一包装就是第 2 题现场那句看不懂的混合文案）；
   ③ 文案统一走 `_budget_message` / `_cancel_message`，两者共用 `_SIDE_EFFECTS_KEPT` 与 `_TERMINATION_TAIL`。
-- 🔴 **终止说明里不许写「见上方工具调用轨迹」**（账本 R6）：历史回放**只有最终回复、没有轨迹**
+- 🔴 **终止说明里不许写「见上方工具调用轨迹」**：历史回放**只有最终回复、没有轨迹**
   （`web/server.py::get_session_messages` 只回 role+content），那句话会把人引到不存在的地方。
   守卫在 `tests/test_termination.py`（**AST 级**：只查字符串字面量，注释里提它是允许的）。
 
-### 「模板没替换」的检测（阶段 8 · P1.5，候选池 §十五B）
+### 「模板没替换」的检测
 
 - 判据在 `utils/placeholder_guard.py`，**两道口子共用**：① 任务入口（`run_multi_agent`：命中 ⇒ 只回问、**不进图**，0 次模型/工具调用）② 工具层（`tool_wrap._process`：**路径类参数**命中 ⇒ 抛 `PlaceholderArgError`，普通 `Exception` ⇒ ToolNode 变成 ToolMessage，模型自己改）。
 - 🔴 **判据是「形状 + 占位词」双条件，不是见到尖括号就拦** —— 实测两道评估题会被朴素实现误伤：
@@ -250,7 +250,7 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - 🔴 **护栏**：`tests/test_placeholder_guard.py::test_every_eval_task_prompt_passes_the_guard`
   把**全部 30 道评估题**过一遍 —— 以后谁加了带真占位符的题会当场变红。
 
-### 什么时候该先问一句（阶段 8 · P1，候选池 §十五A）
+### 什么时候该先问一句
 
 - 两个 Executor 提示词（`SYSTEM_PROMPT_TEMPLATE` / `EXECUTOR_PLAN_PROMPT`）都拼了同一个常量
   `prompts.CLARIFY_PRINCIPLES`：判据是「**问一下的成本 vs 猜错重做的成本**」，
@@ -318,48 +318,36 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
   Gitee 只认 `…@user.noreply.gitee.com`（**两个平台互不认账**）。本仓库已固定用 GitHub noreply：
   `214781303+ColdZeda@users.noreply.github.com`。⚠️ 一条提交**只能带一个邮箱**；邮箱公开可查 ⇒ 优先 noreply。
 
-## 代码地图
+## 代码地图（改代码先看这几处）
 
-```text
-main.py                      CLI 入口（argparse）
-app/code_agent/              Agent 主体
-├── agent/                   状态图(multi_agent) · 停止与墙钟(cancel) · 上下文工程(context) · 分层记忆(memory)
-│                            · **token 计量明细(usage)** · 节点级事件(events) · REPL 与非交互入口(code_agent) · 提示词(prompts)
-├── model/llm.py             模型注册表：按角色取 / 降级链 / 热切换（build_llm / set_llm）
-├── mcp_servers/             自建 MCP server：powershell(2) / browser(1) / mysql(10) / vm(4) / code_tools(4)
-├── rag/                     rag.py（MCP 薄壳，4 工具）· store.py（分块 / 召回 / 精排，全懒加载）
-│                            · chunking.py（纯函数，不 import torch）
-├── security/permissions.py  三档权限档位表（32 工具）+ 判定 + 人工确认闸门 + 审计
-├── tools/file_tools.py      FileManagementToolkit(root_dir=WORKSPACE_DIR) → 7 个文件工具
-└── utils/                   mcp 工厂(load_mcp_tools) · tool_cache(Redis) · 占位符守卫(placeholder_guard)
-                             · tool_wrap(停止检查→占位符→权限→外置→缓存：工具调用的唯一收口)
-config/models.json           模型注册表（默认空 = 走 .env；**进版本控制**，用户自定义模型在 web-settings.json）
-app/web/                     server.py（FastAPI：WS /ws/chat + REST + 托管 dist + /api/sessions）
-                             · sessions.py（会话侧车库 runtime/sessions.db）· frontend/（Vue3 源码 + 入库的 dist）
-evals/                       评估体系：tasks(30 题) · verifiers(判定器工厂) · runner · run_e2e
-                             · preflight · report · rag_bench · rag_ablation · merge_runs
-                             · reset_eval_threads · env(语料隔离) + fixtures/knowledge/(35 条夹具)
-scripts/                     probe_mcp_server.py · fetch_models.py · mysql-init/ · run/（启停脚本）
-tests/                       单元/工具级测试（含默认不跑的集成测试 tests/test_integration_mcp.py）
-docs/                        architecture.md（ADR）· archive/（冻结快照）
-                             · evidence/（评估原始结果 + 报告 + 截图）· records/（过程账，可编辑）
-```
+| 要改什么 | 去哪 |
+|---|---|
+| 状态图 / 编排（route → planner → executor → verifier、条件边、`PER_TURN_RESET`） | `app/code_agent/agent/multi_agent.py` |
+| **工具调用的唯一收口**（停止检查 → 占位符 → 权限 → 外置 → 缓存） | `app/code_agent/utils/tool_wrap.py` |
+| 停止 / 墙钟（`TaskCancelled` / `CancelToken` / `pause_clock`） | `app/code_agent/agent/cancel.py` |
+| 三档权限档位表（32 工具）+ 判定 + 确认闸门 + 审计 | `app/code_agent/security/permissions.py` |
+| 上下文工程（结果外置 / 压实 / token 预算） | `app/code_agent/agent/context.py` |
+| token 计量明细（`normalize_usage` / `merge_token_detail`） | `app/code_agent/agent/usage.py` |
+| 模型注册表（按角色取 / 降级链 / 热切换） | `app/code_agent/model/llm.py` |
+| MCP 工具加载 · 占位符守卫 · 只读缓存 | `app/code_agent/utils/`（`mcp.py` / `placeholder_guard.py` / `tool_cache.py`） |
+| **三条入口都要接包装层** | `main.py` · `app/code_agent/agent/code_agent.py::run_single_task` · `app/web/server.py::AgentRuntime.load()` |
+| 全部文件与目录 | → [`README.md`](README.md) 的「项目结构」 |
 
 **模块级细节与设计取舍看 [`docs/architecture.md`](docs/architecture.md)** —— 6 条 ADR：RAG 全链路 /
 评测体系 / 上下文工程 / Agent 编排 / 权限与安全 / 会话存储分家（每条含**代价与否决理由**）。
 
-## 阶段收尾清单
+## 收尾清单
 
 > 为什么要有这一节：活文档描述"现在是什么样"，每改一次代码就可能失效一处。
 > **过期比缺失更危险** —— 缺失可以读代码补，过期会让下一个会话照着错的做。
 
 | # | 收尾动作 |
 |---|---|
-| 1 | 刷新「**接活先看**」：当前阶段 / 最近提交 / CI 状态 / 待办 |
-| 2 | 核对本阶段**影响到**的段落：环境与工具链 / 常用命令 / 代码地图 / 关键数字 |
+| 1 | 刷新「**接活先看**」：当前状态 / 最近提交 / CI 状态 / 待办 |
+| 2 | 核对本次改动**影响到**的段落：环境与工具链 / 常用命令 / 代码地图 / 关键数字 |
 | 3 | 改掉 `README.md` 里受影响的数字与章节（对外状态 ≤10 行） |
 | 4 | ⚠️ **2026-10-08 起改为**：新结论**只写仓库内**（`docs/records/` + 本文件），**不再**往仓库外《讨论结论汇总》追加订正记录（它已降级为历史档案，编号停在 #80） |
-| 5 | **机械自查**：`git grep` 本阶段的关键名词（旧工具名 / 容器名 / 服务名 / 端口 / 测试数 / 覆盖率 / 旧路径），命中的**活文档**必须改对；只追加类文件不算 |
+| 5 | **机械自查**：`git grep` 本次改动的关键名词（旧工具名 / 容器名 / 服务名 / 端口 / 测试数 / 覆盖率 / 旧路径），命中的**活文档**必须改对；只追加类文件不算 |
 | 6 | `uv run python -m pytest tests/ -q` + `uv run ruff check .` + `uv run ruff format --check .` 全过 |
 | 7 | `git add` → `commit`（信息里带验收数字）→ **两个远端都要推**：`git push origin master` + `git push github master` |
 | 8 | 如需给历史留档：另存一份带日期的冻结快照进 `docs/archive/`（头部 3 行声明"冻结 + 当前规范看 `AGENTS.md`"） |
@@ -377,5 +365,6 @@ docs/                        architecture.md（ADR）· archive/（冻结快照�
   已进本文件「已知坑」的事项在这里**只留索引与当时的证据**，不重复细节。
 - 项目过程档案（阶段方案 / 讨论结论汇总 / 交接文档的**活版本**）在**仓库外的项目档案目录（开发者本地维护）**
   —— 仓库内不留本机路径，也不重复它的内容。
-- 阶段 5 / 阶段 6 的完整执行清单、红绿证据与 D1–D5 缺陷账：
-  `docs/records/2026-09-25_评估口径与缺陷账.md` + 仓库外《讨论结论汇总》的订正记录（编号 #1–**#80**：阶段 5/6 到 #70，#71–#72 属阶段 7，**阶段 8 是 #73–#80**）。
+- 完整执行清单、红绿证据与 D1–D5 缺陷账：`docs/records/2026-09-25_评估口径与缺陷账.md` ·
+  `docs/records/2026-10-07_阶段8修复账.md` · `docs/archive/阶段8-计划与结果-2026-10-07.md`；
+  仓库外《讨论结论汇总》的订正记录**已冻结**（编号停在 #80）。

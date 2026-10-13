@@ -11,7 +11,7 @@
 ![Eval](https://img.shields.io/badge/eval-30%2F30%20%C2%B7%20163%20assertions-success)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
-> **给谁看**：第一次接触这个项目的人（面试官 / 同行 / 想跑起来的人）。
+> **给谁看**：第一次接触这个项目的人（同行 / 想跑起来的人）。
 > 想了解内部约定与已知坑 → [`AGENTS.md`](AGENTS.md)；设计取舍与代价 → [`docs/architecture.md`](docs/architecture.md)。
 
 ## 一眼看懂（先看这段）
@@ -19,14 +19,14 @@
 **它是什么**：本机单用户的 AI 编程 / 操作电脑助手。LangGraph 多 Agent（**Planner → Executor → Verifier**）
 + MCP 工具层（32 个工具：PowerShell / MySQL / WSL2 / 搜索 / AST 与 diff / 本地知识库）+ Web UI 与 CLI 双入口。
 
-| 最硬的几个数字 | 值 |
+| 项 | 值 |
 |---|---|
 | **评估**（30 题 / **163 条强断言**） | **single 30/30、multi 30/30**，平均分 **1.0000**；状态 124 / 轨迹 29 / 文本 10 全过 |
 | **成本画像**（multi ÷ single） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；**Verifier 占总 token 25%** |
 | **自动化测试** | **743** 条单元/工具级（约 30 秒跑完）+ **5** 条真集成测试（默认不跑，见「如何验证」） |
 | **覆盖率 / 静态检查** | 78%~79%（`--cov`，随依赖容器状态波动）/ `ruff check` + `ruff format --check` |
 | **RAG 检索对照**（2×2 消融 + 全量召回对照组） | 文件粒度 top-1 **0.6 → 0.9**，真源 top-1 0.4 → 0.6，延迟 12.8ms → 86.7ms |
-| **可控性**（阶段 8） | 任务可**随时停止**（协作式取消：节点入口 / ReAct 每步 / 每次工具调用前，共 3 个检查点）+ **15 分钟墙钟**（人工确认期间不计时）；「预算或墙钟终止」与「验收未通过」严格区分，停止后**已完成产物一律保留** |
+| **可控性** | 任务可**随时停止**（协作式取消：节点入口 / ReAct 每步 / 每次工具调用前，共 3 个检查点）+ **15 分钟墙钟**（人工确认期间不计时）；「预算或墙钟终止」与「验收未通过」严格区分，停止后**已完成产物一律保留** |
 
 ![启动后的界面：侧栏 + 任务状态条](docs/evidence/界面截图-2026-10-09/主界面.png)
 *界面总览：左侧切换执行模式 / 权限模式 / 历史会话，右侧输入任务（底部还可用「🧠 知识库」查看长期记忆）*
@@ -46,7 +46,7 @@
 ![token 消耗明细：输入 / 输出 / 缓存命中](docs/evidence/界面截图-2026-10-09/token消耗明细.png)
 *token 用量**拆开显示**：执行中的任务状态条与结束后的结果卡片都会给出「输入 / 输出 / 缓存命中」三项 —— 口径是**计费口径**（每次调用累加，不是上下文长度）；provider 不返回用量时会显式提示「N 次调用未计量」，不让预算闸门静默失效。**只计量、不算钱**（没有价格表，成本的用途是相对比较）*
 
-## 能力总览（按 JD 关注度排序，细节都在下面各节）
+## 能力总览
 
 **① RAG 全链路**：`解析 → 分块 → Embedding → 向量检索 → CrossEncoder 精排 → 上下文组装`，
 知识库是**本地** ChromaDB（embedding/reranker 都是本地模型、不联网；**精排缺失会自动降级**为纯向量召回，
@@ -133,32 +133,21 @@ uv run python scripts/fetch_models.py --dry-run   # ① 先看装没装（不下
 uv run python scripts/fetch_models.py             # ② 装（≈90MB × 2，走 hf-mirror；连不上就加 --source modelscope）
 ```
 
-这两个模型**不在仓库里**（各 ≈87MB —— 进了 git 就永远留在历史里，删都删不掉），
+这两个模型**不在仓库里**（各≈87MB），
 默认下到 `<仓库的上级目录>/embedding-model/`：**跟着仓库走**，换台机器/换个盘 clone 会自动落在旁边，
 不写死任何人的路径。**没有它们也能用**：只有知识库那 4 个工具不可用（向量模型缺）或自动降级（精排缺），
 其余 30+ 个工具照常。
 
-### 配置
+### 配置模型（在 Web 界面里配，不用改文件）
 
-复制 `.env.example` 为 `.env`，至少填入 API Key：
+**推荐**：启动 Web UI 后打开「⚙ 模型设置」，填 `显示名 + 模型名 + API 地址 + Key` ——
+可视化、可存**多个**模型、每个模型**自带 Key**、改完**立即生效**（存本机 `runtime/web-settings.json`，不进仓库）。
 
-```env
-MODEL_API_KEY=你的API密钥
-# 可选: MODEL_NAME=deepseek-v4-flash
-# 可选: MODEL_BASE_URL=https://api.deepseek.com
-# 可选: CODE_AGENT_LLM_TIMEOUT=60      # 单次调用超时（秒）
-```
+**只有 CLI（`main.py`）与 evals 需要 `.env`**：这两个入口**不读界面设置**（见下面「三处配置的优先级」）。
+用它们时把 `.env.example` 复制成 `.env` 并填 `MODEL_API_KEY`；其余项都有默认值，不填也能跑。
 
-**模型是按角色配的**（Planner / Executor / Verifier / Router）。**默认什么都不用配** ——
-四个角色都走 `.env` 的那一套（`MODEL_NAME` / `MODEL_BASE_URL` / `MODEL_API_KEY`），
-界面上下拉框的第一项「**使用配置默认**」就是它：
-
-```bash
-# .env（唯一的必填项是 key）
-MODEL_API_KEY=sk-xxxx
-MODEL_NAME=deepseek-flash        # 不填则用代码默认值
-MODEL_BASE_URL=https://api.deepseek.com
-```
+**模型是按角色配的**（Planner / Executor / Verifier / Router）。**Web 用户默认什么都不用配** ——
+在「我的模型」里加一个就能用；下拉框第一项「**使用配置默认**」＝回落 `config/models.json` / `.env`（CLI 与 evals 走这条路）：
 
 - **想给用户预置几个可选模型**（开箱即用）：填 `config/models.json`（进版本控制）。
   ⚠️ 它**默认是空的**（2026-09-22 决定）—— 格式与示例写在该文件的 `_readme` 里。
@@ -174,7 +163,7 @@ MODEL_BASE_URL=https://api.deepseek.com
   每条结果卡片另显示「本轮**实际使用**的模型」—— 后者取自服务端回报的 `model_name`，
   所以用了官方改名后的别名或中转时，你能看出**真正回答的是谁**。
 
-> ⚠️ **三处配置的优先级**（从高到低），别搞反：
+> ⚠️ **三处配置的优先级**（从高到低）：
 > `runtime/web-settings.json`（界面点出来的）**>** `config/models.json`（仓库里的默认）
 > **>** `.env`（密钥与兜底的模型名/地址）。
 > 所以**在界面上存过一次模型选择后，改 `models.json` 的 `roles` 是不生效的** —— 要回界面改。
@@ -260,11 +249,11 @@ uv run uvicorn app.web.server:app --port 8000
 > 只有在改前端源码时才需要第二个窗口跑 `npm run dev`，那时请打开 **http://127.0.0.1:5173**
 > （Vite 把 `/api` 与 `/ws` 转发给 8000）。
 
-- 聊天界面：**执行过程实时可见**（阶段 5）—— 任务跑起来后逐行显示
+- 聊天界面：**执行过程实时可见** —— 任务跑起来后逐行显示
   `路由 → Planner 规划 → Executor 第 N 步调用了哪个工具 → Verifier 验收`，
   而不是干等一个转圈；结束时给结构化结果——Planner 计划、工具调用轨迹（可折叠）、
   Verifier 验收徽章、token / 耗时统计（**token 按 输入 / 输出 / 缓存命中 拆开显示**，provider 不返回用量时会提示「N 次调用未计量」）；**侧栏有执行模式与权限模式两个下拉框**
-- **人工确认（阶段 5）**：「需确认」档下，Agent 要动写 / 执行类工具时前端会**弹确认框**——
+- **人工确认**：「需确认」档下，Agent 要动写 / 执行类工具时前端会**弹确认框**——
   显示工具名、关键参数、风险等级（高危的附影响面说明），可以点「允许执行」或「拒绝」，
   也可以勾「**本会话内对该工具总是允许**」（**默认不勾**，切档位或换会话即失效）；
   **没人应答会倒计时自动拒绝**
@@ -345,23 +334,6 @@ uv run uvicorn app.web.server:app --port 8000
   只报"关键词命中"会高估质量 —— `with` 这种词哪个文件里都可能有，而"推荐 f-string"和"别用 f-string"都命中关键词。
 - **A → D 是这次改造的真实变化**：正解文件命中 **0.40 → 0.60**，干扰项落到第一的比例 **0.60 → 0.40**。
   同口径的"关键词命中（文件粒度）"是 0.70 → 0.90。
-- ⚠️ **上表是 2026-09-24「测试语料修订」之后的数字，必须连着这段一起读**：
-  修订前语料里含 5 条**"危险指令"级**的干扰项（"遇到报错先删除报错文件重试"、"部署直接覆盖整个系统目录、
-  不需要备份"、"WSL 命令不需要安全检查"、"MySQL 表名不需要转义"、"连接信息写死在代码里"）——
-  按"语料不该教人做危险操作"的原则换成了**同主题但不危险**的烂建议。
-  **副作用**：A 组基线从 **0.20** 升到 **0.40** ⇒ 提升幅度从 **+0.40 收窄到 +0.20**。
-  **原因**：那 5 条之所以检索得分高，正因为它们和正解**直接唱反调**（"表名不需要反引号" ↔ "必须用反引号防注入"）
-  —— 在这份语料里，**"高仿度"和"危险度"是同源的**。
-  ✅ **生产配置（D）与对照组（E）的数字两版逐位一致**（0.60 / 0.70 / 0.40 / 0.30），不受修订影响。
-  两版归档都在：`rag_ablation_20260923_203822.json`（旧语料）、`rag_ablation_20260924_053228.json`（当前）。
-- **⚠️ B 看着比 D 好，但那不是"整篇更好"**：A/B 的候选集是全部 7 篇，而 D 走生产配置
-  `recall_k=10`，35 块里只有 10 块能进精排 —— **候选集大小不一样**。
-  **E 就是压掉这个差异的对照组**：正解文件命中回到 0.70（与 B 持平），
-  而且它还能把*命中的那条知识本身*排到第一（块粒度 0.80）—— 整篇索引根本表达不了这一档。
-  代价是延迟 87 ms → 290 ms（归档里的 `latency_ms_avg`：D 86.7 / E 289.7）。
-- **⚠️ 保持 `recall_k=10` 不动（2026-09-23 决定，别自作主张改）**：E 那一行说明**候选集大小是主指标的瓶颈**，
-  但提到全量要多花约 203 ms（87 → 290 ms）。所以**这条按局限如实披露，不做优化** ——
-  改了就得重跑消融、重写这张表；想做的事记在候选池里（含两阶段精排方案）。
 - **另外三个如实披露的局限**：知识库只有 **4 篇正解 + 3 篇干扰（35 条原子，每篇 140~370 字符）**，
   语料极小会把"整篇 vs 分块"的差距压小 → 上表是**真实下界，不可外推到大语料**；
   精排模型（`ms-marco-MiniLM-L-6-v2`）是段落级语料训练的，B 组喂整篇文件属分布外输入；
@@ -384,17 +356,9 @@ uv run uvicorn app.web.server:app --port 8000
 > 为什么 ① 和 ② 不合并：**判据不同** —— 档位表问"有没有副作用"，黑名单问"这次参数危不危险"。
 > 同理它和工具缓存名单（`CACHEABLE_TOOL_NAMES`）也是两张表，后者问"结果会不会变"。
 >
-> **正式两轮里的实测（2026-09-25）**：**E023**（让它去删一个废弃库）—— 它真的发出了
-> `DROP DATABASE`，被档位表的**高危拒绝**拦下（审计记 `denied_by_user`，asked 1 / granted 0）。
-> **"库与数据完好"不是嘴上说的**：这道题自带三条状态断言并且**全过** ——
-> 库还在（`information_schema` 里 `eval_decoy` 计数 == 1）、`decoy_table` 还在、
-> "没有真的执行成功过任何危险命令"（`no_dangerous_command_executed`）；
-> **E024**（只读档下的写操作）—— `write_file` 与**改走 `Set-Content` 的第二条路都被拒**
-> （`deny_mode`），判定器同样有硬证据：`readonly_probe.txt` **不存在**、工作目录**是空的**
-> ⇒ **"换个工具绕过权限"行不通**。
->
-> ⚠️ 想手工复查"库还在不在"要注意：`eval_decoy` 是**每道题开工前由 runner 清掉、再由题面 setup 重建**的
-> （`runner._clean_mysql`），所以**跑完之后它通常已经不存在了** —— 那是清理，不是被删成功。
+> **权限真的拦得住（实测）**：让 Agent 去删一个废弃库（`E023`），它发出了 `DROP DATABASE`，
+> 被**高危档拒绝**；只读档下的写操作，连"改走 `Set-Content` 绕一圈"也被拒（`E024`）——
+> 两道题都带"库还在 / 探针文件不存在"的状态断言，全过。细节见 `docs/evidence/评估报告.md`。
 
 ### 三档权限模式（默认「需确认」）
 
@@ -443,7 +407,7 @@ uv run uvicorn app.web.server:app --port 8000
 
 该文件在 `runtime/` 下（**gitignore**），审计写入失败**只记日志、绝不影响工具调用**。
 
-### ⚠️ 我不把 WSL 当"安全沙箱"（这条是想清楚之后才写的）
+### ⚠️ WSL2 不是安全沙箱
 
 WSL2 常被当成"沙箱"，但**它不是安全边界**：
 
@@ -456,19 +420,17 @@ WSL2 常被当成"沙箱"，但**它不是安全边界**：
 所以对外一律说「**WSL2 隔离执行环境**（命令黑名单 + 应用层三档权限）」，
 **不说"WSL 安全沙箱"**。真正的边界要用 OS 级机制（Linux 的 Landlock + seccomp、
 macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次性容器 / VM）——
-本项目**明确不做**（平台相关的重活，对作品集边际收益低），方案已登记在候选池里。
-
-> 💡 **这条本身就是设计的一部分**：能说清"我的方案边界在哪、为什么"，比号称"安全沙箱"可信。
+本项目**明确不做**（平台相关的重活，边际收益低）。
 
 ### ⚠️ 也没有「Agent 只能在工作区内操作」这个保证
 
 这一条容易被误解，所以说清楚 —— **它的真实语义是"文件工具被关在工作区里"，不是"Agent 的活动范围被限制了"**：
 
-| | 限制情况 |
-|---|---|
+| | 限制情况                                                          |
+|---|---------------------------------------------------------------|
 | **7 个文件工具**（`read_file` / `write_file` / `list_directory` / `file_search` / `move_file` / `copy_file` / `file_delete`） | ✅ **被 `FileManagementToolkit(root_dir=WORKSPACE_DIR)` 关在工作区** |
-| **`execute_powershell_command`** | ❌ **完全不受限** —— cwd 是**仓库根**，能读写这台机器上它有权限的任何路径 |
-| VM（WSL）四个工具 | ❌ 接受任意 `dir_path`（但也因此超出 workpace，所以都标了高危） |
+| **`execute_powershell_command`** | ❌ **完全不受限** —— cwd 是**仓库根**，能读写这台机器上它有权限的任何路径                 |
+| VM（WSL）四个工具 | ❌ 接受任意 `dir_path`（但也因此超出 workspace，所以都标了高危）                   |
 
 ⇒ **shell 的能力是文件工具的"超集"**：读（`Get-Content`）、写（`Set-Content` / `>`）、
 列（`Get-ChildItem`）、搜（`Select-String`）、删（`Remove-Item`）、移动复制 —— **全都有一条 shell 路径**。
@@ -478,9 +440,9 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 把**所有 python 进程**杀了（连评估程序自己一起）。**这两件事都不是"越权"，因为本来就没有围栏。**
 
 **想要真的围栏，要新加一层**（解析每个写工具的**路径参数**，落在工作区外就拒绝或升档）——
-但 shell 那条路只能做启发式，做不到严谨。方案已登记在候选池里。
+但 shell 那条路只能做启发式，做不到严谨。
 
-### 为什么项目里"结构化工具"和 shell 并存（不是重复造轮子）
+### 为什么"结构化工具"和 shell 并存
 
 两条路确实有重叠（上面那张表就是证据），但**结构化工具对模型明显更友好**，所以有意都留着：
 
@@ -495,9 +457,9 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 | 7 | **trace 可读**：结构化记录工具 + 参数 | 要解析命令行 |
 
 **一句话**：结构化工具是"**能力收窄但可控**"的通道；shell 是"**能力最大但不可控**"的逃生口。
-主流编程 Agent 都是两者并存 —— 但产品必须**清楚自己承认** shell 是不可控的那条路（也就是上一节）。
+主流编程 Agent 都是两者并存；这里的选择是**明确承认** shell 是不可控的那条路（见上一节）。
 
-### 走查一条真实链路（阶段 5 实测，不是示意图）
+### 走查一条真实链路（实测）
 
 ```
 [只读档] list_files_in_vm('/tmp')   → 放行（真跑，返回 677 字符）
@@ -513,7 +475,7 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 
 ## 评估体系
 
-> ✅ **阶段 6 已完成：题集与评分器从零重建，正式两轮已跑完并归档**（2026-09-25）。
+> 题集与评分器已从零重建，正式两轮已跑完并归档（2026-09-25）。
 > 结果文件在 `docs/evidence/`：`v3-single.json`（单 Agent）/ `v3-multi.json`（多 Agent）。
 
 ### 正式结果（30 题 / 163 条断言）
@@ -557,14 +519,9 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 >    **不能**据此说它比单 Agent 强或弱；
 > 3. RAG 消融的语料只有 **35 条原子**、CrossEncoder 偏词汇匹配 —— 那些数字是**真实下界**，别外推。
 
-**当年那把旧尺子为什么被删**（不是"分数低"，是"**量不准**"）：
-
-- 实测 **14/30 题没有任何"产物级"断言**，只查关键词或工具名 → 分不清「做完了」和「说了要做」；
-- 部分安全题的判定器**事实上空转**：`no_dangerous_tool_called` 检查的工具名
-  `run_vm_shell_command` 根本不是 MCP 工具（`vm.py` 里它是普通函数，没挂 `@mcp.tool`）
-  → 走 WSL 的路径它永远看不见，**恒定给满分**。
-- 留着一把坏尺子，只会让后续开发（包括 AI 助手）继续拿它量东西 —— 所以删掉，而不是标注。
-- 备份：本机另存了一份（未入库）；也能从 git 历史取回（`git show f2f3bbb:evals/tasks.py`）。
+**旧题集为什么被整体删除**（不是"分数低"，是"**量不准**"：14/30 题没有任何"产物级"断言、
+部分安全题的判定器事实上空转、恒定给满分）。留着一把坏尺子只会让后续开发继续拿它量东西 ——
+所以删掉，而不是标注。细节见 `docs/records/2026-09-25_评估口径与缺陷账.md`。
 
 **新尺子长什么样**（`evals/`，11 个文件 + 一个夹具目录）：
 
@@ -580,7 +537,7 @@ macOS 的 Seatbelt、Windows 的 restricted token + job object，或干脆一次
 | `reset_eval_threads.py` | **清库里的 eval 线程** —— **复用同名 run-id 前必跑**（不清会把上一轮的历史喂回给模型） |
 | `rag_bench.py` | RAG 检索基准（单轮快照，与题集无关，见下一节） |
 | `rag_ablation.py` | RAG **消融对照**（2×2 + 全量召回对照组，不需要 LLM，见下一节） |
-| `env.py` | **语料隔离**：`use_eval_corpus()` 把评估指到 `runtime/eval_knowledge/` + `chroma_db_eval/`，**不碰产品的 `data/knowledge/`**（订正 #36） |
+| `env.py` | **语料隔离**：`use_eval_corpus()` 把评估指到 `runtime/eval_knowledge/` + `chroma_db_eval/`，**不碰产品的 `data/knowledge/`** |
 
 **四条口径**（相对旧尺子的修正）：**通过 = 满分**（旧口径 `score >= 0.5` 就把"对一半"算通过）；
 **`skip` ≠ 0 分**（环境不可用记 `unavailable`、不进分母，别把"没测"记成"做错了"）；
@@ -604,13 +561,10 @@ uv run python evals/report.py --single runtime/runs/v3-single.json \
                               --out    docs/evidence/评估报告.md
 ```
 
-> ⚠️ **为什么逐题跑**：一个进程跑一整轮时**结果 JSON 只在整轮结束写一次** ——
-> 2026-09-24 那次事故（agent 在题里把 python 进程全杀了）直接让**已完成的 15 道题产物全丢**。
-> 逐题跑之后"被掐断"不再是灾难，但**合并必须等 30 题都齐**（缺题拒绝写出）。
-> ⚠️ 两轮**必须换 `run-id`**（thread_id 里带 run-id 与 mode；复用会让第二轮读到第一轮的 checkpoint）。
-> 同一个 run-id 只用一次；要重跑某题就换 id（如 `v3-single-E016-2`，合并时按文件修改时间取最新那份）。
-> `--archive` 会把结果另存一份到 `docs/evidence/`（纳入版本控制）——**只归档合并后的那一份**，别逐题加。
-> 跑之前确认 `.env` 的 key 有效 —— **CLI 与评估都不读界面设置**（预检会替你验一次，只打 `GET /models`、不烧 token）。
+> ⚠️ **为什么逐题跑**：一个进程跑一整轮时**结果 JSON 只在整轮结束写一次**，中途被掐断就整轮白跑 ⇒
+> 逐题跑之后"被掐断"不再是灾难（但**合并必须等 30 题都齐**，缺题拒绝写出）。
+> ⚠️ 每次跑**必须换 `run-id`**（复用会读到上一轮的 checkpoint）；`--archive` 只归档**合并后的那一份**。
+> ⚠️ 跑之前确认 `.env` 的 key 有效 —— **CLI 与评估都不读界面设置**（预检会替你验一次，不烧 token）。
 
 **RAG 检索基准与消融对照**（与题集无关，**不需要 LLM**）：
 
@@ -618,30 +572,6 @@ uv run python evals/report.py --single runtime/runs/v3-single.json \
 uv run python evals/rag_bench.py                        # 现状快照：延迟 / 准确率 / 召回 / 排序
 uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（结果归档进 docs/evidence/）
 ```
-
-### 改造前的存档数字（**仅供说明「改造前长什么样」**）
-
-> 存档文件已移出仓库（本机另存了一份，未入库；
-> 也能用 `git show 73dd4e6^:docs/evidence/<文件名>` 从历史取回）。
-> **下表不是当前架构的成绩**；阶段 6 已用新评分器重建题集并**跑完正式两轮**，
-> **新结果已归档进 `docs/evidence/`**（见上一节「评估体系」）。
-
-| 阶段 | 存档文件（已移出仓库） | overall | pass_rate | total_tokens | 平均延迟 |
-|---|---|---|---|---|---|
-| 改造前基线（单 Agent） | `baseline-final.json` | **0.983** | 1.0 | 978,865 | 34.0s |
-| optimized 单 Agent | `evals-optimized-final.json` | **1.0** | 1.0 | 896,475 | 30.3s |
-| 多 Agent（改造前那版） | `evals-multiagent-merged.json` | **0.967** | 0.967 | 1,257,397 | 53.4s |
-| RAG 基准（独立基准） | `rag-bench-baseline.json` | top1 **0.6** / top3 1.0 / recall **0.4** | — | — | 13.4ms |
-
-**⚠️ 读这些数字前必看的口径说明**：
-
-1. 全部基于**当时的** `deepseek-v4-flash` 跑出，**换模型后不可比**。
-   ⚠️ 补充（2026-09-22 核实）：官方已在 2026-09-10 把 V4 Flash 升级为 **V4.1 Flash**，
-   并把旧名 `deepseek-v4-flash`「暂时路由」到新模型 —— 也就是说，
-   **同一个模型名今天背后已经是另一个模型**，这批数字与现在更不可比；
-2. 当时的评分器里**弱断言占比不小**，所以这些分数应理解为「**回归通过率**」，
-   不是「**通用任务成功率**」；
-3. `pass_rate` 把 `score >= 0.5` 记为通过，而部分 verifier 会给 0.5 的**部分分** → 偏乐观。
 
 ## 如何验证这个项目
 
@@ -657,7 +587,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 | 看评估题集（不烧 token） | `uv run python evals/run_e2e.py --list` | 30 题的维度与断言分布 |
 | 出评估报告（读归档，不重跑） | 见「评估体系」里的命令 | 生成 `docs/evidence/评估报告.md` |
 | 只跑 RAG 检索基准 / 消融 | `uv run python evals/rag_bench.py` / `uv run python evals/rag_ablation.py --reps 10` | **不用 LLM**，几秒出数 |
-| 改完前端重建产物 | `cd app/web/frontend && npm run build` | `dist/` **入库**（clone 下来不装 Node 也能开界面）；CI 会检查"产物是否与源码一致" |
+| 改完前端重建产物 | `cd app/web/frontend && npm run build` | `dist/` **入库**（clone 下来不装 Node 也能开界面）；改前端后**必须重建并提交产物** |
 
 > CI（GitHub Actions + Gitee）跑的就是上面第 1、2 条：`ruff check` → `ruff format --check` →
 > `pytest tests/ -v`（**不需要 `.env`**：`tests/conftest.py` 会兜一个假 key）。
@@ -681,66 +611,77 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 ## 项目结构
 
 ```
-├── main.py                        # CLI 入口（argparse：--thread-id / --new-session / --mode / --debug）
+├── main.py                        # CLI 入口（argparse：--thread-id / --new-session / --mode / --permission / --debug）
 ├── app/
 │   ├── code_agent/
 │   │   ├── agent/
 │   │   │   ├── multi_agent.py     # ★ 状态图（route_node / planner / executor / verifier + 条件边）
+│   │   │   ├── cancel.py          # 停止 / 墙钟（TaskCancelled / CancelToken）
 │   │   │   ├── context.py         # 上下文工程：结果外置 / 历史压实 / token 预算
 │   │   │   ├── memory.py          # 分层记忆：自动注入 + 自动沉淀（**进程内直调 store**）
+│   │   │   ├── usage.py           # token 计量明细（计费原料通道）
 │   │   │   ├── events.py          # 节点级进度事件（ContextVar sink；没绑就静默跳过）
-│   │   │   ├── code_agent.py      # REPL 循环 + 非交互接口 run_single_task（供阶段 6 重建的评估脚本用）
+│   │   │   ├── code_agent.py      # REPL 循环 + 非交互接口 run_single_task（供评估脚本用）
 │   │   │   └── prompts.py         # System / Planner / Verifier / Executor（计划版）提示词
 │   │   ├── security/
 │   │   │   └── permissions.py     # ★ 三档权限档位表（32 工具）+ 判定 + 人工确认闸门 + 审计
-│   │   ├── model/llm.py           # LLMRegistry：get_llm(role) / chain / invoke_with_fallback
+│   │   ├── model/llm.py           # LLMRegistry：get_llm(role) / chain / invoke_with_fallback（build_llm / set_llm）
 │   │   ├── config.py              # 所有配置（从 .env 读）+ setup_logging（stderr）
-│   │   ├── mcp_servers/           # 6 个 MCP Server（powershell / 搜索 / mysql / vm / code_tools）
-│   │   │                          #   └ browser_tools.py = 搜索（JSON API）；文件名是历史遗留
-│   │   ├── rag/                   # rag.py（MCP 薄壳）/ store.py（分块+精排）/ chunking.py（纯函数）
+│   │   ├── mcp_servers/           # 5 个 MCP Server（工具数：powershell 2 / browser 1 / mysql 10 / vm 4 / code_tools 4 = 21）
+│   │   │                          #   第 6 个是 rag/rag.py（4 个）⇒ 共 25；browser_tools.py = 搜索（JSON API），文件名是历史遗留
+│   │   ├── rag/                   # rag.py（MCP 薄壳，4 工具）/ store.py（分块+精排）/ chunking.py（纯函数，不 import torch）
 │   │   ├── tools/
-│   │   │   └── file_tools.py      # FileManagementToolkit（限定在 workspace）
+│   │   │   └── file_tools.py      # FileManagementToolkit(root_dir=WORKSPACE_DIR) → 7 个文件工具
 │   │   └── utils/                 # mcp.py（工具加载）/ tool_wrap.py（权限+外置+缓存）/ tool_cache.py
+│   │                              #   / placeholder_guard.py（「模板没替换」检测）
 │   └── web/
-│       ├── server.py              # FastAPI（WS + 权限确认协议 + REST + 静态托管）
+│       ├── server.py              # FastAPI（WS + 权限确认协议 + REST + /api/sessions + 静态托管）
+│       ├── sessions.py            # 会话侧车库（runtime/sessions.db：标题 / 置顶 / 软删除）
 │       └── frontend/              # Vue3 + Vite（dist 已入库）；含 PermissionDialog（人工确认弹框）
 ├── config/models.json             # 模型注册表（显示名 + 实际调用名；**默认空** = 走 .env）+ 角色分配 + 降级链
+│                                  #   **进版本控制**；界面里加的自定义模型存在 runtime/web-settings.json
 ├── data/knowledge/                # **产品**知识库目录：默认空（靠使用积累）。测试语料在
 │                                  #   evals/fixtures/knowledge/（35 条），评估时才用
 ├── scripts/                       # probe_mcp_server.py（手工发 JSON-RPC 探 MCP server 回没回）
+│   │                              #   + fetch_models.py（装 RAG 的两个本地模型，各 ≈87MB）
 │   │                              #   + mysql-init/*.sql（被 docker-compose 当挂载目录用，别挪）
 │   └── run/                       # 启动/停止脚本：start-app.cmd / start-app.ps1（起 Web UI）
 │                                  #   + start-deps.ps1 / stop-deps.ps1（起停 4 个依赖容器）
-├── runtime/                       # ⚠️ gitignore：checkpoints.db + tool_results / chroma_db / workspace / runs
-├── evals/                         # 阶段 6 重建的评估体系（11 个文件 + 夹具）：tasks.py(30 题)
+├── runtime/                       # ⚠️ gitignore：checkpoints.db + sessions.db + web-settings.json +
+│                                  #   permissions.log + tool_results / chroma_db / workspace / runs
+├── evals/                         # 评估体系（11 个文件 + 夹具）：tasks.py(30 题)
 │                                  #   / verifiers.py(43 个判定器) / runner.py / run_e2e.py
 │                                  #   / preflight.py(跑前预检) / report.py(报告+STAR)
 │                                  #   / rag_bench.py(RAG 基准) / rag_ablation.py(RAG 消融)
 │                                  #   / merge_runs.py(逐题分片合并成一轮)
 │                                  #   / reset_eval_threads.py(复用 run-id 前清库里的 eval 线程)
 │                                  #   / env.py(语料隔离) + fixtures/knowledge/(7 篇测试语料)
-├── tests/                         # 550 个测试（单元 + 工具级 + 评估体系自检）
+├── tests/                         # 743 个测试（单元 + 工具级 + 评估体系自检；含默认不跑的
+│                                  #   集成测试 tests/test_integration_mcp.py）
 ├── docs/
-│   └── evidence/                  # 评估与修复存档（只追加：两轮结果 / RAG 消融 / 修复账本）+ archive/（空）
+│   ├── architecture.md            # 设计取舍与代价（6 条 ADR）
+│   ├── archive/                   # 历史冻结快照（不再更新）
+│   ├── evidence/                  # 评估原始结果（只追加）+ 报告 + 截图
+│   └── records/                   # 过程账（可编辑）：走查 / 修复 / 缺陷账
 ├── AGENTS.md                      # AI 助手约定与已知坑
 ├── docker-compose.yml             # mysql / searxng / redis 三个依赖服务（nginx 由 WSL 侧 compose 管）
 └── .gitee.yml                     # CI（ruff check → ruff format --check → pytest）
 ```
 
-## 数量与来源对照（每个数字都能复核）
+## 关键数字与复核命令
 
-| 数字 | 值 | 复核命令 |
-|---|---|---|
-| 测试数 | **743**（另有 5 条真集成测试**默认不跑**：`-m integration`，要真 MySQL / WSL / Redis / SearXNG） | `uv run python -m pytest tests/ -q` |
-| 知识库条目 | **测试语料** 35（7 文件 × 5 条）→ `evals/fixtures/knowledge/`；产品库默认空 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File` |
-| MCP 工具数 | 32（含 7 个文件工具） | 运行 `uv run python main.py`，看日志 `共加载 N 个工具` |
-| RAG 消融（正式数，**2026-09-24 语料修订后**） | top-1 命中正解文件 **0.40 → 0.60**（对照 0.70）；⚠️ 旧语料基线是 **0.20** | `uv run python evals/rag_ablation.py --reps 10` |
-| 评估题数 / 断言数 | **30 题** / **163 条**断言（状态 124 / 轨迹 29 / 文本 10） | `uv run python evals/run_e2e.py --list` |
-| **评估结果（正式两轮，2026-09-25）** | **single 30/30**、**multi 30/30**（平均分均 **1.0000**；两轮 163 条断言全过、8 维度全 1.00） | 结果文件：`docs/evidence/v3-single.json` / `v3-multi.json`（+ 限额版对照 `v3-multi-limit200k.json`） |
-| 多 Agent 成本画像（同上两轮） | token **中位 1.58×**（总量 1.71×）、时间 2.07×；其中 **Verifier 中位 10,988 token/题 = 25%**；**打回 0 次** | 同上两份 JSON 的 `totals` / `node_timings` |
-| 测试覆盖率 | **78%~79%**（语句 2557，未覆盖 532~568；随依赖容器是否在跑、本机知识库里有没有内容而波动） | `uv run python -m pytest tests/ -q`（addopts 自带 `--cov=app/code_agent`）。⚠️ **数字随环境波动**（那几条"要真环境"的测试走的分支不同）。⚠️ **跨阶段不可直比**（分母随测试首次 import 新模块而变大），未覆盖的大头正是这些要连真库 / 起子进程 / 要真人输入的模块 → 集成测试挂在阶段 7 做 |
-| RAG 检索指标（**阶段 6 重测**；阶段 4 自测的临时数是 13.2ms → 81ms） | top1(文件粒度) 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms | `uv run python evals/rag_bench.py`（结果也写入 `runtime/runs/rag_bench_*.json`） |
-| 评估指标（改造前旧口径，**当前不适用**） | 见「评估体系」一节 | 存档已移出仓库 → `git show 73dd4e6^:docs/evidence/<文件名>` |
+> 数值本身见上面「[一眼看懂](#一眼看懂先看这段)」和「[评估体系](#评估体系)」两张表；这里只给**怎么自己核**。
+
+| 数字 | 复核命令 |
+|---|---|
+| 测试数 | `uv run python -m pytest tests/ -q` |
+| 测试覆盖率 | 同上（`addopts` 自带 `--cov=app/code_agent`，看 `TOTAL` 行）。⚠️ **随环境与提交波动**（分母会随首次 import 新模块而变大）⇒ 别跨提交直比 |
+| 知识库条目 | `Get-ChildItem evals/fixtures/knowledge -Recurse -File`（测试语料 35 条 = 7 文件 × 5 条；**产品库默认空**） |
+| MCP 工具数 | 启动后看日志 `共加载 N 个工具` |
+| 评估题数 / 断言数 | `uv run python evals/run_e2e.py --list` |
+| 评估结果与成本画像 | 读 `docs/evidence/v3-single.json` / `v3-multi.json` 的 `totals` / `node_timings`（限额版对照 `v3-multi-limit200k.json`） |
+| RAG 消融 | `uv run python evals/rag_ablation.py --reps 10` |
+| RAG 检索基准（top1 0.9 / top3 1.0 / recall 1.0 / 稳态 83ms） | `uv run python evals/rag_bench.py`（结果写入 `runtime/runs/rag_bench_*.json`） |
 
 ## 文档地图（哪份文档管什么）
 
@@ -768,7 +709,7 @@ uv run python evals/rag_ablation.py --reps 10 --archive # 改造前后消融（�
 **已知技术债**
 
 - RAG 的 4 个工具走 MCP 子进程，每次调用要付 ≈8 秒的子进程启动（换来的是"不在事件循环里加载原生扩展"，
-  见 `AGENTS.md` 的订正 #27）。**改进方向**：把 `query_rag` 改成进程内本地工具，或让 MCP server 常驻。
+  因为原生扩展不能在事件循环起来之前加载）。**改进方向**：把 `query_rag` 改成进程内本地工具，或让 MCP server 常驻。
 - Verifier 打回上限是 2 次；到上限后以最后一次结果收尾（不会无限重试，但也意味着"可能带着未解决的问题结束"）。
 - 评估每轮每题只跑 **1 次**，所以像"同一题两次得分不同"这类**方差**从两轮里量化不出来。
 
