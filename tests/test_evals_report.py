@@ -78,16 +78,16 @@ def test_numbers_use_thousands_separator():
 def test_report_contains_all_sections(single, multi):
     text = R.build_report(single, multi, R._fake_rag(), generated_at="2026-01-01 00:00:00")
     for section in (
-        "## 一、口径",
-        "## 二、运行环境与清残留快照",
-        "## 三、总览",
-        "## 四、分维度对比",
-        "## 五、按断言档位统计",
-        "## 六、权限闸门与审计",
-        "## 七、RAG 检索消融对照",
+        "## 口径",
+        "## 运行环境与清残留快照",
+        "## 总览",
+        "## 分维度对比",
+        "## 按断言档位统计",
+        "## 权限闸门与审计",
+        "## RAG 检索消融对照",
         "## STAR 量化对比",
-        "## 九、局限与如实披露",
-        "## 十、逐题明细",
+        "## 局限与如实披露",
+        "## 逐题明细",
     ):
         assert section in text, f"报告缺少章节：{section}"
 
@@ -134,7 +134,7 @@ def test_report_is_deterministic_for_a_given_timestamp(single, multi):
 
 def test_missing_input_keeps_section_and_says_undelivered(single):
     text = R.build_report(single, None, None, generated_at="t")
-    assert "## 七、RAG 检索消融对照" in text, "缺 RAG 数据也要保留章节"
+    assert "## RAG 检索消融对照" in text, "缺 RAG 数据也要保留章节"
     assert "未提供" in text
     assert "未提供任何一轮结果" not in text, "至少给了一轮，不该说「任何一轮都没有」"
 

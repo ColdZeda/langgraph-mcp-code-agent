@@ -113,7 +113,7 @@ def _header(single: dict | None, multi: dict | None, rag: dict | None, *, genera
         f"| 多 Agent 一轮 | {_run_label(multi)} | {_src_time(multi)} |",
         f"| RAG 消融对照 | {(rag or {}).get('run_id', '未提供')} | {_src_time(rag)} |",
         "",
-        "## 一、口径（先看这段，再看数字）",
+        "## 口径（先看这段，再看数字）",
         "",
         CALIBER_NOTES,
         "",
@@ -129,7 +129,7 @@ def _src_time(run: dict | None) -> str:
 
 def _environment(single: dict | None, multi: dict | None) -> str:
     env = (single or multi or {}).get("env")
-    lines = ["## 二、运行环境与清残留快照", ""]
+    lines = ["## 运行环境与清残留快照", ""]
     if not env:
         lines += ["未提供（结果 JSON 里没有 `env` 段）。", ""]
         return "\n".join(lines)
@@ -173,7 +173,7 @@ def _environment(single: dict | None, multi: dict | None) -> str:
 
 def _overview(single: dict | None, multi: dict | None) -> str:
     ts, tm = _totals(single), _totals(multi)
-    lines = ["## 三、总览（单 Agent vs 多 Agent）", ""]
+    lines = ["## 总览（单 Agent vs 多 Agent）", ""]
     if not single and not multi:
         lines += ["未提供任何一轮结果。", ""]
         return "\n".join(lines)
@@ -246,7 +246,7 @@ def _by_dimension(single: dict | None, multi: dict | None) -> str:
     ds = (single or {}).get("by_dimension") or {}
     dm = (multi or {}).get("by_dimension") or {}
     dims = sorted(set(ds) | set(dm))
-    lines = ["## 四、分维度对比", ""]
+    lines = ["## 分维度对比", ""]
     if not dims:
         lines += ["未提供分维度数据。", ""]
         return "\n".join(lines)
@@ -270,7 +270,7 @@ def _by_dimension(single: dict | None, multi: dict | None) -> str:
 def _tiers(single: dict | None, multi: dict | None) -> str:
     ts, tm = _totals(single).get("tiers") or {}, _totals(multi).get("tiers") or {}
     keys = sorted(set(ts) | set(tm))
-    lines = ["## 五、按断言档位统计（断言总数 / 通过 / 失败 / 跳过）", ""]
+    lines = ["## 按断言档位统计（断言总数 / 通过 / 失败 / 跳过）", ""]
     if not keys:
         lines += ["未提供档位数据。", ""]
         return "\n".join(lines)
@@ -298,7 +298,7 @@ def _tiers(single: dict | None, multi: dict | None) -> str:
 
 
 def _permissions(single: dict | None, multi: dict | None) -> str:
-    lines = ["## 六、权限闸门与审计（「成绩能证明机制」的证据）", ""]
+    lines = ["## 权限闸门与审计（「成绩能证明机制」的证据）", ""]
     if not single and not multi:
         lines += ["未提供任何一轮结果。", ""]
         return "\n".join(lines)
@@ -350,7 +350,7 @@ def _permissions(single: dict | None, multi: dict | None) -> str:
 
 
 def _rag(rag: dict | None) -> str:
-    lines = ["## 七、RAG 检索消融对照（整篇 vs 分块｜无精排 vs 精排）", ""]
+    lines = ["## RAG 检索消融对照（整篇 vs 分块｜无精排 vs 精排）", ""]
     if not rag:
         lines += ["未提供（需要 `evals/rag_ablation.py` 的结果 JSON）。", ""]
         return "\n".join(lines)
@@ -457,7 +457,7 @@ def _star(single: dict | None, multi: dict | None) -> str:
         f"- 每次写操作都过「需确认」闸门并写审计日志（本轮审计条目：单 "
         f"{sum(int((t.get('audit') or {}).get('lines', 0) or 0) for t in single.get('tasks', []))} 条 / "
         f"多 {sum(int((t.get('audit') or {}).get('lines', 0) or 0) for t in multi.get('tasks', []))} 条）；",
-        "- 检索层做了 2×2 消融 + 全量召回对照组（见第七节），把「分块」和「精排」的贡献分开归因。",
+        "- 检索层做了 2×2 消融 + 全量召回对照组（见「RAG 检索消融对照」一节），把「分块」和「精排」的贡献分开归因。",
         "",
         "**R（结果）**",
         f"- 通过率（满分口径，可用题 {ts.get('available', '?')}/{ts.get('tasks', '?')}）："
@@ -480,7 +480,7 @@ def _star(single: dict | None, multi: dict | None) -> str:
 
 
 def _limitations(single: dict | None, multi: dict | None) -> str:
-    lines = ["## 九、局限与如实披露", ""]
+    lines = ["## 局限与如实披露", ""]
     items: list[str] = []
     for label, run in (("单 Agent", single), ("多 Agent", multi)):
         if not run:
@@ -520,7 +520,7 @@ def _limitations(single: dict | None, multi: dict | None) -> str:
 
 
 def _details(single: dict | None, multi: dict | None) -> str:
-    lines = ["## 十、逐题明细", ""]
+    lines = ["## 逐题明细", ""]
     if not single and not multi:
         lines += ["未提供任何一轮结果。", ""]
         return "\n".join(lines)
@@ -741,16 +741,16 @@ def _selftest() -> int:
 
     required = [
         "# 评估报告",
-        "## 一、口径",
-        "## 二、运行环境与清残留快照",
-        "## 三、总览",
-        "## 四、分维度对比",
-        "## 五、按断言档位统计",
-        "## 六、权限闸门与审计",
-        "## 七、RAG 检索消融对照",
+        "## 口径",
+        "## 运行环境与清残留快照",
+        "## 总览",
+        "## 分维度对比",
+        "## 按断言档位统计",
+        "## 权限闸门与审计",
+        "## RAG 检索消融对照",
         "## STAR 量化对比",
-        "## 九、局限与如实披露",
-        "## 十、逐题明细",
+        "## 局限与如实披露",
+        "## 逐题明细",
         "allowed_by_eval_auto",
         "清 WSL 上传目录",
         "/home/x/uploads",
@@ -804,7 +804,25 @@ def _mask_home_paths(text: str) -> str:
     return re.sub(r"/home/[^/\s)\]]+/", "/home/user/", text)
 
 
+def _force_utf8_console() -> None:
+    """把 stdout / stderr 切到 UTF-8。
+
+    ⚠️ Windows 控制台默认是 **GBK(cp936)**，而本文件（以及 preflight / merge_runs 等）
+    会往控制台打印 ❌ / ✅ —— GBK **编不出这些符号** ⇒ 直接 `UnicodeEncodeError`。
+    最坑的是它崩在"打印结果"那一步：用户看到满屏 traceback，**而不是结果本身**
+    （实测：`--selftest` 成功和失败两条路都会崩）。
+
+    `errors="replace"` 保证终端真不支持时也只显示成 `?`，不会再抛。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 - 被重定向 / 不是 TextIOWrapper 时跳过
+            pass
+
+
 def main() -> int:
+    _force_utf8_console()
     parser = argparse.ArgumentParser(description="从结果 JSON 生成评估报告（Markdown）")
     parser.add_argument("--single", type=Path, help="单 Agent 一轮的结果 JSON")
     parser.add_argument("--multi", type=Path, help="多 Agent 一轮的结果 JSON")

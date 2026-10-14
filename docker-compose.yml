@@ -20,7 +20,7 @@ services:
       MYSQL_ROOT_PASSWORD: root          # 对应 app/code_agent/config.py 的默认值
       MYSQL_DATABASE: agent_test         # 对应 config.py 的默认库名
     ports:
-      - "3307:3306"                      # 对应 config.py 的 MYSQL_PORT 默认值
+      - "127.0.0.1:3307:3306"            # 只绑回环；对应 config.py 的 MYSQL_PORT 默认值
     volumes:
       - mysql-data:/var/lib/mysql
       # 只读账号初始化脚本（首次初始化数据目录时执行一次）
@@ -37,7 +37,13 @@ services:
     container_name: searxng
     restart: unless-stopped
     ports:
-      - "8888:8080"                      # 对应 config.py 的 SEARXNG_URL 默认值
+      # ⚠️ 宿主机端口**可覆盖**：Windows 的 Hyper-V/WSL 会把某些区间划进
+      #    `excludedportrange` 保留起来，那时 bind 会报
+      #    "An attempt was made to access a socket in a way forbidden by its access permissions"（10013）。
+      #    8888 实测就落在保留区间 8875–8974 里 ⇒ 在 .env 里改 SEARXNG_PORT（例如 8980）
+      #    并把 SEARXNG_URL 一起改掉即可。默认仍是 8888，不动它的人不受影响。
+      #    查保留区间：`netsh int ipv4 show excludedportrange protocol=tcp`
+      - "127.0.0.1:${SEARXNG_PORT:-8888}:8080"   # 只绑回环；对应 config.py 的 SEARXNG_URL 默认值
     volumes:
       # 这两个是【Windows 路径】，从 Windows 跑 compose 没问题
       - "${SEARXNG_DIR:-./searxng}/config:/etc/searxng"
@@ -48,7 +54,7 @@ services:
     container_name: redis-stack-server
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"            # 只绑回环：Redis 无密码，绝不该对局域网开放
     # ⚠️ 故意不挂数据卷 —— 定位是【纯缓存】，数据可丢（工具结果缓存会用它）
 
 volumes:
