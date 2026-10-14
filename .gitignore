@@ -36,6 +36,12 @@ data/knowledge/*
 #   仓库外的项目档案目录里的 handover_交接文档.md（开发者本地维护，不进仓库）
 # 这一条是防它被误加回来（公开仓库里不该有内部交接文档）
 docs/handover.md
+# 同一类的漏网（2026-10-14 移出）：内部交接文档 + 改造前的历史快照。
+# 它们带着"求职作品集 / JD / 简历"的定位叙事，已移到仓库外：
+#   <仓库上级>/archive/repo-archive/docs/archive/（镜像原路径，见那里的 README）
+# 这两条同样是防它们被误加回来：
+docs/archive/handover-*.md
+docs/archive/agent-history-*.md
 
 # Logs/cache
 *.log
