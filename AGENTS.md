@@ -117,6 +117,21 @@ git grep -nE "agents[t]art|lepr[i]te" -- AGENTS.md README.md docs scripts tests 
 - **MCP 工具的接口形状**：适配层生成的是 `StructuredTool(coroutine=…)`，**没有 `func`** ⇒ 包装工具**不能用 `tool._run`**；FileManagementToolkit 的 7 个工具**只有同步 `_run`**（pydantic 模型，塞 `coroutine` 会 `ValueError: … has no field "coroutine"`，要换成同名 `StructuredTool` 代理）。所以 `wrap_tools()` **必须接返回值**。
 - **运行时目录**由 `config.py` 创建（全新 clone 不会因目录缺失失败）。⚠️ `runtime/checkpoint/`（单数）已彻底移除，并留了"不存在"的断言防回归。
 - **依赖服务**：`agent-mysql` / `searxng` / `redis-stack-server` 由仓库根 `docker-compose.yml` 管理（`name: code-agent-deps`）；**`my-nginx` 归 WSL 里的 `~/nginx`**（挂载源是 WSL 路径，搬到 Windows 侧 compose 会**静默挂空目录**）。一键脚本 `scripts/run/start-deps.ps1` / `stop-deps.ps1`；4 个容器都 `restart: unless-stopped`。
+  - ⚠️ **三个服务都只绑 `127.0.0.1`**（定位是本机单用户，也**避免 Windows 防火墙弹窗**）。searxng 的宿主端口是
+    `SEARXNG_PORT`（默认 8888）—— **若被 Windows 的保留区间占住，bind 报 `10013`、容器根本起不来**
+    （实测：8888 落在保留区间 `8875–8974` 内）⇒ 在 `.env` 里换个端口（如 `8980`）**并同步改 `SEARXNG_URL`**。
+    查保留区间：`netsh int ipv4 show excludedportrange protocol=tcp`。
+  - ⚠️ **Docker Desktop 的「Start」对这种情况没用**：它启动的是**旧容器**，端口映射已经焊死在容器里，
+    不会去读改过的 `docker-compose.yml` ⇒ 必须 `docker compose up -d --force-recreate <服务>`。
+- 🔴 **MCP 子进程必须固定 UTF-8**（`utils/mcp.py` 起子进程时设 `PYTHONIOENCODING=utf-8`）：
+  Windows 上子进程的 `sys.stdout/stderr.encoding` 默认是 **GBK(cp936)**，而 MCP 客户端按 **UTF-8** 解子进程的
+  stderr ⇒ **子进程只要往 stderr 打中文，关闭连接时就 `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xce`**
+  （实测卡住的是 RAG 那条集成测试，崩在 `contextmanager.__exit__` 里，**看着完全不像编码问题**）。
+  stdout 是 JSON-RPC 通道，本来也该是 UTF-8 —— 一起固定，代价为 0。
+- ⚠️ **命令行脚本要打 ✅/❌/⚠️ 就必须先切 UTF-8**：Windows 控制台默认 GBK，**编不出这些符号** ⇒
+  会 `UnicodeEncodeError`，而且**崩在"打印结果"那一步**（用户看到满屏 traceback 而不是结果）。
+  做法照 `evals/reset_eval_threads.py` 顶部那 4 行（`sys.stdout/stderr.reconfigure(encoding="utf-8", errors="replace")`），
+  `evals/` 与 `scripts/` 下的命令行脚本都这么写。
 - ⚠️ **WSL 那份 nginx compose 不要用「单文件挂载」**：跨发行版单文件挂载会失败**且故障固化**（暂存位按源路径 hash 命名，重启 Docker 也没用）⇒ 只挂目录 + 自定义配置写 `conf/conf.d/*.conf`；已踩过就 `docker compose up -d --force-recreate`。
 - ⚠️ **`powershell_tools.py` 的三个缺陷已修**：旧写法 `shell=True` + 列表 ⇒ 实际走 `cmd.exe /c powershell -Command "<整条>"` ⇒ ①**多行命令在第一个换行处被截断**（还返回"成功但没输出"）②命令里的 `&` 被 cmd 当分隔符 ③固定 `encoding="gbk"` 与子进程的 UTF-8 混流 ⇒ 乱码。**修法**：`shell=False` + **逐行解码** + stderr 回显。
 - 🔴 **逐行解码的判据要两条**：只写"先 UTF-8、失败退 GBK"不够 —— **GBK 字节有时恰好是合法 UTF-8**（`目录` 的 `C4 BF BC` 解成 `Ŀ¼`）⇒ 必须再加"**解出的字符落在 `U+0080–U+02FF` 就改用 GBK**"。已知假阳性（刻意接受）：真 UTF-8 拉丁文本（`café`）会被按 GBK 解成 `caf茅`。回归测试 `tests/test_powershell_exec.py`（**3 条必须真起子进程**，因为破坏发生在 cmd.exe 解析阶段）。

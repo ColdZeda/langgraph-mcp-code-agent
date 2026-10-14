@@ -25,6 +25,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# ⚠️ Windows 控制台默认 GBK，本脚本要打 ⚠️ —— **不切 UTF-8 会崩在"打印结果"那一步**
+# （完整经过见 evals/reset_eval_threads.py 顶部那段说明）
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 from app.code_agent.config import PROJECT_ROOT  # noqa: E402
 from evals import verifiers as V  # noqa: E402
 from evals.env import use_eval_corpus  # noqa: E402
