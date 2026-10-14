@@ -1,12 +1,12 @@
-"""评估报告生成器（阶段 6 · T6.3 ③）—— 把 run JSON 变成**能进 `docs/evidence/` 的 Markdown**。
+"""评估报告生成器 —— 把 run JSON 变成**能进 `docs/evidence/` 的 Markdown**。
 
 **为什么要有它（而不是跑完手写报告）**：
 
 1. **手写会掺进记忆里的数字**。报告里的每个百分比都从 JSON 现算 —— 口头说的和文件里的不一致，
-   是这类项目最容易出的丑，而且面试官一追问就露。
+   是这类项目最容易出的丑，一被追问就露。
 2. **口径必须跟数据走**。报告开头要写清"通过 = 满分 / skip 不进分母 / 超时也验分"，
    这些是口径的一部分，写在生成器里就不会漏。
-3. **STAR 段落必须是算出来的**。简历上那句"多 Agent 通过率比单 Agent 高 N 个百分点"，
+3. **STAR 段落必须是算出来的**。报告里那句"多 Agent 通过率比单 Agent 高 N 个百分点"，
    要求单轮/多轮两套 JSON 都在场、任务集合一致、口径一致 —— 这里会**机械核对**
    （比对两轮的题目 id 集合），不一致就在报告里点名，而不是照样算一个漂亮数字。
 
@@ -20,7 +20,7 @@
         --single runtime/runs/v3-single.json \\
         --multi  runtime/runs/v3-multi.json \\
         --rag    runtime/runs/rag_ablation_xxx.json \\
-        --out    docs/evidence/阶段6_评估报告.md
+        --out    docs/evidence/评估报告.md
 
 ⚠️ **报告只写算得出来的东西**：缺哪个输入，对应章节就写「未提供」并说明缺什么，
 **绝不用 0 或估算值顶上**（那是"看起来完整、实际骗人"的报告）。
@@ -102,7 +102,7 @@ def _totals(run: dict | None) -> dict:
 
 def _header(single: dict | None, multi: dict | None, rag: dict | None, *, generated_at: str) -> str:
     lines = [
-        "# 阶段 6 · 评估报告（新口径）",
+        "# 评估报告（新口径）",
         "",
         f"> 生成时间：{generated_at}　｜　由 `evals/report.py` 从结果 JSON **机械生成**"
         "（报告里的每个数字都取自下列文件，没有手工填写的值）。",
@@ -414,13 +414,13 @@ def _rag(rag: dict | None) -> str:
 
 def _star(single: dict | None, multi: dict | None) -> str:
     """STAR 量化对比 —— **只用两轮结果里算得出来的数字**。"""
-    lines = ["## 八、可用于简历的 STAR 量化对比", ""]
+    lines = ["## STAR 量化对比", ""]
     ts, tm = _totals(single), _totals(multi)
     if not single or not multi:
         lines += [
             "**未提供两轮结果，本节不生成。**",
             "",
-            "为什么不做单轮的 STAR：简历上那句「多 Agent 比单 Agent 高 N 个百分点」必须"
+            "为什么不做单轮的 STAR：报告里那句「多 Agent 比单 Agent 高 N 个百分点」必须"
             "**两轮同口径、同题目集合**才成立；只有一轮就说「提升」是编的。",
             "",
         ]
@@ -472,7 +472,7 @@ def _star(single: dict | None, multi: dict | None) -> str:
         f"- `unavailable`（环境不可用，如实披露）：单 {ts.get('unavailable', 0)} 题 / "
         f"多 {tm.get('unavailable', 0)} 题。",
         warn,
-        "> 写进简历/答辩时请连**样本量**一起说（「N 道题、满分口径」）。"
+        "> 引用这组数字时请连**样本量**一起说（「N 道题、满分口径」）。"
         "没有对照的绝对分数不构成「提升」，两轮题目集合不一致时也不构成。",
         "",
     ]
@@ -509,7 +509,7 @@ def _limitations(single: dict | None, multi: dict | None) -> str:
     items += [
         "知识库只有 4 篇正解 + 3 篇干扰（35 条原子），RAG 指标是小语料上的**真实下界**，不可外推。",
         "检索层没有**路径级**沙箱：Agent 的 PowerShell 工作目录是仓库根，理论上能写到题目之外"
-        "（已登记进候选池，见方案文档的「工作区选择器 + 路径级围栏」）。",
+        "（路径级围栏尚未做）。",
         "WSL2 是**隔离执行环境**，不是安全沙箱（它默认把 Windows 盘挂在 `/mnt/c`）。",
         "每题 300 秒墙钟上限；超时判定器照跑，但产物可能是「做了一半」的中间态。",
     ]
@@ -740,7 +740,7 @@ def _selftest() -> int:
     report = build_report(single, multi, _fake_rag(), generated_at="2026-01-01 00:00:00")
 
     required = [
-        "# 阶段 6 · 评估报告",
+        "# 评估报告",
         "## 一、口径",
         "## 二、运行环境与清残留快照",
         "## 三、总览",
@@ -748,7 +748,7 @@ def _selftest() -> int:
         "## 五、按断言档位统计",
         "## 六、权限闸门与审计",
         "## 七、RAG 检索消融对照",
-        "## 八、可用于简历的 STAR 量化对比",
+        "## STAR 量化对比",
         "## 九、局限与如实披露",
         "## 十、逐题明细",
         "allowed_by_eval_auto",
@@ -762,7 +762,7 @@ def _selftest() -> int:
 
     # ⚠️ 百分比差异必须换算成**百分点**。这条是回归守卫：
     #    第一版直接相减，把 50% → 75% 写成了「+0.2 个百分点」（正确是 +25.0）——
-    #    这种错会一路写进简历，所以拿自测钉死。
+    #    这种错会一路写进报告，所以拿自测钉死。
     if "+25.0 个百分点" not in report:
         print("❌ 自测失败：通过率差异没有换算成百分点（50%→75% 应写 +25.0 个百分点）")
         return 1
@@ -799,7 +799,7 @@ def _mask_home_paths(text: str) -> str:
     """把 `/home/<某人>/` 统一脱敏成 `/home/user/`（**报告是给人看的，别带作者家目录**）。
 
     为什么放在渲染之后：归档 JSON 是原始证据（保留当时的真实路径，不改写），
-    但报告不必要地把本机用户名带出去 —— 阶段 7 收尾时就是这么发现的。
+    但报告不必要地把本机用户名带出去。
     """
     return re.sub(r"/home/[^/\s)\]]+/", "/home/user/", text)
 

@@ -26,8 +26,8 @@ runtime/*
 !runtime/.gitkeep
 
 # 产品知识库的**内容**：它是运行期"自学习"沉淀出来的（用一次任务可能就多一条），
-# 属于本机数据、不是仓库内容 —— 只保留 .gitkeep 占位（阶段 7 补，之前没有规则，
-# `git add -A` 会把用户自己积累的知识一起提交上去）。
+# 属于本机数据、不是仓库内容 —— 只保留 .gitkeep 占位。
+# 不加这条规则的话，`git add -A` 会把用户自己积累的知识一起提交上去。
 # ⚠️ 测试语料在 evals/fixtures/knowledge/（那个要进仓库，别混）。
 data/knowledge/*
 !data/knowledge/.gitkeep

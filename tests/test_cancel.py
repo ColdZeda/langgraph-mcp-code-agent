@@ -1,4 +1,4 @@
-"""阶段 8 · P0：**停止**（协作式取消）+ **墙钟** + 任务状态条。
+"""**停止**（协作式取消）+ **墙钟** + 任务状态条。
 
 守的是**状态断言**，不是文案：
 
@@ -367,7 +367,7 @@ async def test_real_tool_node_lets_the_stop_signal_through():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 三、执行器：停在下一步边界（P0 的核心断言）
+# 三、执行器：停在下一步边界（核心断言）
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -454,7 +454,7 @@ async def test_real_react_graph_stops_between_two_model_calls(tmp_path, thread_i
 
 
 async def test_stop_leaves_the_finished_step_and_blocks_the_next(tmp_path, thread_id):
-    """**P0 的验收断言**：中途停止 ⇒ 下一步不执行 + 副作用保留 + 返回 `cancelled`。"""
+    """**验收断言**：中途停止 ⇒ 下一步不执行 + 副作用保留 + 返回 `cancelled`。"""
     token = cx.CancelToken()
     agent = _StepwiseExecutor(token, _writing_tool(tmp_path), steps=3, cancel_after=1)
 
@@ -480,7 +480,7 @@ async def test_stop_leaves_the_finished_step_and_blocks_the_next(tmp_path, threa
 
 
 async def test_stop_does_not_call_the_verifier(tmp_path, thread_id, fake_planner):
-    """终止路径**不再白调 Verifier**（multi 模式的出边以前是无条件边 —— P1 的账）。"""
+    """终止路径**不再白调 Verifier**（multi 模式的出边以前是无条件边）。"""
     token = cx.CancelToken()
     verifier = _CountingAgent()
     agent = _StepwiseExecutor(token, _writing_tool(tmp_path), steps=3, cancel_after=1)
@@ -543,7 +543,7 @@ async def test_status_events_carry_elapsed_steps_and_tokens(tmp_path, thread_id)
     # 步数口径 = executor 的 `astream` 块数（真实图里一步会吐 agent/tools 两块）
     assert last["steps"] == result["step_count"] >= 1
     assert last["wallClockSec"] == 900
-    # 阶段 8 · P2：额度是运行期按窗口算的 ⇒ 与解析函数对齐（不再是 import 期常量）
+    # 额度是运行期按窗口算的 ⇒ 与解析函数对齐（不再是 import 期常量）
     from app.code_agent.config import token_budgets
 
     assert last["usageLimit"] == token_budgets().task
@@ -640,12 +640,12 @@ def test_edges_end_the_graph_when_cancelled():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 六、真机验收撞出来的两条（F1 的协议侧在 test_web_stop.py，这里是 F2）
+# 六、真机验收撞出来的两条（协议侧在 test_web_stop.py）
 # ═══════════════════════════════════════════════════════════════════
 
 
 async def test_step_count_is_reset_per_turn(tmp_path, thread_id):
-    """🔴 **F2 回归**：`step_count` 必须**每轮复位**，不能跨轮累积。
+    """🔴 **回归**：`step_count` 必须**每轮复位**，不能跨轮累积。
 
     现场：同一个会话里三个任务的卡片依次写着 `步数 35 → 40 → 51`，而卡片上写的是"步数"、
     旁边就是"本轮实际使用模型" ⇒ 用户只会读成"本轮"。根因是 `run_multi_agent` 每轮复位的
@@ -664,7 +664,7 @@ async def test_step_count_is_reset_per_turn(tmp_path, thread_id):
 
 
 async def test_cancel_text_and_card_report_the_same_step_number(tmp_path, thread_id):
-    """停止文案里的步数要与结果卡片上的 `stepCount` **同口径**（F2 的另一半）。
+    """停止文案里的步数要与结果卡片上的 `stepCount` **同口径**（上面那条的另一半）。
 
     实测过的不一致：正文写「任务在「第 11 步之后」停下」，同一张卡片右下角写「步数 51」。
     """

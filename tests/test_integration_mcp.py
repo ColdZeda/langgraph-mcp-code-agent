@@ -1,10 +1,10 @@
-"""真集成测试：**真去调 MCP 工具**（阶段 7 · T7.4）。
+"""真集成测试：**真去调 MCP 工具**。
 
 与单元测试的分工（这是本文件存在的唯一理由）：
 - `tests/test_tool_wrap.py` / `test_permissions.py` 那类用**打桩**，证明"**逻辑对**"
   （权限判定必须在缓存前、结果外置的豁免名单、缓存命中要补二元组…）；
 - 这一层**真起 stdio 子进程、真连 MySQL、真跑 WSL 命令、真搜一次**，证明"**线接对了**"。
-  ⚠️ 阶段 5 那次 RAG 工具**死锁**（调用永不返回、副作用却已经发生）就是单元测试抓不到、
+  ⚠️ RAG 工具那次**死锁**（调用永不返回、副作用却已经发生）就是单元测试抓不到、
   只能靠人工跑一个真实任务才发现的 —— 这几条就是那类问题的最小回归网。
 
 ⚠️ **默认不跑**：`pyproject.toml` 的 `addopts` 里有 `-m "not integration"`，
@@ -157,12 +157,12 @@ async def test_tool_cache_roundtrip_on_real_redis():
     await cache.aclose()
 
 
-# ── ⑤ RAG：真查一次知识库（守的是"永不返回"那类死锁，订正 #27）─────────
+# ── ⑤ RAG：真查一次知识库（守的是"永不返回"那类死锁）─────────
 
 
 async def test_rag_tool_answers_without_hanging():
     # ⚠️ 这条**故意不加 skipif**：RAG 是纯本地库（chromadb + 本地 embedding），
-    #    没有外部依赖；它的风险是"**永远不返回**"（阶段 5 的死锁），
+    #    没有外部依赖；它的风险是"**永远不返回**"（死锁），
     #    所以判据就是"在 CALL_TIMEOUT 内拿到非空结果"。
     text = await _call(RAG_SERVER_PATH, "rag", "query_rag", query="MCP 协议")
     assert text.strip(), "RAG 查询返回空"

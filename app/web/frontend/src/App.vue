@@ -44,7 +44,7 @@ function onPermissionChange(event) {
   setPermissionMode(event.target.value)
 }
 
-/** 当前生效模型（阶段 6）：显示 **Executor** 那个 —— 干活主要是它。
+/** 当前生效模型：显示 **Executor** 那个 —— 干活主要是它。
  *  ⚠️ 模型是**全局配置、不随会话保存**：这里显示的是"现在发消息会用谁"，
  *  不是"这个会话历史上用过谁"（后者看每条结果卡片上的"本轮实际使用模型"）。 */
 const effective = computed(() => store.effectiveModels || {})
@@ -63,7 +63,7 @@ const modelTitle = computed(() => {
   return rows.length ? rows.join('\n') : '读取中…'
 })
 
-// ── 会话管理（阶段 7 · T7.5）─────────────────────────────────────────
+// ── 会话管理 ─────────────────────────────────────────
 // 交互一律用**行内二次确认**（不弹 `window.confirm`）：和设置面板里"确认删除？"的写法保持一致，
 // 也不会被浏览器/WebView 拦掉。
 const editing = ref(null) // { threadId, title } —— 正在行内重命名哪一条
@@ -72,8 +72,7 @@ const confirmingHard = ref('') // 回收站里"彻底删除"的二次确认
 const confirmingPurge = ref(false) // 清空系统线程的二次确认
 const sessionNotice = ref('') // 操作失败时的提示（例如"正在被另一个标签页使用"）
 
-/** 侧栏时间：`今天 19:17` / `昨天 21:04` / `09-23 13:19`。
- *  原来是 `2026/9/27 19:17:46` 一长串 —— 一屏十几条时不好扫。 */
+/** 侧栏时间：`今天 19:17` / `昨天 21:04` / `09-23 13:19`。 */
 function shortTime(ts) {
   if (!ts) return '时间未知'
   const d = new Date(ts * 1000)
@@ -164,7 +163,7 @@ async function doPurgeSystem() {
           <option value="multi">multi（完整三阶段）</option>
         </select>
       </label>
-      <!-- 阶段 5：与「执行模式」并排的第二条轴。两个名字不能都叫"模式"。 -->
+      <!-- 与「执行模式」并排的第二条轴。两个名字不能都叫"模式"。 -->
       <label class="mode-row">
         <span class="session-title">权限模式</span>
         <select
@@ -179,14 +178,13 @@ async function doPurgeSystem() {
           </option>
         </select>
       </label>
-      <!-- 阶段 6：常驻显示「当前生效模型」—— 模型是全局配置、不随会话保存，
+      <!-- 常驻显示「当前生效模型」—— 模型是全局配置、不随会话保存，
            不显示的话用户不知道现在到底是谁在干活。点一下直接进模型设置。 -->
       <!-- 执行中点会话/新会话时的提示（用户定的口径：不许切，但必须说清为什么） -->
       <div v-if="store.notice" class="notice">⚠️ {{ store.notice }}</div>
       <div class="model-row" :title="modelTitle" @click="store.showSettings = true">
         <span class="session-title">当前生效模型</span>
-        <!-- 阶段 7 · T7.6：没有可用模型时**别显示一个用不了的名字** ——
-             以前这里会显示 `.env` 里的 fallback 名字（用户会以为能直接开聊）。 -->
+        <!-- 没有可用模型时**别显示一个用不了的名字** -->
         <span v-if="!store.modelReady" class="model-none">未配置 —— 点这里添加</span>
         <template v-else>
           <span class="model-name">{{ executorModel ? executorModel.model : '读取中…' }}</span>
@@ -283,7 +281,7 @@ async function doPurgeSystem() {
         </button>
         <p v-if="sessionNotice" class="notice">{{ sessionNotice }}</p>
       </div>
-      <!-- 阶段 8 · 实测新增：知识库面板（自动沉淀会自己写进去，用户得能看到/删掉） -->
+      <!-- 知识库面板（自动沉淀会自己写进去，用户得能看到/删掉） -->
       <button class="btn-settings" @click="store.showKnowledge = true">🧠 知识库</button>
       <button class="btn-settings" @click="store.showSettings = true">⚙ 模型设置</button>
     </aside>

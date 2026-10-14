@@ -6,7 +6,7 @@
 说明:
   - 需预置知识在 data/knowledge/（real_knowledge 真知识 + distractors 干扰项）
   - 直接调 RAG 的检索层，不经过 Agent（测工具层性能）
-  - ⚠️ 阶段 4 起改为调用 **`store.search_knowledge`**（与 `query_rag` 工具同一条检索路径：
+  - ⚠️ 改为调用 **`store.search_knowledge`**（与 `query_rag` 工具同一条检索路径：
     向量粗召回 → CrossEncoder 精排）。
     改造前这一层等价于 `collection.query(n_results=3)`（整篇文档一个向量），
     所以口径没变、数字可比。
@@ -256,7 +256,7 @@ def measure_ordering() -> tuple[str, str]:
 
 
 def main():
-    # ⚠️ 第一步：切到评估专用语料与向量库（订正 #36）
+    # ⚠️ 第一步：切到评估专用语料与向量库
     use_eval_corpus()
 
     print("=" * 55)

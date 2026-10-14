@@ -2,10 +2,10 @@
 
 启动：`uv run uvicorn app.web.server:app --port 8000`
 - 启动时并行加载 6 个 MCP server 工具 + 文件工具，构建 Executor/Verifier
-- WS `/ws/chat`：每个连接绑定 thread_id；**同一会话串行、不同会话可并发**（阶段 5 · B3）
+- WS `/ws/chat`：每个连接绑定 thread_id；**同一会话串行、不同会话可并发**
 - WS 上还会跑**人工确认**：后端发 `permission_request` → 前端弹框 → 前端回 `permission_response`
   （超时 / 没人应答 → 自动拒绝，见 `security/permissions.py`）
-- 阶段 8 · P0：WS 上还能**停止**（前端发 `stop` → 协作式取消 + 墙钟，见 `agent/cancel.py`），
+- WS 上还能**停止**（前端发 `stop` → 协作式取消 + 墙钟，见 `agent/cancel.py`），
   跑任务期间后端还会推 `status` 事件（任务状态条：时长 / 步数 / 用量）
 - REST：会话列表 / 模型设置（热切换）/ 连接测试 / 权限模式持久化
 - 前端构建产物（`app/web/frontend/dist`）存在时自动托管
@@ -90,10 +90,9 @@ class AgentRuntime:
         self.tools: list = []
         self.executor_agent = None
         self.verifier_agent = None
-        # 阶段 7 · T7.6：**还没有可用模型**时记下原因（界面要提示"去添加你的 API Key"）。
-        # 以前没这个字段：缺 key 会在 import 期或启动期直接把进程掀掉，用户看不到界面。
+        # **还没有可用模型**时记下原因（界面要提示"去添加你的 API Key"）。
         self.model_error = ""
-        # 阶段 4：工具包装层用的缓存（进程级作用域，见 load() 的说明）
+        # 工具包装层用的缓存（进程级作用域，见 load() 的说明）
         self.tool_cache = ToolCache(scope="web")
 
     async def load(self) -> None:
@@ -102,14 +101,12 @@ class AgentRuntime:
         )
         tools = [t for tool_set in results for t in tool_set]
         tools.extend(file_tools)
-        # 阶段 4：与 CLI（run_agent）/ evals（run_single_task）**一致地**包一层
+        # 与 CLI（run_agent）/ evals（run_single_task）**一致地**包一层
         # 「工具结果外置 + 只读结果缓存」。
         # ⚠️ 两个易错点：
         #   1) 必须接返回值 —— 只有同步 `_run` 的文件工具会被换成代理对象，不是原地改；
         #   2) 工具在进程里**只加载一次、跨会话共用**，所以缓存作用域是进程级的；
         #      正确性由「任何写操作执行后清空本作用域缓存」保证（见 utils/tool_cache.py）。
-        #      （阶段 4 收尾时补的漏：此前只有 CLI 与 evals 两条入口接了包装，Web 没接，
-        #      导致 Web 端既不做结果外置、也不走缓存。）
         self.tools = wrap_tools(tools, self.tool_cache)
         self.rebuild_agents()
         logger.info(f"Web 服务加载 {len(tools)} 个工具（已包装），Executor/Verifier 构建完成")
@@ -117,12 +114,7 @@ class AgentRuntime:
     def rebuild_agents(self) -> None:
         """重建 Executor / Verifier。
 
-        阶段 7 · T7.6：**"还没有可用的模型"不再致命**。
-        以前缺 key 时这里会抛 `ValueError("模型 API key 未配置…")`，把启动链
-        （`lifespan → load() → rebuild_agents()`）整条掀掉 ⇒ 用户连界面都打不开，
-        也就没法在界面里填 key（而"填完 key 自动生效"正是现在的产品路径：
-        保存设置 → `apply_settings()` → 这里重建）。
-        现在改成：记下原因、把两个 agent 置空，前端据此显示「添加你的 API Key」。
+        **"还没有可用的模型"不再致命**。
         """
         try:
             self.executor_agent = build_executor_agent(self.tools)
@@ -137,7 +129,7 @@ class AgentRuntime:
 
 runtime = AgentRuntime()
 
-# ── 会话锁（阶段 5 · B3）──
+# ── 会话锁 ──
 # 改造前这里是一把**全局串行锁**（`task_lock = asyncio.Lock()`，`async with task_lock:` 包住整次
 # `run_multi_agent`）→ 只要有一个会话在等人工确认，**整个 Web 端所有会话都排队卡死**。
 # 现在改成**按会话（thread_id）一把锁**：不同会话可并发，同一会话仍然串行
@@ -161,7 +153,7 @@ async def get_session_lock(thread_id: str) -> asyncio.Lock:
         return lock
 
 
-# ── 活会话登记（阶段 7 · T7.5 会话管理）──
+# ── 活会话登记 ──
 # 为什么需要它：删会话（软删除 / 彻底删除）之前必须知道"这个 thread 是不是正被某条 WebSocket 用着"
 # —— 删掉正在跑的会话，前端一切走、WS 还在往一个已经没有的 thread 写。
 # ⚠️ **不能拿上面的 `_session_locks` 当判据**：它按设计**不回收**（连接断掉后空 Lock 还留在字典里），
@@ -203,7 +195,7 @@ def save_settings(settings: dict) -> None:
 
 
 def load_permission_mode() -> str:
-    """读持久化的权限模式（**D4「③ 混合」**）。
+    """读持久化的权限模式。
 
     规则（定案，别放宽）：
       · 只把「**只读 / 需确认**」当持久值 —— 常用档位设一次就够；
@@ -215,7 +207,7 @@ def load_permission_mode() -> str:
     raw = load_settings().get("permission_mode")
     mode = normalize_mode(raw, default=DEFAULT_MODE)
     if raw is not None and mode == MODE_OPEN:
-        logger.warning("web-settings.json 里的权限模式是「放开」，按 D4 忽略并以「需确认」加载")
+        logger.warning("web-settings.json 里的权限模式是「放开」，按规则忽略并以「需确认」加载")
         return DEFAULT_MODE
     return mode
 
@@ -226,7 +218,7 @@ def persist_permission_mode(mode: str) -> str:
     settings = load_settings()
     if mode == MODE_OPEN:
         # 「放开」不落盘，且**要把旧值也删掉** —— 否则新会话会读回上一次的「只读」，
-        # 与 D4 要求的"新会话回落「需确认」"不符。
+        # 与"新会话回落「需确认」"的要求不符。
         settings.pop("permission_mode", None)
     else:
         settings["permission_mode"] = mode
@@ -245,7 +237,7 @@ def _custom_models_list(settings: dict) -> list[dict]:
 
 
 def _clean_context_window(value: Any) -> int | None:
-    """阶段 8 · P2：把前端传来的"上下文窗口"规整成正整数（空/脏值 = 不声明）。"""
+    """把前端传来的"上下文窗口"规整成正整数（空/脏值 = 不声明）。"""
     try:
         window = int(float(str(value).strip()))
     except (TypeError, ValueError):
@@ -286,7 +278,7 @@ def masked_settings(settings: dict) -> dict:
                 "base_url": str(item.get("base_url") or ""),
                 "api_key_set": c_set,
                 "api_key_tail": c_tail,
-                # 阶段 8 · P2：模型声明的上下文窗口（三项阈值按它自动算；空 = 按默认 128k）
+                # 模型声明的上下文窗口（三项阈值按它自动算；空 = 按默认 128k）
                 "context_window": _clean_context_window(item.get("context_window")),
             }
         )
@@ -298,7 +290,7 @@ def masked_settings(settings: dict) -> dict:
         "api_key_tail": key_tail,
         # 用户自定义模型（**不含完整密钥**）
         "customModels": custom,
-        # 权限模式（D4）：这里返回的是**实际生效**的档位，不是文件里的原始值
+        # 权限模式：这里返回的是**实际生效**的档位，不是文件里的原始值
         "permissionMode": load_permission_mode(),
         "permissionModeLabel": mode_label(load_permission_mode()),
         "permissionModes": [{"value": v, "label": MODE_LABELS[v]} for v in MODE_LABELS],
@@ -311,7 +303,7 @@ def apply_settings(settings: dict) -> None:
     ⚠️ 启动时也要走这里 —— 改造前 lifespan 只传了 model/base_url、**漏传 api_key**，
     导致在界面里填的 Key 重启后失效。
 
-    阶段 7 · T7.6：**没有可用模型时不再致命**。
+    **没有可用模型时不再致命**。
     这里那句 `set_llm()` 会立刻去建一个 LLM 实例，于是"全新用户还没配 key"时
     会在启动阶段抛 `ValueError` 把服务掀掉（实测：`rebuild_agents()` 已经容错了，
     但 lifespan 里这一步又把整个进程带崩）。现在只记警告 ——
@@ -324,10 +316,6 @@ def apply_settings(settings: dict) -> None:
             api_key=settings.get("api_key") or None,
         )
     except ValueError as e:  # 典型：还没有任何可用的 key
-        # ⚠️ 措辞（2026-10-08 按用户反馈改）：原来写「暂时建不起模型」——
-        #    "建不起"是**内部视角**的词（用户不知道在建什么），而且只指路 `.env` 会把人带偏：
-        #    面向用户的入口其实是界面里的「⚙ 模型设置 → 我的模型」（自带 API 地址 + 密钥）。
-        #    所以改成"说人话 + 两条路都写清"。
         logger.warning("暂时没有可用模型（还没配置 API key）：%s", e)
         logger.warning(
             "→ 两种配法，任选其一：① 打开 http://127.0.0.1:8000 →「模型设置 → 我的模型」"
@@ -346,7 +334,7 @@ def apply_settings(settings: dict) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ⚠️ 顺序要紧（阶段 7 · T7.6 调整）：**先把本机设置灌进注册表，再建 agent**。
+    # ⚠️ 顺序要紧：**先把本机设置灌进注册表，再建 agent**。
     #    以前是先 `runtime.load()`（里面就 rebuild 一次）再 `apply_settings()` ——
     #    于是第一次建 agent 时注册表还是空的：有 `.env` key 时靠兜底能过，
     #    而没有 `.env`、只有界面里配的模型时，第一遍必然失败并打一条吓人的警告
@@ -354,8 +342,6 @@ async def lifespan(app: FastAPI):
     settings = load_settings()
     if settings:
         apply_settings(settings)  # 含 api_key 与各角色模型（改造前漏了 api_key）
-        # ⚠️ 2026-10-08 按用户反馈改：原来把整个 settings 字典（含全部自定义模型 + 密钥尾号）
-        #    dump 成一行 —— 一屏白字里最吵的就是它，而且密钥尾号没必要进日志。改成一句摘要。
         _roles = settings.get("roles") or {}
         _custom = settings.get("custom_models") or []
         _labels = [
@@ -387,7 +373,7 @@ async def lifespan(app: FastAPI):
         "[RAG] 精排模型："
         + ("已就位" if rag_store.reranker_model_ready() else "未安装 → 降级为纯向量召回")
     )
-    # 阶段 7：启动脚本会在拉起进程前设好这个环境变量 —— 这样"已就绪"这句话正好出现在
+    # 启动脚本会在拉起进程前设好这个环境变量 —— 这样"已就绪"这句话正好出现在
     # **能打开界面**的那一刻。脚本自己打的那句 URL 只能打在启动前（那时点开是打不开的），
     # 用户会以为项目坏了（界面第二轮反馈里就是这么踩的）。
     web_url = os.getenv("CODE_AGENT_WEB_URL", "").strip()
@@ -469,7 +455,7 @@ def _log_ready_banner(web_url: str) -> None:
             reset,
             line,
         )
-    else:  # 重定向 / CI / 不支持 ANSI：退化成原来那句（不加转义字符，免得更乱）
+    else:  # 重定向 / CI / 不支持 ANSI：退化成那句（不加转义字符，免得更乱）
         logger.info("[OK] 已就绪 —— 在浏览器打开：%s", web_url)
 
 
@@ -508,7 +494,7 @@ async def list_models():
                 "custom": bool(spec.get("custom")),
                 "api_key_set": key_set,
                 "api_key_tail": key_tail,
-                # 阶段 8 · P2：模型声明的上下文窗口（前端在模型设置里能看到/改到）
+                # 模型声明的上下文窗口（前端在模型设置里能看到/改到）
                 "context_window": _clean_context_window(spec.get("context_window")),
             }
         )
@@ -527,7 +513,7 @@ async def update_settings(body: dict):
     """更新设置并热切换（只覆盖传入字段；api_key 传空串表示清除为 .env 默认）。
 
     支持：模型三件套（model / base_url / api_key）+ `roles`（按角色的模型键）
-    + **`permission_mode`**（阶段 5 · D4：只读 / 需确认落盘，「放开」只生效不落盘）。
+    + **`permission_mode`**（只读 / 需确认落盘，「放开」只生效不落盘）。
     ⚠️ 未知字段会**记日志**而不是静默丢弃（改造前是白名单循环，前端加字段会被无声吞掉）。
     """
     known = {"model", "base_url", "api_key", "roles", "permission_mode"}
@@ -592,7 +578,7 @@ async def upsert_custom_model(body: dict):
         item["api_key"] = api_key
     elif prev and prev.get("api_key"):
         item["api_key"] = prev["api_key"]  # 留空 = 保持原密钥
-    # 阶段 8 · P2：上下文窗口（不填 = 不声明 ⇒ 三项阈值按默认 128k 算）。
+    # 上下文窗口（不填 = 不声明 ⇒ 三项阈值按默认 128k 算）。
     # ⚠️ 语义与 api_key 一样：**留空保持原值**（前端拿不到原值来重填，不能因为没传就抹掉）。
     window = _clean_context_window(body.get("context_window"))
     if window is None:
@@ -602,7 +588,7 @@ async def upsert_custom_model(body: dict):
 
     settings["custom_models"] = [it for it in items if str(it.get("id")) != mid] + [item]
 
-    # 阶段 7 · T7.6：**用户添加的第一个模型 = 四个角色的默认模型**。
+    # **用户添加的第一个模型 = 四个角色的默认模型**。
     # 为什么必须做：`roles` 为空时，每个角色都会回落到 `.env` 的 `MODEL_NAME`
     # （`llm.py:104-110`），而面向用户的场景里 `.env` 往往是空的 ⇒
     # 只把 Executor 指到新模型的话，其余三个角色会报"key 未配置"（实测踩过）。
@@ -741,7 +727,7 @@ async def test_settings(body: dict):
 async def test_roles():
     """**当前配置里实际用到的每个模型**各测一次（自动去重 + 并发），并说明哪些角色在用它。
 
-    为什么要单开这个接口（阶段 7 · 界面第二轮反馈）：
+    为什么要单开这个接口：
     - 用户四个角色可能配成不同模型（multi 模式下 Planner / Executor / Verifier / Router
       各干各的活），只测 Executor 说明不了"整条链路通不通"；
     - 但**盲目四个角色各测一次**又会浪费：`/api/settings/test` 是**真的发一次 completion**
@@ -796,7 +782,6 @@ def _uuid6_to_unix(checkpoint_id: str) -> float | None:
 async def list_sessions(include_hidden: int = 0, include_eval: int = 0):
     """列出历史会话：checkpoint 库（时间/条数）+ 侧车库（标题/置顶/回收站）。
 
-    阶段 7 改了两处：
     1. 返回**对象**（`{items, counts}`）而不是裸数组 —— 前端要拿 `counts` 决定
        「回收站 (N)」「显示系统线程 (N)」这两行小字要不要出现；
     2. 默认**不显示**两类会话：回收站里的（软删除）与**系统线程**
@@ -954,7 +939,7 @@ def _summarize_trace(trace_list: list[dict], limit: int = 30, arg_chars: int = 2
 async def _send(ws: WebSocket, state: dict, payload: dict) -> None:
     """统一的出站发送。
 
-    ⚠️ 必须串行：阶段 5 起「跑任务」在**后台 task** 里（为了让人工确认期间主循环还能收消息），
+    ⚠️ 必须串行：「跑任务」在**后台 task** 里（为了让人工确认期间主循环还能收消息），
     于是主循环与后台 task 可能同时往同一条 WS 写 → 不串行会把两帧交错写坏。
     """
     async with state["send_lock"]:
@@ -962,10 +947,10 @@ async def _send(ws: WebSocket, state: dict, payload: dict) -> None:
 
 
 class WebApprover:
-    """Web 端的**人工确认通道**（T5.3）。
+    """Web 端的**人工确认通道**。
 
     流程：`permission_request` 出站 → 前端弹框 → 前端回 `permission_response` → 这里把答案交给闸门。
-    - **超时由 `permissions.enforce` 统一处理**（B2：超时/无人应答 → 自动拒绝），
+    - **超时由 `permissions.enforce` 统一处理**（超时/无人应答 → 自动拒绝），
       这里只负责"发出去 + 等答案"；`timeoutSec` 也一并告诉前端，好让它自己收起弹框；
     - **「本会话内总是允许」不在主循环里写**：主循环的运行上下文与跑任务的 task 不是同一个，
       在那里调 `grant_always()` 会记到另一个会话上 → 所以用 `(allow, always)` 原样带回来，
@@ -1005,9 +990,9 @@ async def _run_chat(
 ) -> None:
     """跑一次任务（在后台 task 里，所以人工确认期间主循环还能继续收消息）。
 
-    同一 `thread_id` 用**同一把会话锁**串行（B3）；不同会话互不阻塞。
+    同一 `thread_id` 用**同一把会话锁**串行；不同会话互不阻塞。
 
-    阶段 8 · P0：这里创建**本次任务的停止开关**（`CancelToken`），并放进 `state`
+    这里创建**本次任务的停止开关**（`CancelToken`），并放进 `state`
     —— 主循环与跑任务的 task **不是同一个上下文**，主循环要能"点停止"就必须拿到同一个对象
     （与 `state["pending"]` 的传法同理）。
     """
@@ -1027,7 +1012,7 @@ async def _run_chat(
                 "wallClockSec": float(TASK_WALL_CLOCK or 0),
             },
         )
-        # 权限会话：模式来自前端下拉框；确认通道是这条 WS；「总是允许」集合跨消息复用（B7）
+        # 权限会话：模式来自前端下拉框；确认通道是这条 WS；「总是允许」集合跨消息复用
         session = Session(
             mode=permission_mode,
             scope=thread_id,
@@ -1035,12 +1020,12 @@ async def _run_chat(
             timeout=state["confirm_timeout"],
             always_allow=state["always_allow"],
         )
-        # 阶段 8 · P0：一次任务一个停止开关（墙钟 + 界面「停止」）
+        # 一次任务一个停止开关（墙钟 + 界面「停止」）
         token = CancelToken(wall_clock=TASK_WALL_CLOCK or None)
         state["cancel"] = token
 
         async def _push_node_event(event: dict) -> None:
-            """T5.6：把节点级进度直接推给前端（用现有 WS，不引 SSE）。"""
+            """把节点级进度直接推给前端（用现有 WS，不引 SSE）。"""
             await _send(ws, state, {**event, "threadId": thread_id})
 
         try:
@@ -1055,7 +1040,7 @@ async def _run_chat(
                     mode=exec_mode,
                 )
         except TaskCancelled:
-            # 阶段 8 · P0 的**纵深防御**：正常路径下 `run_multi_agent` 自己会兜住停止信号
+            # **纵深防御**：正常路径下 `run_multi_agent` 自己会兜住停止信号
             # （见那里的 `except TaskCancelled`），这里接住的是"连它都没接住"的情况。
             # ⚠️ 必须显式写这一条：`TaskCancelled` 继承 `BaseException`（为了穿透 ToolNode），
             #    下面那条 `except Exception` 抓不到它 ⇒ 漏了这行用户就会"点了停止之后一直没有回包"。
@@ -1101,19 +1086,19 @@ async def _run_chat(
                 "mode": result.get("mode", exec_mode),
                 "route": result.get("route", ""),
                 "elapsedSec": elapsed,
-                # ── 阶段 8 · P0：停止 + 状态条口径 ──
+                # ── 停止 + 状态条口径 ──
                 # ⚠️ `elapsedSec` 是**墙上时钟**（含人工确认等待），`status.elapsedSec` 是
                 #    **扣除确认等待**的净任务时长 —— 两个都发，界面才能如实解释"为什么等了很久"。
                 "cancelled": bool(result.get("cancelled")),
                 "cancelReason": result.get("cancel_reason", ""),
                 "cancelStage": result.get("cancel_stage", ""),
-                # 阶段 8 · P1.5（§十五B）：入口发现"模板没替换" ⇒ 只回问、没进图；
+                # 入口发现"模板没替换" ⇒ 只回问、没进图；
                 # 界面据此显示「需要你确认」而不是「本轮未验收」
                 "needsClarification": bool(result.get("needs_clarification")),
                 "placeholders": result.get("placeholders", []),
                 "pausedSec": status.get("pausedSec", 0),
                 "netElapsedSec": status.get("elapsedSec"),
-                # 阶段 6：**本轮实际使用的模型**（服务端回报的名字）—— 结果卡片显示，
+                # **本轮实际使用的模型**（服务端回报的名字）—— 结果卡片显示，
                 # 与"配置里写的是谁"区分开（官方改名/中转别名时两者会不同）
                 "modelsUsed": result.get("models_used", {}),
                 "permissionMode": permission_mode,
@@ -1127,19 +1112,19 @@ async def ws_chat(ws: WebSocket):
     await ws.accept()
     state: dict = {
         "thread_id": str(uuid.uuid4())[:8],
-        # 权限模式：新会话取持久化值（D4 已保证「放开」不会从文件里被读回来）
+        # 权限模式：新会话取持久化值（「放开」不会从文件里被读回来）
         "permission_mode": load_permission_mode(),
         "confirm_timeout": CONFIRM_TIMEOUT,
-        # 「本会话内对该工具总是允许」（B7）：换会话即清空；键里带模式，切档自动失效
+        # 「本会话内对该工具总是允许」：换会话即清空；键里带模式，切档自动失效
         "always_allow": set(),
         # requestId -> Future[(allow, always)]，由主循环收答案、由跑任务的 task 消费
         "pending": {},
         "run_task": None,
-        # 阶段 8 · P0：本次任务的停止开关（`_run_chat` 建、主循环点「停止」时置位）
+        # 本次任务的停止开关（`_run_chat` 建、主循环点「停止」时置位）
         "cancel": None,
         "send_lock": asyncio.Lock(),
     }
-    # 阶段 7：登记"这个会话正被一条连接占用"（删会话时要用它挡住）
+    # 登记"这个会话正被一条连接占用"（删会话时要用它挡住）
     mark_thread_active(state["thread_id"], +1)
 
     async def _session_payload() -> dict:
@@ -1150,7 +1135,7 @@ async def ws_chat(ws: WebSocket):
             "permissionModeLabel": mode_label(state["permission_mode"]),
             "permissionModes": [{"value": v, "label": lbl} for v, lbl in MODE_LABELS.items()],
             "confirmTimeoutSec": state["confirm_timeout"],
-            # 阶段 7 · T7.6：界面要据此显示"还没有可用的模型 —— 去添加你的 API Key"
+            # 界面要据此显示"还没有可用的模型 —— 去添加你的 API Key"
             "modelReady": runtime.executor_agent is not None,
             "modelError": runtime.model_error,
         }
@@ -1187,7 +1172,7 @@ async def ws_chat(ws: WebSocket):
                 continue
 
             if mtype == "stop":
-                # 阶段 8 · P0：界面上的「停止」。
+                # 界面上的「停止」。
                 # 它是**协作式**的：这里只置位，任务在下一个检查点（节点入口 / ReAct 每一步 /
                 # 每次工具调用前）自己停下 —— 正在飞的那一次模型调用不会被打断。
                 token = state.get("cancel")
@@ -1231,7 +1216,7 @@ async def ws_chat(ws: WebSocket):
                 continue
 
             if mtype == "set_permission_mode":
-                # 前端下拉框改档位：**同时**更新本连接的档位 + 按 D4 持久化
+                # 前端下拉框改档位：**同时**更新本连接的档位 + 持久化
                 state["permission_mode"] = persist_permission_mode(str(msg.get("mode") or ""))
                 await _send(ws, state, await _session_payload())
                 continue
@@ -1245,8 +1230,8 @@ async def ws_chat(ws: WebSocket):
             if exec_mode not in ("auto", "single", "multi"):
                 exec_mode = "auto"
 
-            # 权限模式（阶段 5）：前端也随消息带；和「执行模式」一样做白名单校验。
-            # ⚠️ 「放开」只对**本连接**生效，不落盘（D4）。
+            # 权限模式：前端也随消息带；和「执行模式」一样做白名单校验。
+            # ⚠️ 「放开」只对**本连接**生效，不落盘。
             if msg.get("permissionMode"):
                 state["permission_mode"] = normalize_mode(
                     msg["permissionMode"], default=state["permission_mode"]
@@ -1261,7 +1246,7 @@ async def ws_chat(ws: WebSocket):
                 state["thread_id"] = str(msg["threadId"])
                 mark_thread_active(state["thread_id"], +1)
 
-            # 阶段 7 · T7.5：**新会话的第一条消息就是它的标题**（首行、截断）。
+            # **新会话的第一条消息就是它的标题**（首行、截断）。
             # 只写一次：用户改过的标题（title_source='user'）永不被覆盖 —— 见 web/sessions.py。
             session_store.ensure_title(state["thread_id"], user_input)
 
@@ -1275,7 +1260,7 @@ async def ws_chat(ws: WebSocket):
                 )
                 continue
 
-            # 阶段 7 · T7.6：**没有可用模型**这件事由**前端**处理（`session` 消息里带
+            # **没有可用模型**这件事由**前端**处理（`session` 消息里带
             # `modelReady` / `modelError`：界面显示引导 + 禁用发送）。
             # ⚠️ **不要在这里拦 `chat`** —— 实测踩过：WS 层多一条"提前回错"的分支，
             #    会让"按协议等某条消息"的测试（`tests/test_web_permission.py`）直接卡死，
@@ -1297,7 +1282,7 @@ async def ws_chat(ws: WebSocket):
         run_task = state.get("run_task")
         if run_task is not None and not run_task.done():
             run_task.cancel()
-        # 阶段 7：注销占用登记（否则那个会话会因为"永远活着"而删不掉）
+        # 注销占用登记（否则那个会话会因为"永远活着"而删不掉）
         mark_thread_active(state["thread_id"], -1)
 
 

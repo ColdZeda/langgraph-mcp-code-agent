@@ -40,7 +40,7 @@ if __name__ == "__main__":
         choices=["readonly", "confirm", "open"],
         default=None,
         help=(
-            "权限模式（阶段 5）：readonly=只读（写/执行类工具直接拒绝，不弹框）；"
+            "权限模式：readonly=只读（写/执行类工具直接拒绝，不弹框）；"
             "confirm=需确认（默认，写/执行类先问你，高危的显示影响面）；"
             "open=放开（不再逐次确认，但**危险命令黑名单仍然生效**）。"
             "默认取 .env 的 CODE_AGENT_PERMISSION_MODE（不设就是 confirm）"

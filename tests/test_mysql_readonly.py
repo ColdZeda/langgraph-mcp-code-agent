@@ -1,4 +1,4 @@
-"""MySQL 只读工具的语句白名单测试（T1.3）。
+"""MySQL 只读工具的语句白名单测试。
 
 背景：`mysql_execute_query` 挂在 Verifier 的只读工具白名单里，但 MySQL 的 DDL
 （DROP/ALTER/TRUNCATE）会**隐式提交**，`commit=False` 挡不住 → 必须有应用层白名单。

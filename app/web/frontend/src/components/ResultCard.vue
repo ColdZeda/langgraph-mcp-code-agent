@@ -20,7 +20,7 @@ const verdictObj = (() => {
   }
 })()
 
-// ⚠️ 阶段 5 修：「验收未通过」以前是**误报** ——
+// ⚠️ 「验收未通过」以前是**误报** ——
 //    判定写的是 `passed = verdict === 'PASS'`，于是**根本没有验收环节**的情况
 //    （single 模式只跑 Executor；auto 模式走 simple 路由时也直接结束）
 //    会因为 verdict 是空串而被显示成"✗ 验收未通过"。
@@ -28,14 +28,10 @@ const verdictObj = (() => {
 const hasVerdict = Boolean(verdictObj?.verdict)
 const passed = verdictObj?.verdict?.toUpperCase() === 'PASS'
 
-/** 没有裁定时的说明（阶段 7 · T7.5 修正）。
- *  以前写的是「`mode === 'single'` ? 'single' : **'简单任务直通'**」——
- *  于是**任何非 single 的情况都被说成"简单任务直通"**：multi 模式里 Verifier 没产出可解析裁定
- *  （上游抽风返回一整句错误文本是实测发生过的）也会被显示成"设计如此"，把"少验收了一次"粉饰掉。
- *  现在按**真实原因**分三种说：single 没有验收环节 / auto 路由判为简单任务 / 其余 = 未产出裁定。 */
+/** 没有裁定时的说明。
+ *  按**真实原因**分三种说：single 没有验收环节 / auto 路由判为简单任务 / 其余 = 未产出裁定。 */
 /** token 明细行（**计费口径**的三项；缺哪项不显示哪项 —— 不拿 0 冒充"没有"）。
- *  为什么加：以前只报一个总数，看不出"输入多还是输出多、有没有命中缓存"；
- *  而这三项正是将来按各家单价折算成本的原料（本项目**只计量、不算钱**）。 */
+ *  这三项正是将来按各家单价折算成本的原料（本项目**只计量、不算钱**）。 */
 const tokenSplit = (() => {
   const d = props.result.tokenDetail
   if (!d || (d.input == null && d.output == null)) return ''
@@ -52,7 +48,7 @@ const noVerdictLabel = (() => {  if (props.result.mode === 'single') return 'sin
 })()
 const showTrace = ref(false)
 
-/** 阶段 8 · P0：本轮是不是被**停止**的（用户点停止 / 墙钟到点）。
+/** 本轮是不是被**停止**的（用户点停止 / 墙钟到点）。
  *  为什么要单独判：停止时根本没有验收结论，若走下面那条"未产出裁定"分支，
  *  会把"人让它停"显示成"这轮没验收" —— 用户看不出到底发生了什么。 */
 const cancelLabel = (() => {
@@ -69,7 +65,7 @@ const cancelStageText = (() => {
   return `停在第 ${props.result.stepCount} 步之后`
 })()
 
-/** 阶段 6：**本轮实际使用的模型**（服务端在响应里回报的那个名字）。
+/** **本轮实际使用的模型**（服务端在响应里回报的那个名字）。
  *  为什么要显示它：配置里写的是"我让谁答"，这里是"**真的谁答的**"——
  *  官方把旧模型名路由到新模型、或用中转别名时，两者会不一样。 */
 const modelsUsed = (() => {
@@ -99,8 +95,7 @@ const modelsUsed = (() => {
 
     <div class="card answer">
       <div class="card-head">🤖 Executor 结果</div>
-      <!-- 阶段 7（T7.5）：以前这里是纯文本（`pre-wrap`），`##` / `**` / 表格全是源码。
-           现在走 MarkdownText（marked + DOMPurify，见该组件注释）。 -->
+      <!-- 现在走 MarkdownText（marked + DOMPurify，见该组件注释）。 -->
       <MarkdownText :text="result.finalResponse" />
     </div>
 
@@ -118,11 +113,11 @@ const modelsUsed = (() => {
     </div>
 
     <div class="card footer-row">
-      <!-- 阶段 8 · P1.5：入口发现"模板没替换" ⇒ 只回问、**没进图**（不是"没验收"） -->
+      <!-- 入口发现"模板没替换" ⇒ 只回问、**没进图**（不是"没验收"） -->
       <span v-if="result.needsClarification" class="badge ask">
         ❓ 需要你确认（我没开跑）
       </span>
-      <!-- 阶段 8 · P0：停止优先于验收结论（停止时压根没有验收） -->
+      <!-- 停止优先于验收结论（停止时压根没有验收） -->
       <span v-else-if="result.cancelled" class="badge stop" :title="cancelStageText">
         ⏹ 已停止 · {{ cancelLabel }}
       </span>
@@ -168,7 +163,7 @@ const modelsUsed = (() => {
 .badge.fail { background: #450a0a; color: #fca5a5; }
 .badge.none { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
 .badge.stop { background: #422006; color: #fbbf24; cursor: help; }
-/* 阶段 8 · P1.5：入口回问（"模板没替换"）—— 与"没验收"要一眼可分 */
+/* 入口回问（"模板没替换"）—— 与"没验收"要一眼可分 */
 .badge.ask { background: #1e3a8a; color: #bfdbfe; }
 .reason { font-size: 12px; color: #fca5a5; }
 .models { font-size: 12px; color: #93c5fd; cursor: help; }

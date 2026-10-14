@@ -1,4 +1,4 @@
-"""RAG 文本分块（阶段 4 · T4.4 ①）。
+"""RAG 文本分块。
 
 **单独成一个模块**是有意的：这里全是纯函数、不 import torch / chromadb，
 所以单测能毫秒级跑完（`store.py` 一 import 就会加载 embedding 模型和向量库）。

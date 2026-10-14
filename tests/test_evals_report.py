@@ -1,4 +1,4 @@
-"""阶段 6 · 报告生成器的守卫测试。
+"""报告生成器的守卫测试。
 
 守的是**报告不能骗人**这件事：
 
@@ -39,7 +39,7 @@ def multi():
 def test_pct_delta_is_percentage_points():
     """0.5 → 0.75 是 **+25.0 个百分点**，不是 +0.2。
 
-    第一版就是直接相减，写成了「+0.2 个百分点」——这种错会一路写进简历。
+    第一版就是直接相减，写成了「+0.2 个百分点」——这种错会一路写进报告。
     """
     assert R.delta_cell(0.5, 0.75, "pct") == "+25.0 个百分点"
     assert R.delta_cell(0.75, 0.5, "pct") == "-25.0 个百分点"
@@ -85,7 +85,7 @@ def test_report_contains_all_sections(single, multi):
         "## 五、按断言档位统计",
         "## 六、权限闸门与审计",
         "## 七、RAG 检索消融对照",
-        "## 八、可用于简历的 STAR 量化对比",
+        "## STAR 量化对比",
         "## 九、局限与如实披露",
         "## 十、逐题明细",
     ):
@@ -93,7 +93,7 @@ def test_report_contains_all_sections(single, multi):
 
 
 def test_report_shows_wsl_cleanup_evidence(single):
-    """清理 WSL 上传目录这件事必须在报告里看得见（它是订正 #33 的修复证据）。"""
+    """清理 WSL 上传目录这件事必须在报告里看得见。"""
     text = R.build_report(single, None, None, generated_at="t")
     assert "清 WSL 上传目录" in text
     assert "/home/x/uploads" in text
@@ -110,7 +110,7 @@ def test_wsl_cleanup_skipped_is_visible(single):
 def test_legacy_int_format_is_not_dressed_up_as_success(single):
     """旧格式的 `wsl_uploads_cleaned: 0` **不能**被写成"清理了 0 处"那种像成功的句子。
 
-    那正是订正 #33 那个 bug 的显示层版本：0 既可能是"本来就干净"，
+    0 既可能是"本来就干净"，
     也可能是"一整轮都没清"，报告必须说"无法确认"。
     """
     del single["env"]["wsl_uploads"]

@@ -1,4 +1,4 @@
-"""跨轮记忆（checkpointer）测试 —— T1.2 的核心验收。
+"""跨轮记忆（checkpointer）测试。
 
 要证明的三件事：
 1. **进程重启后还记得**：同一个 `thread_id`，新的一次 `run_multi_agent` 能读到上一轮的对话；

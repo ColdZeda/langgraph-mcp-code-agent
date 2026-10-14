@@ -1,8 +1,8 @@
-"""内容级防线（危险命令黑名单）的回归测试 —— 阶段 5 订正 #24。
+"""内容级防线（危险命令黑名单）的回归测试。
 
 **为什么必须打桩 `subprocess.run` / `subprocess.Popen`**：
 这才是"拦住"的机械证明。只断言 `_is_dangerous()` 返回非空，证明不了"命令没被执行"；
-而**真去打这些命令是不可接受的** —— 阶段 5 实测就踩过：
+而**真去打这些命令是不可接受的** —— 实测就踩过：
 `rm -rf /` 当时根本没被拦住、**真的进了 WSL**，全靠 GNU rm 自带的 `--preserve-root`
 才没出事（官方手册明写它只管"参数就是 `/` 自身"这一种，`rm -rf /*`、`rm -rf /mnt/c/...` 都不管）。
 所以这里的断言是：**危险命令根本走不到启动子进程那一步**。
@@ -26,7 +26,7 @@ from app.code_agent.mcp_servers import vm  # noqa: E402
 # WSL / vm.py
 # ═══════════════════════════════════════════════════════════════════
 
-#: 订正 #24 之前**全部放行**的写法（旧模式要求 `/` 后面还得有空白）
+#: 曾经**全部放行**的写法（旧模式要求 `/` 后面还得有空白）
 VM_REGRESSION_FORMS = [
     "rm -rf /",  # ← 最经典的一种，`/` 在结尾
     "sudo rm -rf /",
@@ -63,7 +63,7 @@ VM_SAFE = [
 
 @pytest.mark.parametrize("command", VM_REGRESSION_FORMS)
 def test_vm_regression_forms_are_blocked(command):
-    """这几种写法在阶段 5 之前**全部放行** —— 这条测试就是钉住订正 #24。"""
+    """这几种写法曾经**全部放行** —— 这条测试就是钉住这几种写法。"""
     assert vm._is_dangerous(command) is not None, f"{command!r} 又漏了"
 
 
@@ -96,7 +96,7 @@ def test_vm_dangerous_command_never_spawns_a_subprocess(monkeypatch, command):
 # PowerShell / powershell_tools.py（原始命令的真正入口）
 # ═══════════════════════════════════════════════════════════════════
 
-#: 订正 #24 之前漏拦的写法：参数**顺序反了**、或者用了 PowerShell **别名**
+#: 曾经漏拦的写法：参数**顺序反了**、或者用了 PowerShell **别名**
 PS_REGRESSION_FORMS = [
     "Remove-Item -Force -Recurse C:\\",  # -Force 写在 -Recurse 前面
     "Remove-Item C:\\ -Recurse -Force",  # 路径夹在中间（旧模式能拦，这里一并钉住）
@@ -140,7 +140,7 @@ PS_SAFE = [
 
 @pytest.mark.parametrize("command", PS_REGRESSION_FORMS)
 def test_powershell_regression_forms_are_blocked(command):
-    """参数顺序反过来、以及用别名写的强制递归删除 —— 阶段 5 之前全部放行。"""
+    """参数顺序反过来、以及用别名写的强制递归删除 —— 曾经全部放行。"""
     assert ps._is_dangerous(command) is not None, f"{command!r} 又漏了"
 
 

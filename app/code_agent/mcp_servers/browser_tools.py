@@ -1,8 +1,5 @@
 """搜索 MCP Server —— 直接调 SearXNG 的 JSON API，不需要浏览器。
 
-阶段 2 / T2.1 的改造：原先用 Selenium 驱动 Edge 取搜索页 HTML（228 行，还需要匹配版本
-的 msedgedriver + 调试端口），但 SearXNG 本身就提供 JSON 输出 → 取数用一次 HTTP 请求即可。
-
 ⚠️ 边界：本工具只负责「**搜索取数**」。将来若要做「**操作真实网页**」（Computer Use /
 Browser Agent，需要点击、填表、截图），那是另一件事，应另建 Playwright 工具。
 """
@@ -60,7 +57,7 @@ def search_in_searxng(
         for i, r in enumerate(shown, 1)
     ]
 
-    # 结果总数一并返回（原先靠数 HTML 里的 <article> 得到，现在用 JSON 数组长度）
+    # 结果总数一并返回
     header = f"共找到 {len(results)} 条结果，返回前 {len(shown)} 条"
     unresponsive = payload.get("unresponsive_engines") or []
     if unresponsive:

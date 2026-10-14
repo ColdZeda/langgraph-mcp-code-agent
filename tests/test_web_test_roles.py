@@ -1,4 +1,4 @@
-"""`POST /api/settings/test-roles` 的回归测试（阶段 7 · 界面第二轮反馈）。
+"""`POST /api/settings/test-roles` 的回归测试。
 
 这个接口解决的是"只测 Executor 说明不了整条链路通不通"+"四个角色盲测四次是浪费"：
 

@@ -1,26 +1,11 @@
 <script setup>
 /**
- * 模型设置面板（阶段 7 · T7.6 **用户化改造**）。
+ * 模型设置面板：配「四个角色各用哪个模型」+ 用户自己加的模型（自带 API 地址与密钥）。
  *
- * 这一版砍掉了所有"开发者视角"的东西，起因是用户走查时的一句：
- * **"（实际调用 xxx）不像面向用户的"** —— 顺着查下去发现不止一处（见
- * `docs/evidence/docs/records/2026-10-02_WEB端走查与修复账.md` §五）。改动清单：
- *
- * 1. **删掉整节「系统默认模型」**（两个"覆盖 `.env`"的输入框 + 「测试系统默认模型」按钮 +
- *    `MODEL_NAME / MODEL_BASE_URL / MODEL_API_KEY` 三个变量名）。
- *    依据：那一节只写进本机 `runtime/web-settings.json`，**只有这个 Web 进程自己读**，
- *    CLI 与 evals 完全不看它（`load_settings`/`apply_settings` 只存在于 `app/web/server.py`）
- *    ⇒ 删掉不影响任何评估口径。**后端接口原样保留**，只是界面不再露出来。
- * 2. **下拉框里不再有「（实际调用 xxx）」**，第一项也不再叫「使用配置默认」——
- *    显示名就是显示名，实际调用名进 hover tooltip（排查时鼠标一放就能看到）。
- * 3. **空状态**：一条自定义模型都没有时，四个角色下拉置灰 + 一句"还没有可用的模型 ——
- *    在下面填一个 API Key 就能开始" + 一个高亮的「＋ 添加你的模型」。
- *    配合后端 `session` 消息里的 `modelReady`，聊天区也会提示并禁用发送。
- * 4. **Verifier 不再是个灰掉的下拉框**：以前要先勾"验收使用异构模型"才能选它，
- *    用户第一反应是"为什么点不了"。现在四个角色都能直接选；Verifier 与 Executor 相同时
- *    给一句温和提示（换成另一个模型，验收更独立）。
- * 5. 底部那段"给仓库维护者看"的注释删掉，只留一句"这些设置只保存在你自己的电脑上"。
- * 6. 裸露的 Markdown 星号（`**…**`）去掉 —— 它们在普通文本节点里不会被渲染成加粗。
+ * ⚠️ 两条现态，别弄错：
+ *   - 这些设置只写进**本机** `runtime/web-settings.json`，而且**只有这个 Web 进程读它** ——
+ *     CLI 与 evals 都不看（它们只认 `config/models.json` + `.env`）。
+ *   - 后端「系统默认模型」那几个接口**仍然保留**，只是界面不再露出来。
  */
 import { computed, onMounted, ref } from 'vue'
 import {
@@ -50,7 +35,7 @@ const notice = ref('')
 const error = ref('')
 const saving = ref(false)
 const testingCurrent = ref(false)
-// 阶段 7 · 界面第二轮反馈：测的是「当前用到的每个模型」（后端去重 + 并发），
+// 测的是「当前用到的每个模型」（后端去重 + 并发），
 // 结果按模型分组，每组标出哪些角色在用它 —— 四个角色各配不同模型时也能一眼看清。
 const roleTest = ref(null)
 const ROLE_LABEL = Object.fromEntries(ROLES.map((r) => [r.key, r.label]))
@@ -141,7 +126,7 @@ function startEdit(m) {
     model: m.model || '',
     base_url: m.base_url || '',
     api_key: '',
-    // 阶段 8 · P2：留空 = 不改动已保存的值（与 api_key 同一套语义）
+    // 留空 = 不改动已保存的值（与 api_key 同一套语义）
     context_window: m.context_window ? String(m.context_window) : '',
   }
   formError.value = ''
@@ -295,7 +280,7 @@ async function remove(id) {
         <input v-model="form.base_url" placeholder="如 https://open.bigmodel.cn/api/paas/v4" />
         <label>API Key{{ form.id ? '（留空则不改动已保存的）' : '' }}</label>
         <input v-model="form.api_key" type="password" placeholder="只保存在你自己的电脑上" />
-        <!-- 阶段 8 · P2：窗口决定三项 token 阈值（压实 / 单次输入 / 任务累计） -->
+        <!-- 窗口决定三项 token 阈值（压实 / 单次输入 / 任务累计） -->
         <label>上下文窗口（tokens，选填）</label>
         <input
           v-model="form.context_window"

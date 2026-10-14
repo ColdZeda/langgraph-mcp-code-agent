@@ -1,4 +1,4 @@
-"""上下文管理测试（阶段 4 · T4.1 外置 / T4.2 压实 / T4.3 预算）。
+"""上下文管理测试（外置 / 压实 / 预算）。
 
 三个都要有**反向验证**：
 - 外置：短的**不能**被外置（否则每次读小文件都白搭一趟往返）；
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.code_agent.agent import context as ctx  # noqa: E402
 
-# ── T4.1 工具结果外置 ──
+# ── 工具结果外置 ──
 
 
 def test_short_result_not_externalized():
@@ -105,11 +105,11 @@ def test_many_short_lines_externalized_by_line_rule():
 
 
 def test_threshold_is_the_calibrated_value():
-    """阈值是**实测校准**的 6000，不是第六版的 2000（那个会把 71 行的文件读取也外置）。"""
+    """阈值是**实测校准**的 6000，不是 2000（那个会把 71 行的文件读取也外置）。"""
     assert ctx.EXTERNALIZE_THRESHOLD == 6000
 
 
-# ── T4.3 token 估算与预算 ──
+# ── token 估算与预算 ──
 
 
 def test_estimate_tokens_orders_of_magnitude():
@@ -159,7 +159,7 @@ def test_prune_messages_never_empties_small_list():
     assert len(ctx.prune_messages(msgs, budget=1, keep_last=4)) == 1
 
 
-# ── T4.2 对话压实 ──
+# ── 对话压实 ──
 
 
 class _FakeChainLLM:
@@ -186,7 +186,7 @@ def _history(n: int) -> list:
 
 
 async def test_compact_noop_when_under_threshold(monkeypatch):
-    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
+    # 阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     llm = _FakeChainLLM()
     msgs = _history(5)
 
@@ -199,7 +199,7 @@ async def test_compact_noop_when_under_threshold(monkeypatch):
 
 async def test_compact_replaces_old_with_four_section_summary(monkeypatch):
     """超阈值 → 最老的一段被换成四段式摘要，最近若干条逐字保留。"""
-    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
+    # 阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 2)
     llm = _FakeChainLLM("【目标】做 A\n【约束】用 B\n【已完成】C\n【未决】D")
     msgs = _history(6)
@@ -216,7 +216,7 @@ async def test_compact_replaces_old_with_four_section_summary(monkeypatch):
 
 async def test_compact_keeps_first_turn_constraint_in_summary(monkeypatch):
     """验收项：长会话不丢**早期**的目标与约束 —— 摘要的输入里必须含第 1 轮。"""
-    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
+    # 阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 2)
 
     seen: dict = {}
@@ -236,7 +236,7 @@ async def test_compact_keeps_first_turn_constraint_in_summary(monkeypatch):
 
 async def test_compact_failure_returns_history_unchanged(monkeypatch):
     """**反向验证**：摘要失败时宁可保留全部历史（多花 token），也不能丢消息。"""
-    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
+    # 阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 2)
     msgs = _history(6)
 
@@ -247,7 +247,7 @@ async def test_compact_failure_returns_history_unchanged(monkeypatch):
 
 
 async def test_compact_empty_summary_returns_unchanged(monkeypatch):
-    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
+    # 阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 2)
     out, changed = await ctx.compact_history(_history(6), [_FakeChainLLM("   ")], threshold=50)
 
@@ -255,7 +255,7 @@ async def test_compact_empty_summary_returns_unchanged(monkeypatch):
 
 
 async def test_compact_noop_when_too_few_messages(monkeypatch):
-    # 阶段 8 · P2：阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
+    # 阈值改成运行期按窗口算 ⇒ 由下面的 threshold= 显式给
     monkeypatch.setattr(ctx, "COMPACT_KEEP_MESSAGES", 8)
     msgs = _history(2)
     out, changed = await ctx.compact_history(msgs, [_FakeChainLLM()], threshold=1)

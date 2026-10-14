@@ -21,7 +21,7 @@ VM_COMMAND_TIMEOUT = int(os.environ.get("CODE_AGENT_VM_TIMEOUT", "60"))
 
 # 危险命令黑名单（**内容级**防线：同一个工具、这次参数危不危险 —— 不随三档权限模式变化）
 #
-# ⚠️ **阶段 5 订正 #24**：原版把最经典的写法漏了。旧模式是 `\brm\s+-rf\s+/\s` ——
+# ⚠️ 原版把最经典的写法漏了。旧模式是 `\brm\s+-rf\s+/\s` ——
 #    它要求 `/` 后面**还得有一个空白字符**，而 `rm -rf /` 的 `/` 正好在结尾 →
 #    **匹配不上、直接放行**。同样漏的还有 `sudo rm -rf /`、`rm -fr /`（flag 顺序不同）、
 #    `rm -r -f /`（flag 分开写）、`chmod -R 777 /`（一模一样的毛病）。
@@ -35,7 +35,7 @@ VM_COMMAND_TIMEOUT = int(os.environ.get("CODE_AGENT_VM_TIMEOUT", "60"))
 #    ⚠️ 顺带记一个**可达性事实**（免得误判风险面）：VM 的四个工具
 #    （`make_dir_in_vm` / `list_files_in_vm` / `write_file_to_vm` / `upload_directory_to_vm`）
 #    **都把参数 `shlex.quote` 过**，没有任何工具能透传原始命令 → 这份黑名单在 VM 侧属于**纵深防御**；
-#    真正能跑任意命令的入口是 `execute_powershell_command`（见 powershell_tools.py 的对应订正）。
+#    真正能跑任意命令的入口是 `execute_powershell_command`（见 powershell_tools.py 的对应说明）。
 #
 #    回归测试：`tests/test_dangerous_commands.py`（打桩 `subprocess.run`，
 #    断言危险命令**根本走不到启动子进程那一步** —— 这才是"拦住"的机械证明）。

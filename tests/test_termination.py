@@ -1,14 +1,14 @@
-"""阶段 8 · P1：**终止路径**（预算 / 停止）的文案与出边。
+"""**终止路径**（预算 / 停止）的文案与出边。
 
-守两件事（都来自探索测试第 1–2 轮的账本）：
+守两件事：
 
-| 要守的事 | 账本 | 怎么测 |
-|---|---|---|
-| 因预算终止 ⇒ **不再调 Verifier**，且**不拼成"验收未通过"** | R5 | 真图跑一遍（multi 模式 + 极小的预算），数 Verifier 的调用次数 |
-| 终止说明里**不许再出现"见上方工具调用轨迹"** | R6 | ① 产出的文本里没有；② **源码级**守卫（那行字是历史回放里最误导人的一处） |
-| 停止与预算两条路的说明**共用同一套收尾** | P1 ② | 两条文案都必须含「副作用保留」与同一句收尾 |
+| 要守的事 | 怎么测 |
+|---|---|
+| 因预算终止 ⇒ **不再调 Verifier**，且**不拼成"验收未通过"** | 真图跑一遍（multi 模式 + 极小的预算），数 Verifier 的调用次数 |
+| 终止说明里**不许再出现"见上方工具调用轨迹"** | ① 产出的文本里没有；② **源码级**守卫（那行字是历史回放里最误导人的一处） |
+| 停止与预算两条路的说明**共用同一套收尾** | 两条文案都必须含「副作用保留」与同一句收尾 |
 
-⚠️ 为什么 R6 值得一条源码级守卫：历史回放（`GET /api/sessions/{id}/messages`）**只回最终回复**，
+⚠️ 为什么值得一条源码级守卫：历史回放（`GET /api/sessions/{id}/messages`）**只回最终回复**，
 轨迹在 Web 的结果卡片里、**不在对话历史里** —— 只要有人再写一句"见上方轨迹"，
 用户就会去一个不存在的地方找（第 2 题现场就是这样）。
 """
@@ -42,7 +42,7 @@ from tests.test_cancel import (  # noqa: E402
 def tiny_task_budget(monkeypatch, limit: int = 50):
     """把**运行期解析出来的**任务额度压到 50。
 
-    ⚠️ 阶段 8 · P2 起额度是按模型窗口算的 ⇒ 不能再 patch 模块级常量
+    ⚠️ 额度是按模型窗口算的 ⇒ 不能再 patch 模块级常量
     （`ma.TASK_TOKEN_BUDGET` 已经不被读了），要 patch 解析函数。
     """
     monkeypatch.setattr(
@@ -92,7 +92,7 @@ async def test_budget_termination_skips_the_verifier(
 ):
     """预算击穿 ⇒ 直接结束：**不跑验收**，说明也**不是**"验收未通过"。
 
-    现场（账本 R5）：第 2 题因预算终止，界面却写着"验收未通过"+ 一句英文错误串。
+    现场：第 2 题因预算终止，界面却写着"验收未通过"+ 一句英文错误串。
     """
     tiny_task_budget(monkeypatch)  # 第一步（100 token）就会击穿
     token = cx.CancelToken()
@@ -163,7 +163,7 @@ class _FailThenBudgetExecutor(_StepwiseExecutor):
 async def test_budget_on_a_retry_round_is_not_wrapped_as_a_failed_verification(
     tmp_path, thread_id, fake_planner, monkeypatch
 ):
-    """🔴 **R5 的真实形状**：上一轮的裁定还留在 state 里，被预算掐断的那一轮**不该**被包装成
+    """🔴 **真实形状**：上一轮的裁定还留在 state 里，被预算掐断的那一轮**不该**被包装成
     "任务执行完成，但验收未通过" —— 那正是第 2 题现场读到的、完全看不懂的混合文案。
 
     触发条件：第 1 轮执行完 → Verifier 判 FAIL（`verdict` 非空）→ 打回重跑 → 第 2 轮**撞上预算**。
@@ -187,7 +187,7 @@ async def test_budget_on_a_retry_round_is_not_wrapped_as_a_failed_verification(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 二、R6：终止说明里不许再指向一个不存在的东西
+# 二、终止说明里不许再指向一个不存在的东西
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -198,7 +198,7 @@ def test_no_termination_text_points_at_a_missing_trace():
     那句话会把用户引到一个不存在的地方 —— 第 2 题现场就是"文案让用户看轨迹，而回放里没有"。
 
     ⚠️ 只能用 AST 查**字符串字面量**、不能全文 grep：文件里**注释**提到这个短语是在解释
-    "为什么禁止这么写"，全文 grep 会把它自己判红（本用例第一版就是这么挂的）。
+    "为什么禁止这么写"，全文 grep 会把它自己判红。
     """
     tree = ast.parse(Path(ma.__file__).read_text(encoding="utf-8"))
     literals = [
@@ -220,7 +220,7 @@ def test_no_termination_text_points_at_a_missing_trace():
 
 
 def test_stop_and_budget_share_the_same_tail():
-    """两条终止路径的说明必须**同一套收尾**（P1 ② 的"文案统一"）。"""
+    """两条终止路径的说明必须**同一套收尾**（"文案统一"）。"""
     token = cx.CancelToken()
     for text in (
         ma._budget_message(total_tokens=1, step_count=2, tool_calls=3, limit=500_000),

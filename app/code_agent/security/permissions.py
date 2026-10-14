@@ -1,4 +1,4 @@
-"""阶段 5 · T5.1 三档权限模式 + T5.2 权限判定（**工具级白名单 = 主防线**）。
+"""三档权限模式 + 权限判定（**工具级白名单 = 主防线**）。
 
 **三层防线，判据不同，不要合并**：
 
@@ -12,7 +12,7 @@
 缓存问的是"**结果会不会变**"，权限问的是"**有没有副作用**" ——
 判据不同，所以是两张表，**不要合并**（`mysql_execute_query` 就是典型：只读、但不该缓存）。
 
-**三条不可违背的实现约束**（B1+，都有测试守着，别"优化"掉）：
+**三条不可违背的实现约束**（都有测试守着，别"优化"掉）：
 
 1. **权限判定在缓存查询之前**（`utils/tool_wrap.py` 的 `_process` 第一句）——
    否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果（比"拒绝结果被缓存"更隐蔽）；
@@ -20,7 +20,6 @@
 3. **拒绝用独立异常类型 `PermissionDenied`** —— 它在 `_process` 的
    `try/except BaseException` **之外**抛出，所以不会被"写失败 → 清缓存"分支误当成执行失败。
 
-档位表来自 `program-fix第八版/阶段5_权限档位候选表.md`（32 个工具，**已审核**）；
 `tests/test_permissions.py` 守着"32 个工具一个不多一个不少"，新增工具漏归类会让测试红。
 """
 
@@ -58,12 +57,11 @@ MODE_LABELS: dict[str, str] = {
     MODE_OPEN: "放开",
 }
 
-DEFAULT_MODE = MODE_CONFIRM  # D4：CLI 默认「需确认」；Web 新会话也回落它
+DEFAULT_MODE = MODE_CONFIRM  # CLI 默认「需确认」；Web 新会话也回落它
 
 #: **无人值守入口**（评估脚本 / 无头调用）固定用的档位。
 #:
-#: 阶段 5 这里是 `MODE_OPEN`，只是**过渡值**（当时的理由是"没人可以问 → 需确认会把写工具全拒"）。
-#: **阶段 6 改成「需确认」**：无头入口现在自带 `AutoApprover`（见下），
+#: 无头入口现在自带 `AutoApprover`（见下），
 #: 于是"没人可以问"不再成立 —— 每次写操作照旧逐次过确认闸门，只是答话的一方换成了程序，
 #: 而且**每一条答复都进审计**（`allowed_by_eval_auto`）。
 #: 这样评估跑的就是**产品默认档**，而不是一个为了跑通而绕开闸门的档位
@@ -86,7 +84,7 @@ def normalize_mode(value: Any, default: str = DEFAULT_MODE) -> str:
     """把外部输入（前端下拉框 / 配置文件 / 环境变量）规整成合法档位。
 
     ⚠️ **只读**与**需确认**之外的任何值（含被手改成 `open` 的配置文件）都要能安全落地：
-    调用方对「放开」另做处理（D4：永不持久化），这里只保证不把脏值传下去。
+    调用方对「放开」另做处理（永不持久化），这里只保证不把脏值传下去。
     """
     text = str(value or "").strip().lower()
     if text in MODES:
@@ -97,10 +95,10 @@ def normalize_mode(value: Any, default: str = DEFAULT_MODE) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# T5.1 档位表（32 个工具）
+# 档位表（32 个工具）
 # ═══════════════════════════════════════════════════════════════════
 #
-# 判据（来自候选表 §二）：
+# 判据：
 #   只读   = 不改变任何持久状态（文件 / 数据库 / 知识库 / 进程），含"网络只读"（搜索）
 #   写/执行 = 会改上面任何一项，或执行任意命令
 #   高危   = 在"写/执行"里再标一类：**影响面超出 workspace 沙盒，或不可逆**
@@ -255,7 +253,7 @@ def _remedy(mode: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 审计留痕（T5.4）：高危操作 + 所有确认决定
+# 审计留痕：高危操作 + 所有确认决定
 # ═══════════════════════════════════════════════════════════════════
 
 _AUDIT_LOCK = threading.Lock()
@@ -290,7 +288,7 @@ def audit(event: dict) -> None:
 # 会话（模式 + 确认通道 + 本会话总是允许）
 # ═══════════════════════════════════════════════════════════════════
 
-#: 异步确认通道：拿到请求 → 返回"允许吗"。超时由 `enforce` 统一处理（B2：超时自动拒绝）。
+#: 异步确认通道：拿到请求 → 返回"允许吗"。超时由 `enforce` 统一处理（超时自动拒绝）。
 Approver = Callable[["PermissionRequest"], Awaitable[bool]]
 #: 同步确认通道：只给"只有同步 `_run`"的工具路径用（CLI 的 `input()` 就走它）。
 SyncApprover = Callable[["PermissionRequest"], bool]
@@ -329,11 +327,11 @@ class PermissionRequest:
 class Session:
     """一次会话的权限上下文。
 
-    `always_allow`（B7）：**「本会话内对该工具总是允许」** 的集合，
+    `always_allow`：**「本会话内对该工具总是允许」** 的集合，
     元素是 `(模式, 工具名)` 二元组 —— 这样**切模式即失效**，不用额外清理；
     集合对象由会话持有、跨多次任务复用（每次任务新建一个集合的话，勾选框就白勾了）。
 
-    `approver_label`（阶段 6 新增）：**"是谁批的"**，只影响审计里那行决定的措辞。
+    `approver_label`：**"是谁批的"**，只影响审计里那行决定的措辞。
     人点的确认（CLI / Web）是 `user`；评估入口的自动批准器是 `eval_auto` ——
     两者的授权强度完全不同，日志里**不能长得一样**（否则翻日志的人会以为评估期间有人守着点确认）。
     """
@@ -475,7 +473,7 @@ def revoke_all_always() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# T5.2 判定入口（被 `utils/tool_wrap.py` 的 `_process` 调用）
+# 判定入口（被 `utils/tool_wrap.py` 的 `_process` 调用）
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -559,7 +557,7 @@ async def enforce(tool_name: str, args: Any = None) -> None:
     decision = decide(tool_name, session.mode)
 
     if decision == ALLOW:
-        # 放开档下的高危操作**仍然强制留痕**（候选表 §一「两处差异」之一）
+        # 放开档下的高危操作**仍然强制留痕**
         if is_high_risk(tool_name) and session.mode == MODE_OPEN:
             _log(
                 tool_name,
@@ -589,10 +587,10 @@ async def enforce(tool_name: str, args: Any = None) -> None:
 
     request = build_request(tool_name, args, session)
     try:
-        # 阶段 8 · P0：**人工确认期间暂停墙钟** —— 人看弹框的时间不是任务时间
+        # **人工确认期间暂停墙钟** —— 人看弹框的时间不是任务时间
         # （`pause_clock()` 在没有停止开关时是空操作，evals / 单测零开销）
         with pause_clock():
-            # B2：超时 / 无人应答 → 自动拒绝（安全侧）
+            # 超时 / 无人应答 → 自动拒绝（安全侧）
             allowed = await asyncio.wait_for(session.approver(request), timeout=session.timeout)
     except TimeoutError:
         _deny(
@@ -612,7 +610,7 @@ async def enforce(tool_name: str, args: Any = None) -> None:
             args,
         )
 
-    # 阶段 8 · P0：**停止优先于"允许/拒绝"**。
+    # **停止优先于"允许/拒绝"**。
     # 用户点「停止」时，`web/server.py` 会把待确认的弹框按"拒绝"收掉好让这里解栈；
     # 若当成"用户拒绝了这次调用"，就会往轨迹里留一条误导性的 `denied_by_user`
     # （模型还会据此换别的办法继续干）⇒ 这里先判停止，直接抛出 `TaskCancelled`。
@@ -669,13 +667,13 @@ def enforce_sync(tool_name: str, args: Any = None) -> None:
 
     request = build_request(tool_name, args, session)
     try:
-        # 阶段 8 · P0：同 `enforce` —— 人工确认期间暂停墙钟（CLI 的 input() 也走这里）
+        # 同 `enforce` —— 人工确认期间暂停墙钟（CLI 的 input() 也走这里）
         with pause_clock():
             allowed = bool(session.sync_approver(request))
     except Exception as exc:  # noqa: BLE001
         logger.warning("同步确认通道异常（按拒绝处理）：%s: %s", type(exc).__name__, exc)
         allowed = False
-    # 阶段 8 · P0：停止优先于"允许/拒绝"（理由见 `enforce` 里同一句）
+    # 停止优先于"允许/拒绝"（理由见 `enforce` 里同一句）
     raise_if_cancelled()
     if not allowed:
         _deny(

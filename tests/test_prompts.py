@@ -32,7 +32,7 @@ class TestSystemPrompt:
     def test_format_with_context(self):
         """用 `prompt_context()` 格式化后不包含原始占位符。
 
-        ⚠️ 必须走 `prompt_context()` 而不是静态 `PROMPT_CONTEXT`（订正 #37）：
+        ⚠️ 必须走 `prompt_context()` 而不是静态 `PROMPT_CONTEXT`：
         后者**故意不含 `model_name`** —— 那个值要运行期从注册表取，
         否则切了模型提示词里还是旧名字（用户实测踩过）。
         """
@@ -86,10 +86,10 @@ class TestPromptContext:
 
 
 class TestClarifyPrinciples:
-    """阶段 8 · P1：候选池 §十五A 的「什么时候该先问一句」三条收敛原则。
+    """「什么时候该先问一句」三条收敛原则。
 
     为什么要写进提示词：探索测试第 2 题里用户把模板占位符原样粘进来，模型**一句没问**、
-    直接四处翻文件猜意图，烧了 20.8 万 token（账本 R2）。
+    直接四处翻文件猜意图，烧了 20.8 万 token。
     """
 
     def test_both_executor_prompts_carry_the_principles(self):

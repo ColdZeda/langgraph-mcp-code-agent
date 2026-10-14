@@ -1,4 +1,4 @@
-"""自动注入 / 自动沉淀测试（阶段 4 · T4.4 ②③）。
+"""自动注入 / 自动沉淀测试。
 
 两条底线：
 - 注入**只在任务开始查一次**，且寒暄/太短的输入不查；
@@ -18,7 +18,7 @@ from app.code_agent.rag import store  # noqa: E402
 class _FakeSaver:
     """替身"写库函数"。
 
-    ⚠️ 阶段 5（订正 #28）：自动沉淀**不再走 MCP 工具**（原来是 `save_tool.ainvoke(...)`），
+    ⚠️ 自动沉淀**不再走 MCP 工具**（原来是 `save_tool.ainvoke(...)`），
     改成进程内直调 `store.save_document` —— 所以这里也从一个"假工具"换成"假保存函数"。
     """
 
@@ -129,7 +129,7 @@ async def test_deposit_defaults_to_config_switch(monkeypatch):
 
 
 async def test_deposit_skipped_in_readonly_mode(monkeypatch):
-    """**阶段 5（决策 B）**：只读档下**不写**知识库 —— "只读"就是"什么都不改"。
+    """只读档下**不写**知识库 —— "只读"就是"什么都不改"。
 
     注意自动沉淀**不再走三档权限的弹框确认**（它是应用自己的记账，不是模型的自主动作），
     所以这条约束必须在这里显式守住，不能指望权限层兜。

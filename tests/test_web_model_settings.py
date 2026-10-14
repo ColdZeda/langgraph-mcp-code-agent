@@ -1,4 +1,4 @@
-"""阶段 6 追加 · **模型配置的自由度**：用户自定义模型（自带地址 + 自带密钥）。
+"""**模型配置的自由度**：用户自定义模型（自带地址 + 自带密钥）。
 
 为什么要有这一层：以前"一个 key 走天下"（`_api_key or MODEL_API_KEY`）——
 用户想用 GLM 就得把 `.env` 的 key 换成 GLM 的，于是 DeepSeek 的模型全废。
@@ -133,7 +133,7 @@ def test_builtin_display_name_differs_from_api_model(tmp_path):
     assert spec["custom"] is False
 
 
-# ── 「系统默认」与「当前生效模型」（阶段 6 · 用户提的显示需求）──
+# ── 「系统默认」与「当前生效模型」（用户提的显示需求）──
 
 
 def test_system_default_falls_back_to_env_model_name(tmp_path):
@@ -164,7 +164,7 @@ def test_resolve_model_marks_custom_and_reports_real_name(tmp_path):
         "label": "GLM-5.3",
         "model": "glm-5.3",
         "custom": True,
-        # 阶段 8 · P2：没声明窗口 ⇒ None（由 config 回落默认 128k）
+        # 没声明窗口 ⇒ None（由 config 回落默认 128k）
         "context_window": None,
     }
     assert reg.resolve_model("planner")["label"] == "builtin-a", "没覆盖的角色用注册表默认"

@@ -1,4 +1,4 @@
-"""阶段 6 · runner 的守卫测试。
+"""runner 的守卫测试。
 
 守的是**旧口径的四个坑**（每一个都在方案里点过名）：
 
@@ -69,7 +69,7 @@ def test_clean_workspace_keeps_gitkeep(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# WSL 上传目录的清理（订正 #33：它曾经**一整轮都没清**）
+# WSL 上传目录的清理
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -173,12 +173,12 @@ async def test_run_all_actually_cleans_wsl_uploads(monkeypatch, tmp_path):
 
     payload = await R.run_all([], mode="single", run_id="unit", reuse_tools=False)
 
-    assert seen["path"] == VM_UPLOADS_DIR, "run_all 必须清 WSL 上传目录（订正 #33）"
+    assert seen["path"] == VM_UPLOADS_DIR, "run_all 必须清 WSL 上传目录"
     assert payload["env"]["wsl_uploads"]["attempted"] is True
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 知识库复位（订正 #35：模型会自己写知识库）
+# 知识库复位（模型会自己写知识库）
 # ═══════════════════════════════════════════════════════════════════
 
 

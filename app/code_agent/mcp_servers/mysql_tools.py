@@ -91,7 +91,7 @@ def get_connection(db, *, readonly: bool = False):
 def execute_query(command, database=None, params=None, commit=False, readonly=False):
     """执行 SQL。**成功返回 `(rows, rowcount)` 二元组；失败一律抛异常**。
 
-    ⚠️ **不要改回"连接失败就 return 一个字符串"**（2026-09-24 修 D3，实测踩过两次）：
+    ⚠️ **不要改回"连接失败就 return 一个字符串"**（2026-09-24 实测踩过两次）：
     所有调用方都写成 `result, rowcount = execute_query(...)`，于是拿到字符串时会在**解包**处炸掉，
     抛出 `ValueError: too many values to unpack (expected 2)`，
     被外层包成 `query tables error: …` —— **真正的 `mysql connection error: …` 被彻底吃掉**，

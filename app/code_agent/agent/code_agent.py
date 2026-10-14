@@ -64,9 +64,9 @@ def format_debug_output(step_name: str, content: str, is_tool_call: bool = False
 
 
 def ask_permission_in_terminal(request: PermissionRequest) -> bool:
-    """**CLI 的确认通道**（阶段 5 · T5.3）：把"要干什么"打印清楚，然后问一句。
+    """**CLI 的确认通道**：把"要干什么"打印清楚，然后问一句。
 
-    三个选项，第三个就是 B7 那个勾选框的终端版：
+    三个选项（第三个对应界面上「本会话内对该工具总是允许」那个勾选框）：
     `y` = 只允许这一次；`a` = **本会话内对该工具总是允许**；其它 = 拒绝。
 
     ⚠️ **CLI 不做超时**（与 Web 不同，这是有意的）：
@@ -122,7 +122,7 @@ async def run_agent(
     )
     tools = [t for tool_set in tool_sets for t in tool_set]
     tools.extend(file_tools)
-    # 阶段 4：统一包一层「结果外置 + 只读结果缓存」（缓存作用域 = 本次会话）
+    # 统一包一层「结果外置 + 只读结果缓存」（缓存作用域 = 本次会话）
     # ⚠️ 必须接返回值：只有同步 `_run` 的工具会被换成代理对象，不是原地改
     cache = ToolCache(scope=f"cli-{thread_id}")
     tools = wrap_tools(tools, cache)
@@ -131,7 +131,7 @@ async def run_agent(
     executor_agent = build_executor_agent(tools, mode=mode)
     verifier_agent = build_verifier_agent(tools)
 
-    # ── 阶段 5：绑定权限会话（CLI 的确认通道 = 终端提问）──
+    # ── 绑定权限会话（CLI 的确认通道 = 终端提问）──
     permission_mode = normalize_mode(permission or PERMISSION_MODE)
     session = Session(
         mode=permission_mode,
@@ -168,7 +168,7 @@ async def _repl_loop(tools, executor_agent, verifier_agent, thread_id, mode) -> 
         print("=" * 60)
         start_time = time.time()
 
-        # ── 阶段 8 · P0：**每一轮**一个停止开关（墙钟在这里生效）──
+        # ── **每一轮**一个停止开关（墙钟在这里生效）──
         # ⚠️ 必须每轮新建：`CancelToken` 的计时起点就是任务起点，跨轮复用等于把
         #    "单任务墙钟"变成"进程开了多久"，进程开满 15 分钟后每个新任务都会被立刻掐掉。
         # CLI 没有"停止按钮"（Ctrl+C 是杀进程），这里绑 token 主要是让**墙钟**生效。
@@ -213,9 +213,9 @@ def main(
     """CLI 入口。
 
     ⚠️ 参数必须在这里**逐个收下并转给 `run_agent`** ——
-    阶段 3 的 `main.py` 已经在传 `mode=args.mode`，但这个函数当时没加参数，
-    导致 `uv run python main.py` **直接 TypeError 崩掉**（阶段 4 发现并修复）。
-    阶段 5 加 `permission` 时特意把这条注释留下，别再踩。
+    `main.py` 已经在传 `mode=args.mode`，但这个函数当时没加参数，
+    导致 `uv run python main.py` **直接 TypeError 崩掉**。
+    加 `permission` 时特意把这条注释留下，别再踩。
     """
     try:
         asyncio.run(run_agent(thread_id=thread_id, debug=debug, mode=mode, permission=permission))
@@ -264,7 +264,7 @@ def _verdict_of(verdict_text: str) -> bool | None:
     """从 Verifier 的结论文本里取 PASS/FAIL。
 
     ⚠️ **返回 None ≠ False**：single 模式与 auto-simple 路径**根本没有验收环节**，
-    把它记成"验收失败"正是阶段 5 修过的那个前端 bug（single 模式误报"验收未通过"）。
+    把它记成"验收失败"正是那个前端 bug（single 模式误报"验收未通过"）。
     """
     text = (verdict_text or "").strip()
     if not text:
@@ -334,7 +334,7 @@ async def run_single_task(
     tools: list | None = None,
     auto_inject: bool = False,
 ) -> dict:
-    """向多 Agent 架构发送单次任务，返回**完整结果字典**（阶段 6 起；此前是 6 元组）。
+    """向多 Agent 架构发送单次任务，返回**完整结果字典**。
 
     流程：Planner（纯 LLM 规划）→ Executor（ReAct 全量工具执行）→ Verifier（只读验收，
     失败带原因打回，最多 2 轮）。
@@ -349,7 +349,7 @@ async def run_single_task(
       - `elapsed_ms` / `node_timings`（分节点耗时与 token）/ `node_events`（原始时间线）；
       - `permission`：本次任务的权限档位与"过了几次确认闸门"。
 
-    `permission_mode` 默认 `HEADLESS_PERMISSION_MODE`（阶段 6 = 「需确认」）；
+    `permission_mode` 默认 `HEADLESS_PERMISSION_MODE`（「需确认」）；
     `approver` 默认一个 `AutoApprover`（逐条留痕的自动批准器，见 permissions.py）。
     **对抗性题**要传 `AutoApprover(deny_high_risk=True)` 或 `permission_mode="readonly"`。
 
@@ -378,7 +378,7 @@ async def run_single_task(
     try:
         # ── 加载 MCP 工具（`tools` 传进来就复用，省掉每题 8~16 秒的 server 启动）──
         raw_tools = tools if tools is not None else await _load_all_tools()
-        # 阶段 4：包装「结果外置 + 只读结果缓存」。
+        # 包装「结果外置 + 只读结果缓存」。
         # ⚠️ 每个任务一个**独立的缓存作用域** —— 跨任务复用缓存会让
         #    "上一个任务改过的文件"污染"下一个任务的读取"（缓存命中越准，错得越隐蔽）。
         cache = ToolCache(scope=f"eval-{thread_id}-{uuid4().hex[:8]}")
@@ -386,8 +386,8 @@ async def run_single_task(
 
         executor_agent = build_executor_agent(wrapped, mode=mode)
         # ⚠️ 必须传 `wrapped`（包装过的），**绝不能传 `tools`（原始列表）**。
-        #    阶段 4 就把「三条入口都要接包装层」写进了文档（CLI / Web / evals），
-        #    但阶段 6 重写本函数时，新加的 `build_verifier_agent(wrapped)` 上面**残留了一句
+        #    把「三条入口都要接包装层」写进了文档（CLI / Web / evals），
+        #    但重写本函数时，新加的 `build_verifier_agent(wrapped)` 上面**残留了一句
         #    改造前基线（f2f3bbb）里的 `build_verifier_agent(tools)`** —— 后者把结果覆盖了回去
         #    ⇒ Verifier 走的是**未包装的工具**：权限判定 / 结果外置 / 缓存全被绕过。
         #    （实际安全影响有限：Verifier 只拿只读工具，而只读工具在任何档位都是 ALLOW；
@@ -395,7 +395,7 @@ async def run_single_task(
         #    回归测试：`tests/test_tool_wrap.py::test_eval_entry_verifier_gets_wrapped_tools`
         verifier_agent = build_verifier_agent(wrapped)
 
-        # ── 阶段 5：无人值守入口**必须显式指定权限档位**；阶段 6 起不再绕开闸门 ──
+        # ── 无人值守入口**必须显式指定权限档位**；不再绕开闸门 ──
         # 这里是 `HEADLESS_PERMISSION_MODE`（=「需确认」）+ `AutoApprover`：
         # 每次写操作**照旧逐次过确认闸门**，只是答话的一方是程序，且每条答复都进审计
         # （`allowed_by_eval_auto`）。见 permissions.py 里 `AutoApprover` 的对照表。
@@ -505,14 +505,14 @@ async def run_single_task(
         "token_usage": result["token_usage"],
         "mode": result.get("mode", mode),
         "route": result.get("route", ""),  # auto 模式的路由结论（single/multi 模式为空）
-        # ── 阶段 6 新增：验收结论不再被丢掉（对抗题"假成功诱导应判 FAIL"要靠它）──
+        # ── 验收结论不再被丢掉（对抗题"假成功诱导应判 FAIL"要靠它）──
         "verdict": verdict_text,
         "verdict_passed": parsed_verdict,  # True / False / None（single 模式没有验收）
         "retry_count": result.get("retry_count", 0),
         "budget_exceeded": bool(result.get("budget_exceeded")),
         "pruned_messages": result.get("pruned_messages", 0),
         "knowledge_injected": result.get("knowledge_injected", []),
-        # 阶段 8 · P1.5：入口检测到"模板没替换" ⇒ 只回问、**没进图**（评估侧据此能看出来）
+        # 入口检测到"模板没替换" ⇒ 只回问、**没进图**（评估侧据此能看出来）
         "needs_clarification": bool(result.get("needs_clarification")),
         "thread_id": thread_id,
         "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),

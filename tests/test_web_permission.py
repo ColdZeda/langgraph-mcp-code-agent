@@ -1,7 +1,7 @@
-"""阶段 5 · T5.3 / T5.4 的 **Web 侧**：人工确认、会话锁、权限模式持久化。
+"""**Web 侧**：人工确认、会话锁、权限模式持久化。
 
 为什么打到 **WebSocket 协议层**、而不是直接调函数：
-T5.3 真正容易错的地方全在**协议与并发**上 ——
+真正容易错的地方全在**协议与并发**上 ——
 后台 task 与主循环抢同一条 WS、`permission_response` 必须在"跑任务那个上下文"里生效、
 超时要能自动拒绝、不同会话不能被一把全局锁串起来。这些只有按协议跑一遍才测得出来。
 
@@ -142,7 +142,7 @@ def test_confirm_deny_blocks_the_tool(web, monkeypatch, tmp_path):
 
 
 def test_no_answer_times_out_into_rejection(web, monkeypatch, tmp_path):
-    """**B2**：没人应答（前端关掉 / 用户走开）→ 自动拒绝，绝不能超时放行。"""
+    """没人应答（前端关掉 / 用户走开）→ 自动拒绝，绝不能超时放行。"""
     monkeypatch.setattr(web, "CONFIRM_TIMEOUT", 0.3)
     outcome = install_fake_run(web, monkeypatch)
     log = tmp_path / "plog.txt"
@@ -162,7 +162,7 @@ def test_no_answer_times_out_into_rejection(web, monkeypatch, tmp_path):
 
 
 def test_always_allow_is_remembered_within_the_session(web, monkeypatch):
-    """**B7**：勾了「本会话内对该工具总是允许」之后，同一个工具不再弹第二次。"""
+    """勾了「本会话内对该工具总是允许」之后，同一个工具不再弹第二次。"""
     install_fake_run(web, monkeypatch)
 
     with TestClient(web.app) as client, client.websocket_connect("/ws/chat") as ws:
@@ -187,7 +187,7 @@ def test_always_allow_is_remembered_within_the_session(web, monkeypatch):
 
 
 def test_new_session_drops_the_always_allow_grants(web, monkeypatch):
-    """换会话 → 授权作废（B7：只在当前会话内有效）。"""
+    """换会话 → 授权作废（只在当前会话内有效）。"""
     install_fake_run(web, monkeypatch)
 
     with TestClient(web.app) as client, client.websocket_connect("/ws/chat") as ws:
@@ -247,7 +247,7 @@ def test_open_mode_does_not_ask(web, monkeypatch):
 
 
 def test_open_mode_from_frontend_is_not_persisted(web):
-    """D4：从 WS 切到「放开」只对**本连接**生效，落盘值为空 → 新会话回落「需确认」。"""
+    """从 WS 切到「放开」只对**本连接**生效，落盘值为空 → 新会话回落「需确认」。"""
     with TestClient(web.app) as client, client.websocket_connect("/ws/chat") as ws:
         ws.receive_json()
         ws.send_json({"type": "set_permission_mode", "mode": "open"})
@@ -270,12 +270,12 @@ def test_set_permission_mode_persists_readonly(web):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 三、B3：会话锁（不同会话必须能并发）
+# 三、会话锁（不同会话必须能并发）
 # ═══════════════════════════════════════════════════════════════════
 
 
 def test_different_sessions_run_concurrently(web, monkeypatch):
-    """**B3 的回归测试**：两个会话必须能**同时在跑**。
+    """**回归测试**：两个会话必须能**同时在跑**。
 
     改造前是 `async with task_lock:`（一把全局锁）→ 两个会话会被串起来；
     更糟的是"需确认"档下有一个会话在等人点确认时，**整个 Web 端都排队卡死**。
@@ -317,7 +317,7 @@ def test_same_connection_rejects_a_second_task(web, monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 四、D4 持久化语义（不需要 WS）
+# 四、持久化语义（不需要 WS）
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -329,7 +329,7 @@ def test_readonly_and_confirm_round_trip(web):
 
 
 def test_open_mode_clears_the_old_value(web):
-    """切到「放开」时要把旧值也删掉 —— 否则新会话会读回「只读」，与 D4 不符。"""
+    """切到「放开」时要把旧值也删掉 —— 否则新会话会读回「只读」，与「放开」的语义不符。"""
     web.persist_permission_mode("readonly")
     web.persist_permission_mode("open")
 
@@ -338,7 +338,7 @@ def test_open_mode_clears_the_old_value(web):
 
 
 def test_hand_edited_open_in_settings_file_is_ignored(web):
-    """配置文件被手改成 "open" → 加载时按「需确认」处理（D4 明写）。"""
+    """配置文件被手改成 "open" → 加载时按「需确认」处理。"""
     web.save_settings({"permission_mode": "open"})
     assert web.load_permission_mode() == "confirm"
 
@@ -370,7 +370,7 @@ def test_post_settings_changes_permission_mode_without_rebuilding_agents(web, mo
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 五、T5.6：节点级进度推送（用现有 WS，不引 SSE）
+# 五、节点级进度推送（用现有 WS，不引 SSE）
 # ═══════════════════════════════════════════════════════════════════
 
 

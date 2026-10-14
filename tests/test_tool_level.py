@@ -1,10 +1,8 @@
 """工具级测试 — 直接调用工具函数验证，不依赖 Agent REPL。
 
-原名 evals/test_evals.py，阶段 0（T0.4）移到 tests/ 并改名，目的是消除
+原名 evals/test_evals.py，移到 tests/ 并改名，目的是消除
 "跑 pytest tests/ evals/ = 跑评估"的歧义：
 - 这里只是工具级断言（写文件 / 读片段 / AST / diff），不会跑端到端评估；
-- ⚠️ 旧的 30 题端到端题集 **已在阶段 5 删除**（口径不可用），阶段 6 重建 ——
-  在那之前，端到端评估**没有**入口脚本可跑。
 """
 
 import sys

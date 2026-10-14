@@ -1,4 +1,4 @@
-"""回归守卫：产物解析**不能把项目自己的文件当成选手的产物**（2026-09-24 修 D4）。
+"""回归守卫：产物解析**不能把项目自己的文件当成选手的产物**。
 
 实测怎么踩到的（E011，修复后重跑那一轮）：
 
@@ -43,11 +43,11 @@ def test_project_file_is_not_treated_as_an_artifact(tmp_path):
     # 把仓库根那个 main.py 登记成"被 git 跟踪的项目文件"（不打桩真跑 git）
     V._TRACKED_FILES = {"main.py"}
 
-    assert ctx.resolve("main.py") is None, "项目自己的 main.py 被当成产物了（D4）"
+    assert ctx.resolve("main.py") is None, "项目自己的 main.py 被当成产物了"
 
 
 def test_workspace_artifact_still_wins(tmp_path):
-    """选手真的在 workspace 里造了 `main.py` ⇒ 正常解析（不受 D4 修复影响）。"""
+    """选手真的在 workspace 里造了 `main.py` ⇒ 正常解析（不受上面那条修复影响）。"""
     project = tmp_path / "repo"
     project.mkdir()
     (project / "main.py").write_text("print('项目自己的')\n", encoding="utf-8")

@@ -2,7 +2,7 @@
 
 ## 为什么有这个文件（实测校正）
 
-第六版/第七版方案里 T1.8 的前提是"`run_single_task` 超时取消后会漏关 6 个 MCP 子进程"，
+曾有个前提是"`run_single_task` 超时取消后会漏关 6 个 MCP 子进程"，
 并据此要求"修好 client 清理"。**实测把这个前提推翻了**：
 
 1. `langchain-mcp-adapters 0.1.1` 的 `MultiServerMCPClient.get_tools()` 文档字符串写着
@@ -70,16 +70,16 @@ async def test_run_single_task_does_not_need_client_cleanup(monkeypatch):
     assert result["ok"] is True, f"不应因清理/适配器问题失败：{result.get('error')}"
     assert result["token_usage"] == 7
     assert result["step_count"] == 1
-    # 阶段 6：验收结论必须**带出来**（旧版 6 元组把它丢掉了 → 对抗题无法判定）
+    # 验收结论必须**带出来**（旧版 6 元组把它丢掉了 → 对抗题无法判定）
     assert result["verdict_passed"] is True
     assert result["retry_count"] == 0
-    # 权限痕迹：档位必须是「需确认」+ 逐条留痕的自动批准器（阶段 6 决策）
+    # 权限痕迹：档位必须是「需确认」+ 逐条留痕的自动批准器
     assert result["permission"]["mode"] == "confirm"
     assert result["permission"]["approver"] == "eval_auto"
 
 
 def test_rag_server_imports_native_extensions_at_module_level():
-    """**阶段 5 订正 #27 的回归守卫**：`rag.py` 必须在 **import 阶段**就把重库导进来。
+    """**回归守卫**：`rag.py` 必须在 **import 阶段**就把重库导进来。
 
     背景（实测，不是推测）：如果等到**工具被调用时**才惰性加载 `sentence_transformers`
     （→ sklearn → scipy 的扩展模块），会卡在 **Windows DLL 加载**上死锁；
@@ -105,5 +105,5 @@ def test_rag_server_imports_native_extensions_at_module_level():
 
     assert "sentence_transformers" in module_level, (
         "rag.py 顶层少了 `import sentence_transformers` —— 别删它，"
-        "删了 RAG 工具会在 MCP 子进程里死锁（见订正 #27 与 rag.py 里的注释）"
+        "删了 RAG 工具会在 MCP 子进程里死锁（见 rag.py 里的注释）"
     )

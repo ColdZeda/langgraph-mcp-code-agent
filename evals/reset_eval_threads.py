@@ -1,4 +1,4 @@
-"""清掉 `runtime/checkpoints.db` 里**评估自己**留下的会话线程（阶段 6 · 2026-09-24 新增）。
+"""清掉 `runtime/checkpoints.db` 里**评估自己**留下的会话线程。
 
 ## 为什么需要它
 

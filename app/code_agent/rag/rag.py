@@ -1,4 +1,4 @@
-"""RAG MCP Server（阶段 4 · T4.4 改造后）。
+"""RAG MCP Server（改造后）。
 
 **这里只剩一层薄薄的工具壳**：真正的分块 / 索引 / 检索 / 精排逻辑都在
 `app/code_agent/rag/store.py`，因为 Agent 进程也要用同一套（自动注入 / 自动沉淀），
@@ -16,7 +16,7 @@ import logging
 import sys
 from typing import Annotated
 
-# ⚠️⚠️ **阶段 5 订正 #27（真因）—— 这一行 import 是修 bug 用的，别当冗余删掉！**
+# ⚠️⚠️ **这一行 import 是修 bug 用的，别当冗余删掉！**
 #
 # 症状：`query_rag` / `save_knowledge`（凡是要向量化的工具）从这个 MCP server 调，
 #       **永远不返回**；而 `delete_knowledge` 里"知识不存在"那种早返回路径 0.2 秒就回。
@@ -34,7 +34,7 @@ from typing import Annotated
 #       **不预热模型** —— 模型仍然在第一次用到时惰性实例化（实测那样已经不卡了）。
 #       代价为 0：这些 import 本来就要付，只是从"第一次工具调用时"挪到"进程启动时"。
 #       `store.py` **保持全懒加载不变**：Agent 进程与单测 import 它仍然不会 load torch。
-import sentence_transformers  # noqa: F401  —— 见上面的订正说明
+import sentence_transformers  # noqa: F401  —— 见上面的说明
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from pydantic import Field  # noqa: E402
 

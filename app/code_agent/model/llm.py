@@ -212,7 +212,7 @@ class LLMRegistry:
                 "provider": "openai-compatible",
                 "custom": True,
             }
-            # 阶段 8 · P2：模型可自带**上下文窗口**声明 —— 三项阈值按它自动算。
+            # 模型可自带**上下文窗口**声明 —— 三项阈值按它自动算。
             # 不填也行（回落 128000）；填了就能让"32k 的小模型不会被 30000 的额度撞窗口"。
             window = item.get("context_window")
             if isinstance(window, int | float) and window > 0:
@@ -243,7 +243,7 @@ class LLMRegistry:
                 "label": spec.get("label") or key,
                 "model": spec.get("model") or key,
                 "custom": bool(spec.get("custom")),
-                # 阶段 8 · P2：模型声明的上下文窗口（没声明就是 None ⇒ 由 config 回落默认值）
+                # 模型声明的上下文窗口（没声明就是 None ⇒ 由 config 回落默认值）
                 "context_window": self.context_window(role),
             }
         return {
@@ -257,7 +257,7 @@ class LLMRegistry:
     def context_window(self, role: str = DEFAULT_ROLE) -> int | None:
         """该角色当前模型声明的**上下文窗口**（没人声明就 None）。
 
-        阶段 8 · P2：`config.token_budgets()` 用它算三项阈值 ——
+        `config.token_budgets()` 用它算三项阈值 ——
         `config/models.json` 的模型加一个 `context_window` 字段即可（自定义模型同名字段，
         来自 Web 面板）。⚠️ 这里**只做取数**：不猜、不按名字推断（"deepseek 都是 128k"这种
         推断迟早会错，而且错得很隐蔽）。
@@ -372,8 +372,8 @@ def with_fallback(llms: list[ChatOpenAI]):
     return llms[0].with_fallback(llms[1:])
 
 
-# 向后兼容别名（阶段 3 留下的一句 `llm = get_llm()`）。
-# ⚠️ **阶段 7（T7.6）改成了惰性**，原因有两个，都不是洁癖：
+# 向后兼容别名（留下的那句 `llm = get_llm()`）。
+# ⚠️ **改成了惰性**，原因有两个，都不是洁癖：
 #   1. **import 期副作用**：模块级 `llm = get_llm()` 会在**被 import 的那一刻**建 LLM 对象，
 #      而 `build_llm()` 要求 key 非空 ⇒ 没有 `.env`（或没配 key）时
 #      `import app.code_agent.model.llm` 直接抛 `ValueError`。后果：

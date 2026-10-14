@@ -1,6 +1,6 @@
-"""阶段 5 · T5.1 / T5.2 权限层的测试。
+"""权限层的测试。
 
-守的是**四条不可违背的约束**（B1+），不是"表里写了什么"：
+守的是**四条不可违背的约束**，不是"表里写了什么"：
 
 1. **权限判定在缓存查询之前** —— 否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果；
 2. **被拒绝的调用不写缓存、也不读缓存**；
@@ -13,7 +13,7 @@
 - **未归类工具在三个模式下都被拒绝**（白名单语义，给将来新增的工具兜底）。
 
 ⚠️ `tests/conftest.py` 有一个 autouse 的 fixture 把全局默认档位设成「放开」，
-好让阶段 4 那批"外置 + 缓存"的测试不被权限层干扰；**本文件一律显式
+好让"外置 + 缓存"那批测试不被权限层干扰；**本文件一律显式
 `bind_session`/`use_mode` 切回要测的档位**，所以两者互不干扰。
 """
 
@@ -130,7 +130,7 @@ def test_tier_table_covers_exactly_the_32_real_tools():
 
 
 def test_tier_counts_match_the_approved_table():
-    """数量与已审核的候选表一致（14 + 18 = 32，其中高危 6）。"""
+    """数量与已审核的表一致（14 + 18 = 32，其中高危 6）。"""
     assert len(perm.READONLY_TOOLS) == 14
     assert len(perm.WRITE_TOOLS) == 18
     assert len(perm.HIGH_RISK_TOOLS) == 6
@@ -140,7 +140,7 @@ def test_tier_counts_match_the_approved_table():
 
 
 def test_default_mode_constant_is_confirm():
-    """默认档位是「需确认」（D4）。"""
+    """默认档位是「需确认」。"""
     assert perm.DEFAULT_MODE == perm.MODE_CONFIRM
     assert perm.MODE_LABELS[perm.DEFAULT_MODE] == "需确认"
     # 无论 .env 怎么设，兜底出来的档位都必须是合法三档之一
@@ -246,7 +246,7 @@ def test_permission_denied_is_a_dedicated_type():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 四、顺序约束（**这一节是阶段 5 的核心**）
+# 四、顺序约束（**这一节的核心**）
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -331,7 +331,7 @@ async def test_denied_tool_never_reaches_the_underlying_call():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 五、人工确认（T5.3 的判定侧：允许 / 否决 / 超时 / 无通道）
+# 五、人工确认（判定侧：允许 / 否决 / 超时 / 无通道）
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -361,7 +361,7 @@ async def test_user_reject_denies(audit_log):
 
 
 async def test_no_answer_times_out_into_rejection(audit_log):
-    """**B2：超时 / 无人应答 → 自动拒绝**（安全侧，绝不能超时放行）。"""
+    """**超时 / 无人应答 → 自动拒绝**（安全侧，绝不能超时放行）。"""
 
     async def never_answers(request):
         await asyncio.sleep(30)
@@ -413,7 +413,7 @@ async def test_high_risk_request_carries_impact_note():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 六、「本会话内对该工具总是允许」（B7）
+# 六、「本会话内对该工具总是允许」
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -440,7 +440,7 @@ async def test_always_allow_asks_only_once(audit_log):
 
 
 def test_always_allow_is_keyed_by_mode_so_switching_mode_drops_it():
-    """B7：授权只在**当前会话 + 当前权限模式**内有效 —— 换档位即失效（不用额外清理）。"""
+    """授权只在**当前会话 + 当前权限模式**内有效 —— 换档位即失效（不用额外清理）。"""
     with perm.bind_session(_session(perm.MODE_CONFIRM)) as session:
         perm.grant_always("write_file")
         assert ("confirm", "write_file") in session.always_allow
@@ -511,7 +511,7 @@ def test_sync_proxy_goes_through_permission_layer(audit_log):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 八、审计留痕（T5.4 的判定侧）
+# 八、审计留痕（判定侧）
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -534,7 +534,7 @@ def test_audit_never_raises_even_if_unwritable(monkeypatch, tmp_path):
 
 
 async def test_open_mode_still_audits_high_risk(audit_log):
-    """候选表 §一：「放开」档与「需确认」档的第二处差异 —— **高危仍然强制留痕**。"""
+    """「放开」档与「需确认」档的第二处差异 —— **高危仍然强制留痕**。"""
     with perm.bind_session(_session(perm.MODE_OPEN)):
         await perm.enforce("execute_powershell_command", {"command": "echo hi"})
         await perm.enforce("write_file", {"path": "a"})  # 非高危 → 不记（否则日志全是噪音）

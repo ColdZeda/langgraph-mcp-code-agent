@@ -1,11 +1,11 @@
-"""多 Agent 架构 — Planner → Executor → Verifier 三阶段协作图（D 路径）。
+"""多 Agent 架构 — Planner → Executor → Verifier 三阶段协作图。
 
 将原单 Agent 的 Plan→Execute→Verify 从 Prompt 软约束升级为 StateGraph 硬流程：
 - Planner：纯 LLM（无工具），产出结构化计划 JSON（goal + steps）
   ⚠️ 曾经还让它声明 `verify_tools`（"建议验收员用哪些只读工具"），但**全仓库没有任何代码去读它**
   —— Planner 每次都在花 token 产出一个被丢掉字段。2026-09-24 已从提示词里删掉。
   想真正接上（按题收缩 Verifier 工具集）要改架构：Verifier 现在是**图跑之前**构建的，
-  而计划是**图里面**才产出的。已登记进候选池。
+  而计划是**图里面**才产出的。
 - Executor：复用 create_react_agent（全量工具），按计划执行
 - Verifier：只读工具白名单（按计划动态挂载子集），对照「需求 + 计划 + 执行轨迹」验收
 - 打回机制：Verifier FAIL 时带原因打回 Executor 重做，最多 2 轮
@@ -114,11 +114,11 @@ class AgentState(TypedDict):
     step_count: int  # Executor 执行步数（近似原单 Agent 步数）
     route: str  # auto 模式的路由结论："simple" / "complex"（由 route_node 写入）
     planner_model: str  # Planner 这次实际用的模型名（服务端回报；结果卡片显示用）
-    # ── 阶段 4：上下文工程 ──
-    knowledge: str  # 任务开始时自动注入的相关经验（T4.4 ②；空串=没注入）
-    budget_exceeded: bool  # 任务级 token 预算是否已击穿（T4.3）
-    pruned_messages: int  # 节点级剪枝砍掉的消息条数（T4.3，用于留证据）
-    # ── 阶段 8 · P0：停止（协作式取消 / 墙钟）──
+    # ── 上下文工程 ──
+    knowledge: str  # 任务开始时自动注入的相关经验（空串=没注入）
+    budget_exceeded: bool  # 任务级 token 预算是否已击穿
+    pruned_messages: int  # 节点级剪枝砍掉的消息条数（用于留证据）
+    # ── 停止（协作式取消 / 墙钟）──
     cancelled: bool  # 本次任务是否被停止（用户点停止 / 墙钟到点）
     cancel_reason: str  # 停止原因码："user" / "wall_clock"（空串=没停）
     cancel_stage: str  # 在哪个节点停下的："planner" / "executor" / "verifier"
@@ -130,7 +130,7 @@ class AgentState(TypedDict):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 阶段 8 · 实测修复：**每轮通道必须复位**（否则上一轮的值串到本轮）
+# 实测修复：**每轮通道必须复位**（否则上一轮的值串到本轮）
 # ═══════════════════════════════════════════════════════════════════
 #
 # 🔴 为什么：LangGraph 的语义是"**没传进 `ainvoke` 的通道保留上一轮 checkpoint 的值**"。
@@ -141,7 +141,7 @@ class AgentState(TypedDict):
 #      · `verdict` 没复位 ⇒ 新一轮的**第一次** Executor 执行会被 `_is_retry_round` 当成"重跑轮"
 #        （`retry_count` 白加一次、提示词里多一段"被打回"的话）；
 #      · `executor_trace_list` 没复位 ⇒ 轨迹跨轮累加（实测 28 条 = 两轮混在一起）。
-#    ⇒ 教训与 F2（`step_count`）**同一个**：**新增任何"每轮"通道，必须同时进这张表**。
+#    ⇒ 教训与 `step_count` **同一个**：**新增任何"每轮"通道，必须同时进这张表**。
 #    机械守卫：`tests/test_per_turn_state.py` 会拿 `AgentState` 的**全部通道**对这张表 +
 #    `PER_TURN_ASSIGNED` + `CROSS_TURN_CHANNELS` 做覆盖校验 —— 漏一个就红。
 PER_TURN_RESET: dict[str, Any] = {
@@ -280,7 +280,7 @@ def _msg_model(msg: Any) -> str:
 
     为什么不用配置里的名字：配置说的是"我让谁答"，这里是"**真的谁答的**"
     —— 两者在"官方把旧模型名路由到新模型"这种情况下会不一样（本机实测过：
-    发 `deepseek-v4-flash`，服务端回报 `deepseek-flash`）。结果卡片与阶段 6 的
+    发 `deepseek-v4-flash`，服务端回报 `deepseek-flash`）。结果卡片与
     评估报告都用这个字段做"模型口径"。
     """
     meta = getattr(msg, "response_metadata", None) or {}
@@ -300,12 +300,12 @@ def _plan_to_text(plan: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 阶段 8 · P0：停止（协作式取消 + 墙钟）与任务状态条
+# 停止（协作式取消 + 墙钟）与任务状态条
 # ═══════════════════════════════════════════════════════════════════
 
 
 #: 两种终止（停止 / 预算）共用的两句话。
-#: ⚠️ **谁都不许再写"见上方工具调用轨迹"**（账本 R6）：历史回放里**只有最终回复**、
+#: ⚠️ **谁都不许再写"见上方工具调用轨迹"**：历史回放里**只有最终回复**、
 #: 没有轨迹，那句话会把用户引到一个不存在的地方。轨迹在 Web 的结果卡片里、不在对话历史里。
 _TERMINATION_TAIL = "如需继续，请把范围缩小后重试（例如只读需要的文件片段，或把任务拆成几次）。"
 _SIDE_EFFECTS_KEPT = (
@@ -320,10 +320,10 @@ def _budget_message(
     """预算击穿后的**固定中文说明**（结构与 `_cancel_message` 对齐）。
 
     ⚠️ 与"停止"分开写：**预算终止 ≠ 任务失败**。第 2 题现场是「因预算终止」被拼成
-    "验收未通过"+ 一句英文错误串（账本 R5），用户完全看不懂发生了什么 ——
+    "验收未通过"+ 一句英文错误串，用户完全看不懂发生了什么 ——
     预算只是**成本保险丝**，产物与已经拿到的结论都还在。
 
-    `limit`：本次实际生效的额度。**必须由调用方传进来**（阶段 8 · P2）：
+    `limit`：本次实际生效的额度。**必须由调用方传进来**：
     它现在是按"当前模型的窗口"运行期算出来的，不再是一个写死的常量。
     """
     where = (
@@ -369,7 +369,7 @@ def _cancel_message(
     """停止后的**固定中文说明**。
 
     为什么要"固定"：第 2 题现场是「因预算终止」却被拼成"验收未通过"+ 一句英文错误串，
-    用户根本看不出发生了什么（账本 R5）。停止也一样，必须一眼看懂：
+    用户根本看不出发生了什么。停止也一样，必须一眼看懂：
     **谁停的 / 停在哪 / 已经发生了什么 / 还能怎么办**。
     """
     elapsed = float(getattr(token, "elapsed", lambda: 0.0)())
@@ -425,7 +425,7 @@ def _cancel_stop_result(
     trace = trace or []
     prior_trace = list(state.get("executor_trace_list") or [])
     total = state.get("token_usage", 0) + tokens_spent
-    # 阶段 8 · P0（真机验收 F2）：文案与卡片必须报**同一个步数**。
+    # 文案与卡片必须报**同一个步数**。
     # 本地 `step_count` 只是"本次节点调用"的块数；一轮内被打回重跑过的话，
     # 卡片的 `stepCount`（= 本轮累计）会更大 ⇒ 同一张卡片上出现"第 11 步"与"步数 51"两个数字。
     total_steps = state.get("step_count", 0) + step_count
@@ -441,12 +441,12 @@ def _cancel_stop_result(
         "cancelled": True,
         "cancel_reason": getattr(token, "reason", "") or REASON_USER,
         "cancel_stage": stage,
-        # trace 沿用"跨轮累积"的规矩（修 D2）：被打回重跑过的话，前几轮真干的活也在
+        # trace 沿用"跨轮累积"的规矩：被打回重跑过的话，前几轮真干的活也在
         "executor_trace": _trace_to_text(prior_trace + trace),
         "executor_trace_list": prior_trace + trace,
         "executor_messages": messages or [],
         "step_count": total_steps,
-        # 阶段 8 · P1（F3）：被停止的这一轮若本来就是"被打回后发起的"，同样要计一次打回
+        # 被停止的这一轮若本来就是"被打回后发起的"，同样要计一次打回
         # （否则卡片上会写「打回 0 次」，而实际上明明被打回过）
         "retry_count": state.get("retry_count", 0) + (1 if is_retry else 0),
         "token_usage": total,
@@ -468,7 +468,7 @@ async def planner_node(state: AgentState) -> dict:
     if token is not None:
         token.stage = "planner"
     await emit({"type": "node", "node": "planner", "status": "start"})
-    # ── 阶段 8 · P0：节点入口的停止检查（"还没开始的节点"一步都不该跑）──
+    # ── 节点入口的停止检查（"还没开始的节点"一步都不该跑）──
     stopped = _stopped()
     if stopped is not None:
         logger.info("任务已停止（%s）：跳过 Planner", stopped.reason)
@@ -516,7 +516,7 @@ async def planner_node(state: AgentState) -> dict:
             "node": "planner",
             "status": "end",
             "steps": len((parsed or {}).get("steps") or []),
-            # 阶段 6：token 带进事件 —— 评估报告要按节点拆"哪一段最费 token"
+            # token 带进事件 —— 评估报告要按节点拆"哪一段最费 token"
             "tokens": planner_tokens,
         }
     )
@@ -538,7 +538,7 @@ def _trace_to_text(trace: list[dict]) -> str:
 
 
 def _verdict_passed(verdict_text: str) -> bool:
-    """裁定是否**通过** —— 这是全流程**唯一**的判据（2026-09-24 修 D1，别改回字符串猜法）。
+    """裁定是否**通过** —— 这是全流程**唯一**的判据（别改回字符串猜法）。
 
     ⚠️ **为什么不能用 `"FAIL" in verdict.upper()`**：Verifier 的输出**不保证是合法 JSON**。
     上游抽风时会直接返回 `Sorry, need more steps to process this request.` 这类错误串（实测踩到），
@@ -557,7 +557,7 @@ def _is_retry_round(prev_verdict: str) -> bool:
     """本次 Executor 是不是**重跑**（上一轮裁定存在且未通过）。
 
     ⚠️ 它就是 `retry_count` 的自增判据，而 `retry_count` 是「最多打回 MAX_RETRY 次」**唯一**的终止依据
-    —— 所以这里**绝不能**用 `"FAIL" in prev_verdict` 那种字符串猜法（修 D1，见 `_verdict_passed`）。
+    —— 所以这里**绝不能**用 `"FAIL" in prev_verdict` 那种字符串猜法（见 `_verdict_passed`）。
     """
     text = str(prev_verdict or "")
     return bool(text.strip()) and not _verdict_passed(text)
@@ -575,23 +575,23 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     （若改成在 verifier 里自增，第 1 次 FAIL 就会被当成"已打回 1 次"，
     实际只会有 1 次重跑，与「最多打回 2 轮」不符。）
 
-    **阶段 4 在这里加了三个上下文工程动作**（都只是"改喂给模型的 prompt"，
+    **这里加了三个上下文工程动作**（都只是"改喂给模型的 prompt"，
     不动 checkpoint 里的完整历史）：
-      - T4.4 ②：把任务开始时检索到的相关经验拼在【任务】前面；
-      - T4.3 节点级：进模型前按 `NODE_TOKEN_BUDGET` 剪枝（先砍最老的工具结果）；
-      - T4.3 任务级：累计 token 已击穿 `TASK_TOKEN_BUDGET` → **直接终止并报告**。
-    ⚠️ **阶段 8 · P2 起，这两个额度是运行期按模型窗口算的**（`config.token_budgets()`），
+      - 把任务开始时检索到的相关经验拼在【任务】前面；
+      - 节点级：进模型前按 `NODE_TOKEN_BUDGET` 剪枝（先砍最老的工具结果）；
+      - 任务级：累计 token 已击穿 `TASK_TOKEN_BUDGET` → **直接终止并报告**。
+    ⚠️ **这两个额度是运行期按模型窗口算的**（`config.token_budgets()`），
     不再是 import 期常量 —— 换模型后不用重启就生效。
 
-    **阶段 8 · P0 在这里加了停止**（协作式取消，三道检查点里的两道）：
+    **这里加了停止**（协作式取消，三道检查点里的两道）：
       - **节点入口**：进来先看停止开关（"还没开始执行"就该一步都不跑）；
       - **ReAct 每一步**：`astream` 循环开头 —— 停止后**下一步不再开始**；
       - 第三道在工具调用层（`utils/tool_wrap.py::_process`），兜住"这一步里的下一次调用"。
     ⚠️ **正在飞的那一次模型调用不会被打断**（协作式的固有代价）：它返回后我们才发现已停止。
     """
-    # 阶段 8 · P2：额度**运行期**解析（按当前 executor 模型的窗口；env 显式设了就用 env）
+    # 额度**运行期**解析（按当前 executor 模型的窗口；env 显式设了就用 env）
     budgets = token_budgets()
-    # ── 阶段 8 · P0：① 节点入口的停止检查（与"预算击穿"分开：停是"人/时间"，击穿是"钱"）──
+    # ── ① 节点入口的停止检查（与"预算击穿"分开：停是"人/时间"，击穿是"钱"）──
     token = current_token()
     if token is not None:
         token.stage = "executor"
@@ -617,7 +617,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         )
         return _cancel_stop_result(state, stopped, stage=stage)
 
-    # ⚠️ 阶段 8 · P1（F3）：`is_retry` **要在所有终止分支之前算好**。
+    # ⚠️ `is_retry` **要在所有终止分支之前算好**。
     #    `retry_count` 的语义是「已经打回了多少次」—— 只要这一轮**是**被打回后发起的，
     #    无论它是跑完了、被预算掐断、还是被停止，都得计一次；
     #    否则卡片上会写「打回 0 次」，而实际上明明被打回过（现场：重跑轮撞预算 ⇒ 显示 0 次）。
@@ -647,7 +647,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         }
 
     plan_steps = _plan_to_text(state.get("plan", ""))
-    # 自动注入的知识（T4.4 ②）：只在任务语义上拼一次，重跑时也保留
+    # 自动注入的知识：只在任务语义上拼一次，重跑时也保留
     knowledge = str(state.get("knowledge") or "")
     knowledge_prefix = f"{knowledge}\n\n" if knowledge else ""
     if is_retry:
@@ -666,8 +666,8 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
 
     last_content = ""
     trace: list[dict] = []
-    # ⚠️ **本轮之前已经发生过的执行轨迹**（修 D2）：被打回重跑时 state 里已经有上一轮的 trace，
-    #    这里先取出来，最后和本轮合并 —— 否则记录里只剩最后一次（见 D2 注释）。
+    # ⚠️ **本轮之前已经发生过的执行轨迹**：被打回重跑时 state 里已经有上一轮的 trace，
+    #    这里先取出来，最后和本轮合并 —— 否则记录里只剩最后一次。
     prior_trace = list(state.get("executor_trace_list") or [])
     tokens = 0
     usage_detail = dict(state.get("token_detail") or empty_detail())  # 计费原料（本节点累加）
@@ -693,7 +693,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
         async for chunk in executor_agent.astream(
             {"messages": input_messages}, config={"recursion_limit": 100}
         ):
-            # ── 阶段 8 · P0：② **ReAct 每一步**的停止检查 ──
+            # ── ② **ReAct 每一步**的停止检查 ──
             # 放在最前面：这一块（本步的模型输出 + 它要调的工具）**一个都不执行**。
             # 停止是协作式的 ⇒ 正在飞的那次模型调用拦不住，但它之后的这一步一定不会开始。
             if token is not None and token.cancelled:
@@ -728,7 +728,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             if token is not None:
                 token.steps = state.get("step_count", 0) + step_count
                 token.tokens = spent_before + tokens
-            # T5.6：每步推一条进度（带本步调了哪些工具），界面上就能看到"正在读哪个文件/查哪张表"
+            # 每步推一条进度（带本步调了哪些工具），界面上就能看到"正在读哪个文件/查哪张表"
             await emit(
                 {
                     "type": "node",
@@ -738,7 +738,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
                     "tools": step_tools,
                 }
             )
-            # 阶段 8 · P0：任务状态条（时长 / 步数 / 用量；没绑停止开关时不发）
+            # 任务状态条（时长 / 步数 / 用量；没绑停止开关时不发）
             await _emit_status()
             # ⚠️ 任务级预算**必须在这里也要判**：单个 executor 节点内部的 ReAct 循环
             #    是不经过图节点边界的，只在节点入口判的话，一次"读大文件 + 反复重读"
@@ -781,7 +781,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             messages=messages,
             last_content=last_content,
             pruned=pruned,
-            # 阶段 8 · P1（F3）：被停止的这一轮若是重跑，同样要计一次打回
+            # 被停止的这一轮若是重跑，同样要计一次打回
             is_retry=is_retry,
             token_detail=usage_detail,
         )
@@ -808,7 +808,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
             ),
             "budget_exceeded": True,
             "retry_count": retry_now,
-            # ⚠️ **跨轮累积**（修 D2）：重跑被预算掐断时，若只返回本轮 trace，
+            # ⚠️ **跨轮累积**：重跑被预算掐断时，若只返回本轮 trace，
             #    前几轮真正干活的轨迹就被**覆盖**了 —— 实测 E007 因此"表建好了、3 行数据也插了，
             #    但轨迹断言只看见 mysql_create_database 一条" ⇒ 计分假阴性。
             "executor_trace": _trace_to_text(prior_trace + trace),
@@ -825,7 +825,7 @@ async def executor_node(state: AgentState, executor_agent: Any) -> dict:
     )
     return {
         "executor_result": last_content or "（Executor 未产出最终回复）",
-        # ⚠️ **跨轮累积**（修 D2）：同一次任务的多次执行（被打回重跑）应当**合并**轨迹，
+        # ⚠️ **跨轮累积**：同一次任务的多次执行（被打回重跑）应当**合并**轨迹，
         #    否则记录里只剩最后一次 —— 会漏掉前面几轮真正完成的动作。
         "executor_trace": _trace_to_text(prior_trace + trace),
         "executor_trace_list": prior_trace + trace,
@@ -844,7 +844,7 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
     if token is not None:
         token.stage = "verifier"
     await emit({"type": "node", "node": "verifier", "status": "start"})
-    # ── 阶段 8 · P0：节点入口的停止检查 ──
+    # ── 节点入口的停止检查 ──
     stopped = _stopped()
     if stopped is not None:
         logger.info("任务已停止（%s）：跳过 Verifier 验收", stopped.reason)
@@ -884,7 +884,7 @@ async def verifier_node(state: AgentState, verifier_agent: Any) -> dict:
         async for chunk in verifier_agent.astream(
             {"messages": [HumanMessage(content=prompt)]}, config={"recursion_limit": 20}
         ):
-            # 阶段 8 · P0：验收内部的每一步同样受停止约束
+            # 验收内部的每一步同样受停止约束
             if token is not None and token.cancelled:
                 cancelled_hit = True
                 break
@@ -959,8 +959,8 @@ def decide_after_verify(state: AgentState) -> Literal["executor", "end"]:
     """条件边：PASS → 结束；FAIL 且未超限 → 打回 Executor；超限 → 结束。
 
     另外三条**必须先判**的终止条件：
-      - 任务被**停止**（阶段 8 · P0：用户点停止 / 墙钟到点）→ 结束，绝不打回重跑；
-      - 任务级 token 预算击穿（T4.3）→ 直接结束，别再打回重跑烧 token；
+      - 任务被**停止**（用户点停止 / 墙钟到点）→ 结束，绝不打回重跑；
+      - 任务级 token 预算击穿 → 直接结束，别再打回重跑烧 token；
       - 击穿过一次之后同样直接结束。
     """
     if state.get("cancelled"):
@@ -1050,11 +1050,11 @@ def _route_decide(state: AgentState) -> Literal["simple", "complex"]:
 def after_executor(state: AgentState) -> Literal["verifier", "end"]:
     """Executor 的收尾：simple 路径直接结束，complex 路径去验收。
 
-    两条**必须先结束**的情形（阶段 8 · P0 把这条判据统一给 multi 模式也用上了）：
+    两条**必须先结束**的情形（把这条判据统一给 multi 模式也用上了）：
       - 任务被**停止**：停止的语义就是"后面不再继续"，再去跑验收等于没停；
-      - **预算击穿**（T4.3）：击穿时 Executor 根本没执行完，再去跑 Verifier 只是白花一次模型调用。
+      - **预算击穿**：击穿时 Executor 根本没执行完，再去跑 Verifier 只是白花一次模型调用。
          ⚠️ 这条以前只在 `auto` 模式下成立 —— `multi` 模式的 `executor → verifier` 是**无条件边**，
-         于是限额版评估里 E015 被掐断后照样调了一次 Verifier（阶段 6 的教训），P1 的账也是这一条。
+         于是限额版评估里 E015 被掐断后照样调了一次 Verifier。
     """
     if state.get("cancelled") or state.get("budget_exceeded"):
         return "end"
@@ -1069,7 +1069,7 @@ def after_executor(state: AgentState) -> Literal["verifier", "end"]:
 def build_executor_agent(tools: list, *, mode: str = "multi", llm: Any | None = None) -> Any:
     """构造 Executor：create_react_agent + 全量工具。
 
-    **按模式选 Prompt**（这是 T3.1 的关键之一）：
+    **按模式选 Prompt**：
       - `single`：用 SYSTEM_PROMPT_TEMPLATE（自带 Plan→Execute→Verify 三步法，
         Executor 需要自己规划 —— 这正是改造前单 Agent 的路子）；
       - `multi` / `auto`：用 EXECUTOR_PLAN_PROMPT（"按给定计划执行"），
@@ -1086,7 +1086,7 @@ def build_executor_agent(tools: list, *, mode: str = "multi", llm: Any | None = 
         model=model,
         tools=tools,
         debug=False,
-        # ⚠️ 走 prompt_context()：model_name 要**运行期**取（订正 #37），
+        # ⚠️ 走 prompt_context()：model_name 要**运行期**取，
         #   直接用静态 PROMPT_CONTEXT 会 KeyError —— 故意让它响亮地失败
         prompt=prompt.format(**prompt_context("executor")),
     )
@@ -1145,7 +1145,7 @@ def build_graph(
     elif mode == "multi":
         graph.add_edge(START, "planner")
         graph.add_edge("planner", "executor")
-        # ⚠️ 阶段 8 · P0：这里以前是**无条件边** `executor → verifier` ⇒
+        # ⚠️ 这里以前是**无条件边** `executor → verifier` ⇒
         #    被"停止"或被"预算"终止之后**照样会跑一次验收**（白花一次模型调用，
         #    而且会把"停止"包装成"验收未通过"）。现在与 auto 模式统一走 `after_executor`。
         graph.add_conditional_edges(
@@ -1241,10 +1241,10 @@ async def run_multi_agent(
     `mode`: single / multi / auto（见 build_graph）。执行模式与路由结论都会出现在返回值里，
     供 evals 统计"多少题走了哪条路径"。
 
-    `auto_inject` / `auto_deposit`（T4.4）：默认跟随配置；评估侧**必须**显式关掉沉淀
+    `auto_inject` / `auto_deposit`：默认跟随配置；评估侧**必须**显式关掉沉淀
     （否则评测过程会改写知识库，后续题目不可比）。
 
-    **阶段 8 · P0 —— 停止怎么接**：本函数**不自己造停止开关**；调用方在**外面**用
+    **停止怎么接**：本函数**不自己造停止开关**；调用方在**外面**用
     `with bind_cancel(CancelToken(wall_clock=...))` 绑一次（Web 的每条消息、CLI 的每一轮各绑一次）。
     没绑 ⇒ 这个入口不参与停止（evals / 单测零改动）。停止命中时返回值里
     `cancelled=True` / `cancel_reason` / `cancel_stage` 会说清"谁停的、停在哪"。
@@ -1259,7 +1259,7 @@ async def run_multi_agent(
     if verifier_agent is None:
         verifier_agent = build_verifier_agent(all_tools)
 
-    # ── 阶段 8 · P1.5（候选池 §十五B）：入口的"模板未渲染"检测 ──
+    # ── 入口的"模板未渲染"检测 ──
     # 任务里出现没替换的占位符（`<你的WSL用户名>` / `${YOUR_PATH}` / `你的API密钥` …）
     # ⇒ **只回问、不进图**：0 次模型调用、0 次工具调用。
     # 判据只认"形状 + 占位词"，**单花括号一律不管**（JSON / 字典 / f-string 太常见）——
@@ -1303,13 +1303,13 @@ async def run_multi_agent(
             "cancel_reason": "",
             "cancel_stage": "",
             "status": None,
-            # P1.5：前端据此显示「需要你确认」，而不是「未验收」
+            # 前端据此显示「需要你确认」，而不是「未验收」
             "needs_clarification": True,
             "placeholders": placeholders,
             "models_used": {"planner": [], "executor": [], "verifier": []},
         }
 
-    # ── T4.4 ②：任务开始时自动检索一次相关知识（不走 MCP，见 memory.py 的说明）──
+    # ── 任务开始时自动检索一次相关知识（不走 MCP，见 memory.py 的说明）──
     inject_enabled = RAG_AUTO_INJECT if auto_inject is None else auto_inject
     knowledge_text, injected_items = ("", [])
     if inject_enabled:
@@ -1320,10 +1320,10 @@ async def run_multi_agent(
         app = build_graph(executor_agent, verifier_agent, checkpointer=saver, mode=mode)
         config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
 
-        # ── T4.2：先把过长的历史压实，再进图 ──
+        # ── 先把过长的历史压实，再进图 ──
         # 只在**确实超阈值**时才去构造模型链（否则每轮都白建一次 LLM 对象）
         compacted = False
-        # 阶段 8 · P2：压实阈值也**运行期**解析（按当前模型的窗口）
+        # 压实阈值也**运行期**解析（按当前模型的窗口）
         budgets = token_budgets()
         snapshot = await app.aget_state(config)
         prior = list((snapshot.values or {}).get("messages") or [])
@@ -1365,7 +1365,7 @@ async def run_multi_agent(
                 config=config,
             )
         except TaskCancelled as exc:
-            # ── 阶段 8 · P0 的**兜底**（正常路径用不到）──
+            # ── **兜底**（正常路径用不到）──
             # 三道检查点里，工具层那道抛出的 `TaskCancelled` 要穿过**整张图**才能到节点里；
             # 各节点都接了，但万一将来新增节点/子图没接住，绝不能让它变成一次"未处理异常"
             # —— 那对 Web 端就是"任务永远不回包"（比停止失败更糟）。
@@ -1383,7 +1383,7 @@ async def run_multi_agent(
                 ),
             }
         except BaseException as exc:  # noqa: BLE001
-            # ── 阶段 8 实测修复（B5）：**被硬中断的一轮也必须留档** ──
+            # ── **被硬中断的一轮也必须留档** ──
             # 现场：用户在执行中关掉页面 ⇒ WS 断开 ⇒ 这个任务被 `cancel()` ⇒ 图没跑完 ⇒
             # 原来那句"只在图跑完后写一次"的记忆追加**根本没执行** ⇒ 记忆里连"他说过什么"都没有。
             # ⚠️ 这里**只补一条记录，然后把异常原样抛出去**（绝不吞）：Web 端要靠 `CancelledError`
@@ -1399,8 +1399,8 @@ async def run_multi_agent(
         final_response = state["executor_result"]
         verdict_text = str(state.get("verdict") or "")
         if cancelled:
-            # 阶段 8 · P0：**停止的文案必须是"已停止"**，绝不能拼成"验收未通过"
-            # （第 2 题现场就是因预算终止却显示"验收未通过 + 一句英文" —— 账本 R5）。
+            # **停止的文案必须是"已停止"**，绝不能拼成"验收未通过"
+            # （第 2 题现场就是因预算终止却显示"验收未通过 + 一句英文"）。
             # 停在哪一段，说法不一样：
             #   · executor 停 ⇒ 那段中文说明由 `_cancel_stop_result` 产出，直接用；
             #   · planner 停  ⇒ 一步都没跑，同样由 executor 的入口检查产出（planner 后面必然是它）；
@@ -1412,7 +1412,7 @@ async def run_multi_agent(
                     f"{state['executor_result']}"
                 )
         elif state.get("budget_exceeded"):
-            # 阶段 8 · P1（F3 / 账本 R5 的真实形状）：**被预算掐断的那一轮不该被包装成验收失败**。
+            # **被预算掐断的那一轮不该被包装成验收失败**。
             # 触发路径：第 1 轮跑完 → Verifier 判 FAIL（`verdict` 留在 state 里）→ 打回重跑 →
             # 第 2 轮撞上预算 ⇒ 若走下面那条 `elif`，最终回复会变成
             # 「任务执行完成，但验收未通过（已重试 1 次）：验收意见：… 执行结果：【已终止·预算】…」
@@ -1420,7 +1420,7 @@ async def run_multi_agent(
             # 语义上也说不通：那一轮**根本没验收**，谈不上"验收未通过"。
             final_response = state["executor_result"]
         elif verdict_text.strip() and not _verdict_passed(verdict_text):
-            # ⚠️ 判据走 `_verdict_passed`（修 D1）：裁定**无法解析**时也算"未通过"，
+            # ⚠️ 判据走 `_verdict_passed`：裁定**无法解析**时也算"未通过"，
             #    否则上游返回错误串时会被当成"没失败"，回复里既不提示、也照样算成功。
             parsed = _extract_json(verdict_text)
             reason = (parsed or {}).get("reason", verdict_text)
@@ -1442,15 +1442,15 @@ async def run_multi_agent(
             },
         )
 
-    # ── T4.4 ③：任务成功后判断要不要把经验沉淀进知识库 ──
+    # ── 任务成功后判断要不要把经验沉淀进知识库 ──
     # 只记成功经验（失败的多半是环境问题，存进去就是噪音）
-    # ⚠️ 阶段 5（订正 #28）：**不再传 save_tool** —— 沉淀改回进程内直调 `store.save_document`，
-    #    不走 MCP 工具（一是对齐 memory.py 的 docstring，二是绕开订正 #27 那个死锁）。
-    #    它也不再走三档权限的人工确认（用户决策 B），但仍受"只读档不写"约束。
+    # ⚠️ **不再传 save_tool** —— 沉淀改回进程内直调 `store.save_document`，
+    #    不走 MCP 工具（一是对齐 memory.py 的 docstring，二是绕开那个死锁）。
+    #    它也不再走三档权限的人工确认，但仍受"只读档不写"约束。
     deposited: list[dict] = []
-    # ⚠️ 判据走 `_verdict_passed`（修 D1）：**没有裁定**（single / auto-simple 路径）算成功（保持原行为），
+    # ⚠️ 判据走 `_verdict_passed`：**没有裁定**（single / auto-simple 路径）算成功（保持原行为），
     #    **有裁定就必须是 PASS** 才算成功 —— 裁定无法解析（上游错误串）时**不该沉淀经验**。
-    # 阶段 8 · P0：被**停止**的任务同样不沉淀（半途而废的"经验"存进去就是噪音）。
+    # 被**停止**的任务同样不沉淀（半途而废的"经验"存进去就是噪音）。
     verdict_text = str(state.get("verdict") or "")
     succeeded = (
         (not verdict_text.strip() or _verdict_passed(verdict_text))
@@ -1484,19 +1484,19 @@ async def run_multi_agent(
         "verifier_messages": state.get("verifier_messages", []),
         "step_count": state.get("step_count", 0),
         "final_response": final_response,
-        # ── 阶段 4 的证据字段（供 evals / 汇报引用）──
+        # ── 证据字段（供 evals / 汇报引用）──
         "knowledge_injected": [it["id"] for it in injected_items],
         "compacted": compacted,
         "budget_exceeded": bool(state.get("budget_exceeded")),
         "pruned_messages": state.get("pruned_messages", 0),
         "deposited": deposited,
-        # ── 阶段 8 · P0：停止（谁停的 / 停在哪 / 到这一刻的状态）──
+        # ── 停止（谁停的 / 停在哪 / 到这一刻的状态）──
         "cancelled": cancelled,
         "cancel_reason": cancel_reason,
         "cancel_stage": cancel_stage,
         # 状态条口径（时长**不含人工确认等待**）：没有停止开关时是 None
         "status": (current_token().snapshot() if current_token() is not None else None),
-        # ── 阶段 6：**本轮实际用了哪些模型**（服务端回报的名字，不是配置里的）──
+        # ── **本轮实际用了哪些模型**（服务端回报的名字，不是配置里的）──
         "models_used": {
             "planner": [m for m in [state.get("planner_model") or ""] if m],
             "executor": _models_of(state.get("executor_messages")),

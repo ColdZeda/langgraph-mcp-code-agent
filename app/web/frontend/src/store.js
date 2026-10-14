@@ -4,10 +4,10 @@ import { reactive } from 'vue'
 export const store = reactive({
   wsStatus: 'connecting', // connecting | open | closed
   threadId: '',
-  // 阶段 8 · 实测修复：**执行中不许切会话**（点了就提示，不再静默吞掉）
+  // **执行中不许切会话**（点了就提示，不再静默吞掉）
   notice: '',
   mode: 'auto', // 执行模式：auto | single | multi（由界面下拉框切换）
-  // 权限模式（阶段 5）：readonly | confirm | open。
+  // 权限模式：readonly | confirm | open。
   // ⚠️ 与「执行模式」是**两条独立的轴**，名字不能都叫"模式"。
   permissionMode: 'confirm',
   permissionModes: [
@@ -16,19 +16,19 @@ export const store = reactive({
     { value: 'open', label: '放开' },
   ],
   confirmTimeoutSec: 120,
-  // 阶段 7 · T7.6：**有没有可用的模型**（后端在 session 消息里给）。
+  // **有没有可用的模型**（后端在 session 消息里给）。
   // 没有 ⇒ 界面显示"去添加你的 API Key"并禁用发送（新用户 clone 下来的默认状态）。
   modelReady: true,
   modelError: '',
   // 当前待人工确认的请求（有值 → 弹框）。结构见后端 permission_request 消息。
   permissionRequest: null,
-  // ⚠️ 阶段 5 修：**待确认请求要排队**。以前只存一个槽位 ——
+  // ⚠️ **待确认请求要排队**。以前只存一个槽位 ——
   //    两个 permission_request 同时到达时，后一个会把前一个**覆盖**掉，
   //    用户就永远答不上它（只能等后端超时自动拒绝）。
   permissionQueue: [],
-  // 阶段 5（T5.6）：节点级进度（Planner/Executor 每步/Verifier），任务开始清空
+  // 节点级进度（Planner/Executor 每步/Verifier），任务开始清空
   progress: [],
-  // 阶段 8 · P0：任务状态条（时长 / 步数 / 用量）。
+  // 任务状态条（时长 / 步数 / 用量）。
   // 由后端 `status` 事件刷新；两次事件之间的那 1 秒由本地计时器补 ——
   // ⚠️ 弹出权限弹框时**冻结**（与后端口径一致：人工确认的等待不算任务时间）。
   status: null,
@@ -37,7 +37,7 @@ export const store = reactive({
   messages: [], // {id, role: 'user'|'assistant', text?, result?|error?}
   sending: false,
   sessions: [],
-  // 阶段 7（会话管理）：`counts` = {visible, hidden, eval}，决定两行小字的显隐；
+  // `counts` = {visible, hidden, eval}，决定两行小字的显隐；
   // 两个开关是"要不要把回收站 / 系统线程也拉下来"（默认都不显示）。
   sessionCounts: { visible: 0, hidden: 0, eval: 0 },
   showHidden: false,
@@ -45,7 +45,7 @@ export const store = reactive({
   showSettings: false,
   showKnowledge: false,
   // 「当前生效模型」：四个角色**解析后**各自会用哪个（后端算好给前端 —— 兜底链有三层，
-  // 前端自己拼容易算错）。阶段 6 加的：模型是全局配置、不随会话保存，
+  // 前端自己拼容易算错）。模型是全局配置、不随会话保存，
   // 不显示的话用户不知道"现在到底是谁在干活"（用户实测后提的需求）。
   effectiveModels: {},
 })
@@ -81,7 +81,7 @@ function progressLine(e) {
     case 'executor':
       if (e.status === 'step') return `第 ${e.step} 步${tool ? `：调用 ${tool}` : ''}`
       if (e.status === 'end') {
-        // 阶段 8 · P0：停止与"运行结束""预算终止"是三种不同的事，文案必须分开
+        // 停止与"运行结束""预算终止"是三种不同的事，文案必须分开
         if (e.cancelled) return `Executor 已停止（第 ${e.steps} 步停下）`
         return e.budgetExceeded ? 'Executor 因 token 预算终止' : `Executor 完成（${e.steps} 步）`
       }
@@ -97,7 +97,7 @@ function progressLine(e) {
   }
 }
 
-// ── 阶段 8 · P0：任务状态条的本地计时 ────────────────────────────────
+// ── 任务状态条的本地计时 ────────────────────────────────
 // 后端每走一步推一条 `status`（权威值），中间那 1 秒本地补 —— 不然计时看起来是"卡住的"。
 // ⚠️ 有权限弹框时**不补**：后端在人工确认期间暂停计时，前端跟着暂停才对得上。
 let tickTimer = null
@@ -116,19 +116,19 @@ function stopTicker() {
 function handleWsMessage(msg) {
   if (msg.type === 'session') {
     store.threadId = msg.threadId
-    // 权限模式由后端给（新会话取持久化值；「放开」按 D4 永不从这里回来）
+    // 权限模式由后端给（新会话取持久化值；「放开」永不从这里回来）
     if (msg.permissionMode) store.permissionMode = msg.permissionMode
     if (Array.isArray(msg.permissionModes) && msg.permissionModes.length) {
       store.permissionModes = msg.permissionModes
     }
     if (msg.confirmTimeoutSec) store.confirmTimeoutSec = msg.confirmTimeoutSec
-    // 阶段 7 · T7.6：后端告诉我们"现在到底有没有可用的模型"——
+    // 后端告诉我们"现在到底有没有可用的模型"——
     // 没有的话界面要显示引导并禁用发送（全新用户 clone 下来就是这个状态）。
     if (typeof msg.modelReady === 'boolean') store.modelReady = msg.modelReady
     if (typeof msg.modelError === 'string') store.modelError = msg.modelError
     return
   }
-  // 人工确认（阶段 5）：后端要求确认某个工具调用 → 弹框（多个请求排队，逐个问）
+  // 人工确认：后端要求确认某个工具调用 → 弹框（多个请求排队，逐个问）
   if (msg.type === 'permission_request') {
     if (store.permissionRequest) store.permissionQueue.push(msg)
     else store.permissionRequest = msg
@@ -150,18 +150,18 @@ function handleWsMessage(msg) {
     })
     return
   }
-  // 阶段 8：后端已收到停止请求（协作式：会在下一个检查点停，不是立刻掐断）
+  // 后端已收到停止请求（协作式：会在下一个检查点停，不是立刻掐断）
   if (msg.type === 'stopping') {
     store.stopping = true
     store.progress.push({ id: `p_stop_${Date.now()}`, text: '已请求停止：正在下一步边界停下…' })
     return
   }
-  // 阶段 8 · P0：任务状态条（时长 / 步数 / 用量）—— 后端每步推一次，权威值
+  // 任务状态条（时长 / 步数 / 用量）—— 后端每步推一次，权威值
   if (msg.type === 'status') {
     if (store.sending) store.status = { ...(store.status || {}), ...msg }
     return
   }
-  // 阶段 5（T5.6）：节点级进度 —— 任务进行中就能看到走到哪一步了
+  // 节点级进度 —— 任务进行中就能看到走到哪一步了
   if (msg.type === 'node') {
     store.progress.push({ id: `p_${Date.now()}_${store.progress.length}`, text: progressLine(msg) })
     if (store.progress.length > 40) store.progress.shift()
@@ -175,7 +175,7 @@ function handleWsMessage(msg) {
     // 任务结束 → 弹框与队列都该清掉（后端不会再等它们了）
     store.permissionRequest = null
     store.permissionQueue = []
-    // ⚠️ 阶段 7（T7.5 走查发现）：**那条"协作中…"占位气泡要删掉**，不能只把 phase 改成 done。
+    // ⚠️ **那条"协作中…"占位气泡要删掉**，不能只把 phase 改成 done。
     //    改 phase 的话它还留在列表里，而 ChatView 的最后一条分支要求 `m.text` ——
     //    于是任务跑完后永远挂着一句"Planner → Executor → Verifier 协作中…"（实测截图里就是）。
     store.messages = store.messages.filter((m) => m.phase !== 'running')
@@ -192,8 +192,7 @@ function handleWsMessage(msg) {
     store.status = null
     store.permissionRequest = null
     store.permissionQueue = []
-    // 同上的理由：把**那一条**占位气泡改成错误气泡（以前是"改 phase + 再 push 一条"，
-    // 结果是两条错误气泡叠在一起）。
+    // 同上的理由：把**那一条**占位气泡改成错误气泡。
     const running = [...store.messages].reverse().find((m) => m.phase === 'running')
     if (running) {
       running.phase = 'error'
@@ -221,7 +220,7 @@ export function sendChat(message) {
   )
 }
 
-/** 回答一次人工确认（阶段 5）。`alwaysAllow` 对应「本会话内对该工具总是允许」勾选框。 */
+/** 回答一次人工确认。`alwaysAllow` 对应「本会话内对该工具总是允许」勾选框。 */
 export function respondPermission({ requestId, allow, alwaysAllow = false }) {
   if (store.wsStatus !== 'open') return
   ws.send(JSON.stringify({ type: 'permission_response', requestId, allow, alwaysAllow }))
@@ -230,7 +229,7 @@ export function respondPermission({ requestId, allow, alwaysAllow = false }) {
 }
 
 /**
- * 阶段 8 · P0：停止当前任务。
+ * 停止当前任务。
  *
  * ⚠️ **协作式**：后端在下一个检查点（节点入口 / ReAct 每一步 / 每次工具调用前）才停，
  * 正在飞的那一次模型调用不会被打断 —— 所以按钮会先变成「停止中…」。
@@ -242,7 +241,7 @@ export function stopTask() {
   ws.send(JSON.stringify({ type: 'stop' }))
 }
 
-/** 切换权限模式：本连接立即生效，并按 D4 规则持久化（「放开」只生效不落盘）。 */
+/** 切换权限模式：本连接立即生效，并按规则持久化（「放开」只生效不落盘）。 */
 export function setPermissionMode(mode) {
   store.permissionMode = mode
   if (store.wsStatus === 'open') {
@@ -264,7 +263,7 @@ export function newSession() {
 
 export async function refreshSessions() {
   try {
-    // 阶段 7：接口返回**对象**（items + counts）—— counts 决定"回收站 (N)"
+    // 接口返回**对象**（items + counts）—— counts 决定"回收站 (N)"
     // 与"显示系统线程 (N)"这两行小字要不要出现（都是 0 时一个字都不显示）。
     const params = new URLSearchParams()
     if (store.showHidden) params.set('include_hidden', '1')
@@ -417,7 +416,7 @@ export async function testSettings(payload) {
 }
 
 /**
- * 阶段 7 · 界面第二轮反馈：一次测**当前配置里用到的每个模型**。
+ * 一次测**当前配置里用到的每个模型**。
  * 后端按模型键去重 + 并发（"2 个模型分给 4 个角色" ⇒ 只发 2 次请求），
  * 返回 `{ok, groups: [{label, model, roles, ok, elapsedSec, error}]}`。
  */

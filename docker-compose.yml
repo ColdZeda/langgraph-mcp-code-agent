@@ -49,7 +49,7 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
-    # ⚠️ 故意不挂数据卷 —— 定位是【纯缓存】，数据可丢（阶段 4 会用它做工具结果缓存）
+    # ⚠️ 故意不挂数据卷 —— 定位是【纯缓存】，数据可丢（工具结果缓存会用它）
 
 volumes:
   mysql-data:

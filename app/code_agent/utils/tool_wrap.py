@@ -1,15 +1,15 @@
-"""工具包装层：**T5.2 权限判定**（阶段 5）+ T4.1 结果外置 + T4.5 结果缓存（阶段 4）。
+"""工具包装层：**权限判定** + 结果外置 + 结果缓存。
 
 为什么要在**工具层**做，而不是在节点里做：
 `create_react_agent` 内部自己执行工具、自己把结果回填成 ToolMessage，外部插不进手；
 所以在工具被交给 agent **之前**统一包一层，是最集中的做法
 （也因此这是工具调用的**唯一收口** —— 权限层放这里不用改 6 个 MCP server）。
 
-⚠️ **权限判定必须是 `_process` 里"缓存查询之前"的第一句**（阶段 8 起它前面多了**停止检查**那一句，
+⚠️ **权限判定必须是 `_process` 里"缓存查询之前"的第一句**（它前面多了**停止检查**那一句，
 判据不变：仍然在缓存查询之前），理由见该函数里的注释：
 不然"曾经允许过"的缓存值会让已被拒绝的调用照样返回结果。
 
-⚠️ **接口形状是实测确认的，两条路径都要处理**（照抄第六版示例会炸）：
+⚠️ **接口形状是实测确认的，两条路径都要处理**（照抄示例会炸）：
 
 ```
 langchain_mcp_adapters/tools.py
@@ -110,7 +110,7 @@ _PATH_HINT_ARGS = (
 def _path_error_hint(name: str, args: dict) -> str:
     """给"路径类参数"的报错补上根目录与解析后的绝对路径（**信息型增强，不改任何行为**）。
 
-    ⚠️ 现场（2026-10-07 实测 B10）：模型把 `runtime\\workspace` 当相对路径传进来，而文件工具的根目录
+    ⚠️ 现场（2026-10-07 实测）：模型把 `runtime\\workspace` 当相对路径传进来，而文件工具的根目录
     就是 `runtime\\workspace` ⇒ 被拼成 `…\\runtime\\workspace\\runtime\\workspace`，
     模型只看到一句 `Error: [WinError 3] 系统找不到指定的路径。`（不知道根目录在哪、也不知道该怎么改），
     于是反复试。这里把"根目录 + 解析后的绝对路径 + 该改用哪个工具"一次说清。
@@ -164,17 +164,17 @@ def wrap_tool(tool: Any, cache: ToolCache | None = None) -> Any:
     async def _process(args: tuple, kwargs: dict, call) -> Any:
         key_args = _args_key(args, kwargs)
 
-        # 阶段 8 · P0：**每次工具调用之前**的停止检查（协作式取消的最后一个收口）。
+        # **每次工具调用之前**的停止检查（协作式取消的最后一个收口）。
         # 为什么放在最前面（权限判定之前）：已经决定要停的任务不该再去问用户"允许吗"。
         # 没有停止开关时是空操作（evals / 单测零改动）。
         raise_if_cancelled()
 
-        # 阶段 8 · P1.5（候选池 §十五B）：**路径类参数里不许有没替换的模板占位符**。
+        # **路径类参数里不许有没替换的模板占位符**。
         # 放在权限判定之前：拿一个 `<你的路径>/a.txt` 去问用户"允许写入吗"是浪费双方的时间。
         # 抛的是普通 Exception ⇒ ToolNode 会把它变成一条 ToolMessage，模型能自己改对。
         check_tool_args(name, key_args)
 
-        # ⚠️⚠️ **权限判定必须在缓存查询之前**（阶段 5 · B1+ 约束 1）：
+        # ⚠️⚠️ **权限判定必须在缓存查询之前**：
         #     否则"曾经允许过"的缓存值会让**已被拒绝**的调用照样返回结果 ——
         #     这比"拒绝结果被缓存"更隐蔽，因为它看起来一切正常。
         #   同理它也必须在下面 `try/except BaseException` 的**外面**：
@@ -196,7 +196,7 @@ def wrap_tool(tool: Any, cache: ToolCache | None = None) -> Any:
             if cache is not None and not cacheable:
                 await cache.invalidate()
             # ⚠️ 2026-10-07 实测：文件工具的报错太糊，模型只能反复试。
-            #    现场（B10）：它把 `runtime\workspace` 当相对路径传进来，工具又拼了一次根目录
+            #    现场：它把 `runtime\workspace` 当相对路径传进来，工具又拼了一次根目录
             #    ⇒ `…\runtime\workspace\runtime\workspace`，用户看到的只有
             #    `Error: [WinError 3] 系统找不到指定的路径。`（不知道根目录在哪、也不知道该怎么改）。
             #    ⇒ 路径类参数报错时**补上根目录与解析后的绝对路径**（信息型增强，不改任何行为）。

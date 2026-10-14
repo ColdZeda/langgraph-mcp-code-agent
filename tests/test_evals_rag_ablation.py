@@ -1,4 +1,4 @@
-"""阶段 6 · RAG 消融脚本的守卫测试（**不加载模型、不连库**）。
+"""RAG 消融脚本的守卫测试（**不加载模型、不连库**）。
 
 守两件事：
 
@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from evals import rag_ablation as A  # noqa: E402
-from evals.env import FIXTURE_KNOWLEDGE_DIR  # noqa: E402   # 语料已挪进夹具（订正 #36）
+from evals.env import FIXTURE_KNOWLEDGE_DIR  # noqa: E402   # 语料已挪进夹具
 from evals.rag_bench import EXPECTED_SOURCE, QUERIES  # noqa: E402
 
 
@@ -166,7 +166,7 @@ def test_latency_is_aggregated():
 def test_ablation_does_not_write_a_vector_db_to_disk():
     """整篇索引必须**建在内存**里 —— 生产向量库和临时目录都不许碰。
 
-    ⚠️ 这条是实测订正（2026-09-22）：第一版用 `PersistentClient` 建在
+    ⚠️ 第一版用 `PersistentClient` 建在
     `runtime/runs/rag_ablation_chroma/`，跑完 `rmtree(..., ignore_errors=True)` 清理，
     但 chromadb 还开着 SQLite 文件 → Windows 上 rmtree 失败 → **每次留一个 0.39 MB 的垃圾目录**，
     而且被 `ignore_errors=True` 咽掉了。现在改成 `EphemeralClient`，

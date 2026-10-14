@@ -1,4 +1,4 @@
-"""RAG 消融对照（阶段 6 · T6.3 ①）——「整篇 + 无精排」vs「分块 + 精排」谁贡献了多少。
+"""RAG 消融对照 ——「整篇 + 无精排」vs「分块 + 精排」谁贡献了多少。
 
 **为什么不能拿两次 `rag_bench` 的数字相减**：那是两个不同时间的数字，中间隔着好几个变量
 （语料、模型、机器负载），说不清差距是谁的功劳。这里用**同一批查询 / 同一个 embedding 模型 /
@@ -111,7 +111,7 @@ def _embed(texts: list[str]) -> list[list[float]]:
 def build_whole_doc_index() -> tuple[object, int]:
     """建"整篇一个向量"的索引，返回 `(collection, 文档数)`。
 
-    ⚠️ 用 **`EphemeralClient`（纯内存）**，不是 `PersistentClient`（2026-09-22 实测订正）：
+    ⚠️ 用 **`EphemeralClient`（纯内存）**，不是 `PersistentClient`：
     第一版建在 `runtime/runs/rag_ablation_chroma/` 下，跑完 `shutil.rmtree(..., ignore_errors=True)`
     清理 —— 但 **chromadb 还开着那个 SQLite 文件**，Windows 上 rmtree 直接失败，
     而 `ignore_errors=True` 把它咽了下去 → **每次都留一个 0.39 MB 的垃圾目录**（正好是"静默失败"那个老毛病）。
@@ -468,7 +468,7 @@ def _print_report(payload: dict) -> None:
 
 
 def main() -> int:
-    # ⚠️ 第一步：切到评估专用语料与向量库（订正 #36）
+    # ⚠️ 第一步：切到评估专用语料与向量库
     use_eval_corpus()
 
     parser = argparse.ArgumentParser(description="RAG 消融对照（不需要 LLM）")

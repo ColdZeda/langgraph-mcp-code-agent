@@ -1,4 +1,4 @@
-"""`evals/env.py` 的守卫测试（语料隔离，订正 #36）。
+"""`evals/env.py` 的守卫测试（语料隔离）。
 
 守的是"**产品与评估不共用知识库**"这件事 —— 它出问题的方式很隐蔽：
 评估跑完，产品会话里被塞进几条**故意写错的**干扰项，用户看到的是"模型莫名其妙说别的"。
@@ -45,9 +45,9 @@ def test_fixture_is_the_documented_7_files():
 
 
 def test_product_knowledge_dir_has_no_fixture_corpus():
-    """**产品知识库里不许出现测试语料的副本** —— 订正 #36 的核心不变量。
+    """**产品知识库里不许出现测试语料的副本** —— 核心不变量。
 
-    ⚠️ 断言的是"**夹具的副本**不在产品库里"，**不是**"产品库必须是空的"（阶段 7 订正）。
+    ⚠️ 断言的是"**夹具的副本**不在产品库里"，**不是**"产品库必须是空的"。
     以前写的是 `leftovers == []`，比它要守的不变量更严：产品库本来就是**靠使用慢慢积累**的
     —— 用户跑一次任务，应用可能就沉淀了一条经验进去（实测就撞到过：
     `data/knowledge/天气查询用wttr.in接口而非搜索.txt`）。那不是 bug，那正是设计意图，
@@ -76,7 +76,7 @@ def test_product_knowledge_dir_has_no_fixture_corpus():
     assert not same_name and not same_content, (
         f"产品知识库 {KNOWLEDGE_DIR} 里出现了测试语料的副本："
         f"同名 {same_name} / 同内容 {same_content} —— "
-        "测试语料必须待在 evals/fixtures/knowledge/ 里，产品库要靠使用慢慢积累（订正 #36）"
+        "测试语料必须待在 evals/fixtures/knowledge/ 里，产品库要靠使用慢慢积累"
     )
 
 

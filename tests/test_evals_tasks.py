@@ -1,4 +1,4 @@
-"""阶段 6 · 题集的**机械验收**（方案 T6.1/T6.2 的验收项，全部可脚本统计）。
+"""题集的**机械验收**（方案里的验收项，全部可脚本统计）。
 
 这些断言为什么必须自动化：题集是"活的"（以后还要加题），而"每道题至少一个状态断言"
 这种事**靠自觉一定会漂**——旧 30 题集就是漂成了 14/30 题没有产物级断言。
@@ -32,7 +32,7 @@ def _tiers_of(task) -> list[str]:
 
 
 def test_task_count_within_plan_range():
-    """方案要求 **≥24 且 ≤30**（第六版的"24-30"与"8×3"要能同时满足）。"""
+    """方案要求 **≥24 且 ≤30**（"24-30"与"8×3"要能同时满足）。"""
     assert 24 <= len(TASKS) <= 30, f"实际 {len(TASKS)} 题"
 
 
@@ -54,7 +54,7 @@ def test_every_dimension_has_at_least_three_tasks():
 
 
 def test_every_task_has_at_least_one_state_assertion():
-    """**方案 T6.1 的头号验收项**：每道题至少一个"③ 状态断言"。"""
+    """**方案里的头号验收项**：每道题至少一个"③ 状态断言"。"""
     missing = [t.id for t in TASKS if V.TIER_STATE not in _tiers_of(t)]
     assert not missing, f"这些题没有产物级断言（模型说对话就能过）：{missing}"
 

@@ -1,9 +1,9 @@
 """多 Agent 图的行为测试（mock LLM 与子 agent，不真的调用模型）。
 
-覆盖 T1.1 的修复：`retry_count` 必须真正自增，Verifier 反复判 FAIL 时图要在
+覆盖 `retry_count` 必须真正自增，Verifier 反复判 FAIL 时图要在
 MAX_RETRY 次打回后正常结束（而不是无限打回、直到撞 RecursionError / 超时）。
 
-⚠️ T1.2 之后记忆是真的持久化的（checkpointer 按 thread_id 落 SQLite）→
+⚠️ 记忆是真的持久化的（checkpointer 按 thread_id 落 SQLite）→
 测试必须**隔离**：checkpoint DB 指向临时文件 + 每个用例用独立 thread_id，
 否则用例之间会互相读到对方的对话。
 """
@@ -137,7 +137,7 @@ async def test_verifier_pass_stops_immediately(fake_planner, thread_id):
     assert "PASS" in result["verdict"].upper()
 
 
-# ── 阶段 6：「本轮实际使用的模型」（结果卡片显示用）──
+# ── 「本轮实际使用的模型」（结果卡片显示用）──
 
 
 def test_msg_model_reads_server_reported_name():

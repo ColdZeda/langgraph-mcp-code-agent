@@ -1,6 +1,6 @@
-"""工具包装层测试（阶段 4 · T4.1 外置 + T4.5 缓存）。
+"""工具包装层测试（外置 + 缓存）。
 
-**这个文件的重点是把两条接口形状固定下来**（第六版方案照抄会炸的地方）：
+**这个文件的重点是把两条接口形状固定下来**：
 
 - MCP 工具：`StructuredTool(coroutine=…, response_format="content_and_artifact")`
   → 只有 `coroutine`，**没有 `func`/`_run`**，且返回 **(content, artifact) 二元组**；
@@ -352,13 +352,13 @@ async def test_wrapper_without_cache_still_externalizes(externalize_into):
     assert "[工具结果已外置]" in out[0]
 
 
-# ── 三条入口都要接上包装层（阶段 4 收尾补漏）──
+# ── 三条入口都要接上包装层（收尾补漏）──
 
 
 async def test_web_runtime_wraps_tools(externalize_into, monkeypatch):
     """**Web 入口也必须包装工具**。
 
-    阶段 4 主体只给 CLI（`run_agent`）与 evals（`run_single_task`）接了包装层，
+    只给 CLI（`run_agent`）与 evals（`run_single_task`）接了包装层，
     Web（`app/web/server.py` 的 `AgentRuntime`）漏了 —— 结果是 Web 端既不做结果外置、
     也不走 Redis 缓存，于是"包装层一次覆盖全部工具"这句话在 Web 路径上并不成立。
     """
@@ -417,7 +417,7 @@ async def test_eval_entry_verifier_gets_wrapped_tools(externalize_into, monkeypa
 
     来历（已用 git 核实，不是猜的）：
       - `build_verifier_agent(tools)` 来自**改造前基线** `f2f3bbb`；
-      - 阶段 6（`946e04c`）重写 `run_single_task` 时，在前面加了一句
+      - `946e04c` 重写 `run_single_task` 时，在前面加了一句
         `build_verifier_agent(wrapped)`，**却没删掉旧的那句** —— 后者把结果覆盖了回去；
       - ⇒ Verifier 拿到的是**未包装的原始工具**：权限判定 / 结果外置 / 缓存全部绕过。
     实际安全影响有限（Verifier 只拿只读工具，只读工具在任何档位都是 ALLOW），
@@ -479,7 +479,7 @@ async def test_eval_entry_verifier_gets_wrapped_tools(externalize_into, monkeypa
 
 
 # ═══════════════════════════════════════════════════════════════════
-# B10（2026-10-07 实测）：文件类工具的报错必须带上"根目录 + 解析后的绝对路径"
+# 2026-10-07 实测：文件类工具的报错必须带上"根目录 + 解析后的绝对路径"
 # ═══════════════════════════════════════════════════════════════════
 
 

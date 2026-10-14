@@ -16,7 +16,7 @@ mcp = FastMCP()
 
 # ── 危险命令检测 ──
 #
-# ⚠️ **阶段 5 订正 #24**：这里是内容级防线里**最要紧的一份** ——
+# ⚠️ 这里是内容级防线里**最要紧的一份** ——
 #    `execute_powershell_command` 是**唯一能把原始命令透传下去**的入口
 #    （VM 那四个工具都把参数 `shlex.quote` 过，透传不了原始命令）。
 #    原版第二条 `\bRemove-Item\s+.*-Recurse\s+-Force\b` 有两个漏口：
@@ -28,13 +28,13 @@ mcp = FastMCP()
 #    （要删 workspace 里的东西请走 `file_delete` 工具 —— 它受三档权限管，且只能动 workspace）。
 _DANGEROUS_POWERSHELL_PATTERNS = [
     r"\bRemove-Item\s+-Path\s+/\*",  # Remove-Item 根目录通配
-    # 强制递归删除（顺序无关 + 认别名，见上面的订正说明）
+    # 强制递归删除（顺序无关 + 认别名，见上面的说明）
     r"\b(?:Remove-Item|ri|rm|del|erase|rd|rmdir)\b"
     r"(?=[^|;&]*\s-(?:r|rec\w*)\b)(?=[^|;&]*\s-(?:fo|for\w*)\b)",
-    # ⚠️ 订正（2026-10-07 实测踩到）：原来是 `\bFormat-\w+`，把 **`Format-Table` / `Format-List`**
+    # ⚠️（2026-10-07 实测踩到）：原来是 `\bFormat-\w+`，把 **`Format-Table` / `Format-List`**
     #    这些**纯排版**的 cmdlet 也一起拦了 —— 现场代价：用户白点了一次"允许"、模型还要多跑 3 步绕开。
     #    真正的危险只有**格式化磁盘**那两个 ⇒ 收窄成白名单式的精确名。
-    r"\bFormat-(?:Volume|Disk)\b",  # 格式化磁盘（Format-Table / Format-List 不再误伤）
+    r"\bFormat-(?:Volume|Disk)\b",  # 格式化磁盘
     r"\bdel\s+/[fsq]",  # del /f /s /q
     r"\brd\s+/[sq]\b",  # rd /s /q
     r"\brmdir\s+/[sq]\b",  # rmdir /s /q
@@ -72,7 +72,7 @@ def _has_latin_supplement(text: str) -> bool:
 def _decode_line(raw: bytes) -> str:
     """按「优先 UTF-8；**解出来像拉丁乱码就换 GBK**」解一行输出。
 
-    ⚠️ 为什么不能只写"先 UTF-8、失败退 GBK"（那是第一版，2026-09-24 实测不够）：
+    ⚠️ 为什么不能只写"先 UTF-8、失败退 GBK"（2026-09-24 实测不够）：
 
       - GBK 的字节序列**有时恰好也是合法 UTF-8** —— 于是永远轮不到 GBK 分支。
         实例：PowerShell 的中文表头 `目录: ` 在 GBK 下是 `C4 BF C2 BC ...`，

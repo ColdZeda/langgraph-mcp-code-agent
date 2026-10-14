@@ -19,14 +19,14 @@ RUNTIME_DIR = PROJECT_ROOT / "runtime"
 KNOWLEDGE_DIR = Path(os.getenv("CODE_AGENT_KNOWLEDGE_DIR", DATA_DIR / "knowledge"))
 WORKSPACE_DIR = Path(os.getenv("CODE_AGENT_WORKSPACE_DIR", RUNTIME_DIR / "workspace"))
 # 跨轮记忆用 **SQLite 单文件**（langgraph 的 AsyncSqliteSaver，按 thread_id 恢复）。
-# ⚠️ 这里曾经还有一个 `CHECKPOINT_DIR = runtime/checkpoint/`（阶段 1 之前是"一个会话一个
-#    JSON 文件"的目录方案）。阶段 1 改成 SQLite 后它就成了空目录，却**每次启动都被 mkdir 回来**，
+# ⚠️ 这里曾经还有一个 `CHECKPOINT_DIR = runtime/checkpoint/`（之前是"一个会话一个
+#    JSON 文件"的目录方案）。改成 SQLite 后它就成了空目录，却**每次启动都被 mkdir 回来**，
 #    还和 `runtime/checkpoints.db` 只差一个 s —— 2026-09-22 用户就被这个同名设计绕了一次。
 #    已按用户决定**彻底移除**（连同 test_config.py 里那条断言）。
 CHECKPOINT_DB = Path(os.getenv("CODE_AGENT_CHECKPOINT_DB", RUNTIME_DIR / "checkpoints.db"))
 CHROMA_DIR = Path(os.getenv("CODE_AGENT_CHROMA_DIR", RUNTIME_DIR / "chroma_db"))
 RUNS_DIR = Path(os.getenv("CODE_AGENT_RUNS_DIR", RUNTIME_DIR / "runs"))
-# 阶段 4（T4.1）：超长工具结果外置到这里，context 里只留预览 + 路径
+# 超长工具结果外置到这里，context 里只留预览 + 路径
 TOOL_RESULTS_DIR = Path(os.getenv("CODE_AGENT_TOOL_RESULTS_DIR", RUNTIME_DIR / "tool_results"))
 
 # 运行时目录由配置层统一创建。
@@ -91,11 +91,11 @@ THREAD_ID = os.getenv("CODE_AGENT_THREAD_ID", "default")
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 阶段 4 · 上下文工程与分层记忆
+# 上下文工程与分层记忆
 # ═══════════════════════════════════════════════════════════════════
 
-# ── T4.1 工具结果外置 ──
-# 阈值按**实测**定：第六版建议 2000 字符会把「71 行的文件读取」(2,824 字符) 也外置，
+# ── 工具结果外置 ──
+# 阈值按**实测**定：建议 2000 字符会把「71 行的文件读取」(2,824 字符) 也外置，
 # 等于几乎每次读文件都多一次「落盘 + 回路径」的往返，收益不划算 →
 # 实测 5,845 字符（154 行的 powershell_tools.py）仍值得保留原文，故取 6000。
 EXTERNALIZE_THRESHOLD = int(os.getenv("CODE_AGENT_EXTERNALIZE_THRESHOLD", "6000"))
@@ -104,7 +104,7 @@ EXTERNALIZE_PREVIEW_CHARS = int(os.getenv("CODE_AGENT_EXTERNALIZE_PREVIEW_CHARS"
 # 行数兜底：有些输出单行很短、总字符数不超标，但行数极多（长清单），同样吃 token。
 EXTERNALIZE_MAX_LINES = int(os.getenv("CODE_AGENT_EXTERNALIZE_MAX_LINES", "150"))
 # ⚠️ **豁免名单：这两个工具的输出"就是要给模型看的内容"**，不能外置。
-#    实测（同一道题"读取 multi_agent.py 全文并总结"，见第八版订正 #15）：
+#    实测（同一道题"读取 multi_agent.py 全文并总结"，）：
 #      外置 read_file_range → 模型只看得到 500 字符预览 → 它改用**分段读**绕过去：
 #      12 次 read_file_range / 25 步，token 从 17,361 涨到 **127,071（7.3 倍）**。
 #    更糟的是"回读外置文件"会得到同一份内容 → 同一个 hash → 又指向同一个文件，等于死循环。
@@ -117,7 +117,7 @@ EXTERNALIZE_EXEMPT_TOOLS = {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# 阶段 8 · P2（候选池 §十三①）：三项阈值**按模型窗口自动算**
+# 三项阈值**按模型窗口自动算**
 # ═══════════════════════════════════════════════════════════════════
 #
 # **为什么**：这三个阈值以前是**全局写死**的，跟"当前用哪个模型"无关 ——
@@ -139,7 +139,7 @@ EXTERNALIZE_EXEMPT_TOOLS = {
 #   ⚠️ **上限备忘**：`COMPACT_MAX` / `NODE_MAX` 是"理智闸门"。真用上 >500k 窗口的模型时，
 #      要**连上限一起抬**（否则"按窗口算"会被上限卡回原地：1M 窗口也会退回 64k / 200k）。
 # ⚠️ **任务级刻意不是窗口的小比例**：它是"**成本保险丝**"，不是"能不能塞进一次调用"的问题 ——
-#    一个任务本来就可能跑好几轮满上下文。候选池 §十三① 当时写的是"TASK ≈ 60~70%（窗口）"，
+#    一个任务本来就可能跑好几轮满上下文。当时写的是"TASK ≈ 60~70%（窗口）"，
 #    但那是**比今天还紧**的（128k × 65% ≈ 8.3 万 < 现在的 20 万），与"预算放宽到 50 万~100 万"
 #    的结论相反 ⇒ 2026-10-07 定：**任务级按"窗口倍数 + 下限"算**（见 `TASK_MIN`）。
 DEFAULT_CONTEXT_WINDOW = int(os.getenv("CODE_AGENT_CONTEXT_WINDOW", "128000"))
@@ -247,7 +247,7 @@ COMPACT_THRESHOLD_TOKENS = _DEFAULT_BUDGETS.compact  # 默认窗口 25%（128k �
 NODE_TOKEN_BUDGET = _DEFAULT_BUDGETS.node  # 默认窗口 50%（128k → 64000）
 TASK_TOKEN_BUDGET = _DEFAULT_BUDGETS.task  # max(50 万, 4×窗口)（128k → 512000）
 
-# ── T8.1 任务级墙钟（阶段 8 · P0）──
+# ── 任务级墙钟 ──
 # 单个任务最长**执行**时间（秒）；到点自动停 —— 与用户点「停止」走**同一条**路径
 # （`agent/cancel.py` 的 CancelToken：协作式检查点）。
 # ⚠️ **人工确认（权限弹框）期间不计时**：人看弹框的时间不是任务时间
@@ -256,13 +256,13 @@ TASK_TOKEN_BUDGET = _DEFAULT_BUDGETS.task  # max(50 万, 4×窗口)（128k → 5
 # 0 或负数 = 不限制（仅用户点停止能停）。
 TASK_WALL_CLOCK = float(os.getenv("CODE_AGENT_TASK_WALL_CLOCK", "900"))
 
-# ── T4.5 Redis 工具结果缓存 ──
+# ── Redis 工具结果缓存 ──
 REDIS_URL = os.getenv("CODE_AGENT_REDIS_URL", "redis://127.0.0.1:6379/0")
 TOOL_CACHE_TTL = int(os.getenv("CODE_AGENT_TOOL_CACHE_TTL", "600"))  # 秒
 # 评估/调试时可关掉（缓存会改变"工具真的执行了几次"的语义）
 TOOL_CACHE_ENABLED = os.getenv("CODE_AGENT_TOOL_CACHE", "1").lower() in ("1", "true", "yes", "on")
 
-# ── T4.4 分层记忆（RAG 分块 + rerank） ──
+# ── 分层记忆（RAG 分块 + rerank） ──
 # 换 collection 名：旧的「整篇一个向量」和新「每块一个向量」混在一个 collection 里
 # 会让检索质量**更差**（两种粒度互相干扰），所以必须分家。
 RAG_COLLECTION = os.getenv("CODE_AGENT_RAG_COLLECTION", "terminal_knowledge_v2")
@@ -282,7 +282,7 @@ RERANKER_PATH = Path(
 )
 RERANK_ENABLED = os.getenv("CODE_AGENT_RERANK", "1").lower() in ("1", "true", "yes", "on")
 
-# ── T4.4 自动注入 / 自动沉淀 ──
+# ── 自动注入 / 自动沉淀 ──
 # 自动注入：任务开始时自动检索一次相关知识（不必等模型主动调 query_rag）
 RAG_AUTO_INJECT = os.getenv("CODE_AGENT_RAG_AUTO_INJECT", "1").lower() in ("1", "true", "yes", "on")
 # 自动沉淀：任务成功后由 LLM 判断"有没有值得长期记住的经验"
@@ -295,10 +295,10 @@ RAG_AUTO_DEPOSIT = os.getenv("CODE_AGENT_RAG_AUTO_DEPOSIT", "1").lower() in (
 )
 
 # ═══════════════════════════════════════════════════════════════════
-# 阶段 5 · 三档权限模式（T5.1）+ 人工确认超时（T5.3）+ 审计（T5.4）
+# 三档权限模式 + 人工确认超时 + 审计
 # ═══════════════════════════════════════════════════════════════════
 
-# 权限模式的**兜底默认值**（D4「③ 混合」结论）：
+# 权限模式的**兜底默认值**：
 #   · CLI 默认「需确认」；Web 端把「只读 / 需确认」持久化到 runtime/web-settings.json；
 #   · **「放开」永不持久化** —— 新会话一律回落「需确认」（配置文件被手改成 "open" 也当「需确认」加载，
 #     理由见 security/permissions.py 的 normalize_mode 与 server.py 的 load_permission_mode）；
@@ -306,8 +306,8 @@ RAG_AUTO_DEPOSIT = os.getenv("CODE_AGENT_RAG_AUTO_DEPOSIT", "1").lower() in (
 # ⚠️ 合法取值 readonly / confirm / open，档位表在 app/code_agent/security/permissions.py。
 PERMISSION_MODE = os.getenv("CODE_AGENT_PERMISSION_MODE", "confirm").strip().lower()
 
-# 人工确认的超时（秒）：**超时 / 无人应答 → 自动拒绝**（B2，安全侧）。
-# 只作用于 Web（终端里的 CLI 由人当场回答，见 T5.3 的说明）。
+# 人工确认的超时（秒）：**超时 / 无人应答 → 自动拒绝**。
+# 只作用于 Web（终端里的 CLI 由人当场回答）。
 CONFIRM_TIMEOUT = float(os.getenv("CODE_AGENT_CONFIRM_TIMEOUT", "120"))
 
 # 审计留痕：高危操作 + 所有确认决定，一行一条 JSON，追加式。

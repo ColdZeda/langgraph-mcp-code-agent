@@ -21,7 +21,7 @@ const send = () => {
 // ⇒ 守卫在 store 里、清空在守卫**之前** ⇒ 执行中点「＋新会话」会出现「提示有了、界面空了、
 //    旧任务还在跑」（用户实测报的）。现在**直接暴露 store 的函数**：清空由它在守卫通过后自己做。
 
-// ── 阶段 8 · P0：任务状态条 ────────────────────────────────────────
+// ── 任务状态条 ────────────────────────────────────────
 // 数值全部来自后端（`status` 事件），前端只负责补中间那 1 秒与排版。
 const status = computed(() => store.status)
 
@@ -68,7 +68,7 @@ defineExpose({ newSession })
         <div v-else class="row assistant">
           <div v-if="m.phase === 'running'" class="bubble running-bubble">
             <div class="running-head"><span class="spinner"></span>{{ m.text }}</div>
-            <!-- 阶段 8 · P0：任务状态条（时长 / 步数 / 用量）—— 跑长任务时一眼看得出"烧到哪了" -->
+            <!-- 任务状态条（时长 / 步数 / 用量）—— 跑长任务时一眼看得出"烧到哪了" -->
             <div v-if="status" class="statusbar">
               <span class="sb-item">
                 ⏱ {{ fmtElapsed(status.elapsedSec) }}<span
@@ -102,7 +102,7 @@ defineExpose({ newSession })
               <span v-if="status.pausedSec >= 1" class="sb-dim">
                 （人工确认等待 {{ fmtElapsed(status.pausedSec) }} 未计入）
               </span>
-              <!-- 阶段 8 · 实测新增：状态条右侧直接给一个**停止任务**按钮。
+              <!-- 状态条右侧直接给一个**停止任务**按钮。
                    ⚠️ 为什么加：用户实测时"没看到停止按钮" —— 它原来只在输入框右下角，
                    而执行中人的视线在状态条那一行。名字用「停止任务」而不是"暂停"：
                    本项目是**协作式停止**、**不能续跑**，叫暂停会让人以为能恢复。 -->
@@ -119,29 +119,27 @@ defineExpose({ newSession })
                 {{ store.stopping ? '停止中…' : '⏹ 停止任务' }}
               </button>
             </div>
-            <!-- 阶段 5（T5.6）：节点级进度，任务进行中就看得见走到哪一步 -->
+            <!-- 节点级进度，任务进行中就看得见走到哪一步 -->
             <ol v-if="store.progress.length" class="progress">
               <li v-for="p in store.progress" :key="p.id">{{ p.text }}</li>
             </ol>
           </div>
           <div v-else-if="m.phase === 'error'" class="bubble error-bubble">{{ m.text }}</div>
           <ResultCard v-else-if="m.result" :result="m.result" />
-          <!-- ⚠️ 阶段 5 修：**历史会话回放**走的就是这一支。
+          <!-- ⚠️ **历史会话回放**走的就是这一支。
                loadSession 造出来的消息是 {role, phase:'done', text}，**没有 result 字段**，
                而上面三条分支分别要求 running / error / result →
                以前这里什么都不渲染，表现成"点历史会话只看到自己发的消息"。
                补一条纯文本回退分支即可。 -->
           <div v-else-if="m.text" class="bubble assistant-bubble">
             <span v-if="m.fromHistory" class="history-tag">历史</span>
-            <!-- 阶段 7（T7.5）：历史回放的答案以前也是纯文本 ⇒ 这里同样走 Markdown 渲染 -->
             <MarkdownText :text="m.text" />
           </div>
         </div>
       </template>
     </div>
 
-    <!-- 阶段 7 · T7.6：**还没有可用的模型**时的引导（新用户 clone 下来的默认状态）。
-         以前这种情况服务在 import 期就崩了，用户根本看不到这个界面。 -->
+    <!-- **还没有可用的模型**时的引导（新用户 clone 下来的默认状态） -->
     <div v-if="!store.modelReady" class="no-model">
       <b>还没有可用的模型</b> —— 点左下角「⚙ 模型设置」，在「我的模型」里填一个 API Key 就能开始。
     </div>
@@ -159,7 +157,7 @@ defineExpose({ newSession })
         :disabled="store.wsStatus !== 'open' || !store.modelReady"
         @keydown.enter.exact.prevent="send"
       ></textarea>
-      <!-- 阶段 8 · P0：停止按钮。⚠️ 协作式：点了之后在**下一个检查点**停下，
+      <!-- 停止按钮。⚠️ 协作式：点了之后在**下一个检查点**停下，
            所以按钮先变成「停止中…」（不是立刻消失）。 -->
       <button
         v-if="store.sending"
@@ -203,7 +201,7 @@ defineExpose({ newSession })
 .user-bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
 .running-bubble { background: #1e293b; border: 1px solid #334155; color: #94a3b8; font-style: italic; }
 .running-head { display: flex; align-items: center; }
-/* 阶段 8 · P0：任务状态条（等宽数字，避免每秒抖动） */
+/* 任务状态条（等宽数字，避免每秒抖动） */
 .statusbar { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-style: normal;
   font-size: 12px; color: #cbd5e1; font-variant-numeric: tabular-nums; }
 .sb-item { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 2px 8px; }
@@ -229,7 +227,7 @@ textarea { flex: 1; resize: none; height: 64px; padding: 10px 12px; border-radiu
 textarea:focus { outline: none; border-color: #3b82f6; }
 .input-area button { width: 90px; border: none; border-radius: 10px; background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; }
 .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
-/* 阶段 8 · P0：停止按钮（红底，和"发送"位置一致，不会点错） */
+/* 停止按钮（红底，和"发送"位置一致，不会点错） */
 .input-area button.btn-stop { background: #b91c1c; width: 110px; }
 .input-area button.btn-stop:hover:not(:disabled) { background: #dc2626; }
 .input-area button.btn-stop:disabled { background: #7f1d1d; color: #fecaca; }

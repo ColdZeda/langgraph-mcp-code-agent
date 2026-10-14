@@ -1,4 +1,4 @@
-"""RAG 分块测试（阶段 4 · T4.4 ①）。
+"""RAG 分块测试。
 
 这是**纯函数**测试：只 import `chunking`，不碰 embedding 模型、不碰 ChromaDB，
 所以毫秒级跑完（`store.py` 一 import 就会加载 torch）。
@@ -88,7 +88,7 @@ def test_split_atoms_keeps_short_and_long_paragraphs():
 def test_fixture_knowledge_files_shape():
     """用**测试语料夹具**跑一遍：每个文件应切出 5 块（= 5 条独立知识）。
 
-    ⚠️ 夹具在 evals/fixtures/knowledge/（订正 #36：产品知识库 data/knowledge/ 不再是
+    ⚠️ 夹具在 evals/fixtures/knowledge/（产品知识库 data/knowledge/ 不再是
     测试语料的存放处 —— 混在一起会让评测跑完把错误知识灌进真实会话）。
     """
     knowledge_dir = Path(__file__).resolve().parents[1] / "evals" / "fixtures" / "knowledge"

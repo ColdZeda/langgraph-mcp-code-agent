@@ -1,4 +1,4 @@
-"""阶段 6 · 跑前预检的守卫测试（**不连网、不起容器**，全部打桩）。
+"""跑前预检的守卫测试（**不连网、不起容器**，全部打桩）。
 
 守的是"预检自己别说谎"这件事 —— 一个会说谎的预检比没有预检更糟：
 它给人"我检查过了"的错觉，然后把废数据放进正式结果里。
@@ -44,9 +44,7 @@ class _FakeResponse:
 
 
 def test_key_probe_sends_bearer_header(monkeypatch):
-    """**回归守卫**：第一版拿不带头的 `http_reachable` 去问 `/models`，
-    结果把一把好 key 报成 401。探针必须自己带上 `Authorization: Bearer …`。
-    """
+    """**回归守卫**：探针必须自己带上 `Authorization: Bearer …`。"""
     seen: dict = {}
 
     def fake_urlopen(request, timeout=None):

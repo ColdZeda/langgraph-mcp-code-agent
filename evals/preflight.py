@@ -1,4 +1,4 @@
-"""跑评估前的环境预检（阶段 6 · T6.3 ④）—— **把"跑了两小时才发现白跑"挡在前面**。
+"""跑评估前的环境预检 —— **把"跑了两小时才发现白跑"挡在前面**。
 
 为什么要有它：一次全量两轮是 40~100 分钟 ×2 + token。而下面这些条件只要缺一条，
 那一轮的**部分数据就是废的**（而且往往不会报错，只会安静地记成"未测"或"假过"）：
@@ -72,8 +72,7 @@ def _authed_get(url: str, key: str, timeout: float) -> tuple[bool, int, str]:
     """带 `Authorization: Bearer <key>` 的 GET。
 
     ⚠️ **别用 `verifiers.http_reachable`**：它刻意不带任何头（判定器只打本机接口），
-    拿它去请求模型 API 一定吃 401 —— 第一版就是这么写的，
-    结果把一把**好 key** 报成了失效（查了半天才发现是探针自己的错）。
+    拿它去请求模型 API 一定吃 401。
     """
     import urllib.error
     import urllib.request
@@ -178,7 +177,7 @@ def check_wsl() -> dict:
 
 
 def check_wsl_uploads() -> dict:
-    """**顺手验证清理链路真的能跑通**（订正 #33：它曾经整轮都没被调用过）。"""
+    """**顺手验证清理链路真的能跑通**。"""
     from evals.runner import _clean_wsl_uploads
 
     record = _clean_wsl_uploads(VM_UPLOADS_DIR)
@@ -189,9 +188,7 @@ def check_wsl_uploads() -> dict:
             f"{VM_UPLOADS_DIR}：删了 {record.get('removed')} 个，复核剩余 {record.get('left')}",
         )
     if record.get("skipped"):
-        return _check(
-            "WSL 上传目录可清", FAIL, "清理被跳过了（没传路径）—— 这正是订正 #33 那个 bug"
-        )
+        return _check("WSL 上传目录可清", FAIL, "清理被跳过了（没传路径）")
     return _check(
         "WSL 上传目录可清",
         FAIL,
@@ -343,7 +340,7 @@ def run_all_checks(*, run_id: str | None = None, skip_rag: bool = False) -> dict
 
 def _print(payload: dict) -> None:
     print("=" * 78)
-    print("阶段 6 · 跑评估前的环境预检")
+    print("跑评估前的环境预检")
     print("=" * 78)
     width = max(len(c["name"]) for c in payload["checks"]) + 2
     for c in payload["checks"]:
@@ -359,7 +356,7 @@ def _print(payload: dict) -> None:
 
 
 def main() -> int:
-    # ⚠️ 第一步：切到评估专用语料与向量库（订正 #36）——产品库与评估库彻底分开
+    # ⚠️ 第一步：切到评估专用语料与向量库 ——产品库与评估库彻底分开
     use_eval_corpus()
 
     parser = argparse.ArgumentParser(description="跑评估前的环境预检（不修任何东西）")

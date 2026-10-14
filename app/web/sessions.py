@@ -1,4 +1,4 @@
-"""会话元数据侧车库（阶段 7 · T7.5 会话管理）。
+"""会话元数据侧车库。
 
 **为什么单开一个库，而不是塞进 `runtime/checkpoints.db`**：
 那份库是 langgraph 的 `AsyncSqliteSaver` 在管（它只认自己的 `checkpoints` / `writes` 两张表），

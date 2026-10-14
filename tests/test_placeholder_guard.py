@@ -1,4 +1,4 @@
-"""阶段 8 · P1.5：**"模板没替换"这一类**的识别与拦截（候选池 §十五B）。
+"""**"模板没替换"这一类**的识别与拦截。
 
 三件事要守：
 
@@ -81,7 +81,7 @@ def test_every_eval_task_prompt_passes_the_guard():
 
 
 def test_literal_hint_is_an_escape_hatch():
-    """明确说"按字面处理"就放行 —— 守卫不许把用户卡死（§十五A：绝不卡住不动）。"""
+    """明确说"按字面处理"就放行 —— 守卫不许把用户卡死（绝不卡住不动）。"""
     assert guard.is_explicitly_literal("把 <你的用户名> 原样写进文件，按字面处理")
     assert not guard.is_explicitly_literal("把文件传到 <你的用户名>/uploads/")
 

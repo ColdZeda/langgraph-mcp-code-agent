@@ -1,4 +1,4 @@
-"""阶段 6 评估入口（旧 30 题集已在阶段 5 删除，这里是从零重建的那一套）。
+"""评估入口（从零重建）。
 
 用法::
 
@@ -97,10 +97,10 @@ def _print_summary(payload: dict) -> None:
 
 
 def main() -> int:
-    # ⚠️ 第一步：切到评估专用语料与向量库（订正 #36）——产品库与评估库彻底分开
+    # ⚠️ 第一步：切到评估专用语料与向量库 ——产品库与评估库彻底分开
     use_eval_corpus()
 
-    parser = argparse.ArgumentParser(description="阶段 6 评估（题集 + 强断言评分器）")
+    parser = argparse.ArgumentParser(description="评估（题集 + 强断言评分器）")
     parser.add_argument("--all", action="store_true", help="跑全部题")
     parser.add_argument("--task", action="append", default=[], help="只跑指定题号（可重复）")
     parser.add_argument(
